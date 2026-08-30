@@ -1,0 +1,19 @@
+{
+  "python_syntax": "passed",
+  "javascript_syntax": "passed",
+  "integration_tests": "passed",
+  "first_teacher_registration": "passed",
+  "authentication": "passed",
+  "group_scope": "passed",
+  "fallback_hints": "passed",
+  "output_guard": "passed",
+  "page_smoke_test": "passed_44_pages",
+  "blank_teacher_pages": "passed_17_pages",
+  "admin_access_recovery": "passed",
+  "runtime_backed_pages": "dashboard_export_governance_passed",
+  "removed_static_routes": "return_404",
+  "runtime_data_counts": "all_zero",
+  "static_cache_policy": "passed",
+  "public_temporary_copy_scan": "passed",
+  "live_deepseek": "requires_deployment_key"
+}

@@ -1,0 +1,13 @@
+{
+  "name": "数学项目协作智能体",
+  "runtime": "Python 3.11+",
+  "database": "SQLite",
+  "ai_provider": "DeepSeek",
+  "entrypoint": "start_server.py",
+  "healthcheck": "/api/health",
+  "data_directory": "data",
+  "required_production_environment": [
+    "MPT_SETUP_TOKEN",
+    "DEEPSEEK_API_KEY"
+  ]
+}

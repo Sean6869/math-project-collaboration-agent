@@ -1,0 +1,162 @@
+openapi: 3.0.3
+info:
+  title: 数学项目协作智能体 API
+  version: production
+  description: 同源会话接口；教师与学生权限由 HttpOnly 会话 Cookie 控制。
+servers:
+  - url: /
+paths:
+  /api/health:
+    get:
+      summary: 服务健康状态
+      responses:
+        '200': {description: 正常}
+  /api/session:
+    get:
+      summary: 当前会话
+      responses:
+        '200': {description: 会话状态}
+  /api/setup:
+    post:
+      summary: 首次运行时注册首位教师并初始化班级访问规则
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [setupToken, username, password, recoveryCode, classCode, groupCodePrefix, groupCount]
+              properties:
+                setupToken: {type: string, minLength: 12}
+                username: {type: string, minLength: 3, maxLength: 40}
+                password: {type: string, minLength: 12}
+                recoveryCode: {type: string, minLength: 16}
+                classCode: {type: string, minLength: 6}
+                groupCodePrefix: {type: string, minLength: 4}
+                groupCount: {type: integer, minimum: 1, maximum: 20}
+      responses:
+        '201': {description: 初始化完成，教师注册码随即失效}
+        '403': {description: 教师注册码无效}
+        '409': {description: 平台已经初始化}
+  /api/login:
+    post:
+      summary: 教师或学生小组登录
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        '200': {description: 登录成功}
+        '401': {description: 登录信息错误}
+  /api/logout:
+    post:
+      summary: 退出登录
+      responses:
+        '200': {description: 已退出}
+  /api/admin/recover:
+    post:
+      summary: 使用管理员恢复码重置教师密码并注销全部会话
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [username, recoveryCode, newPassword]
+              properties:
+                username: {type: string}
+                recoveryCode: {type: string, minLength: 16}
+                newPassword: {type: string, minLength: 12}
+      responses:
+        '200': {description: 密码已重置}
+        '401': {description: 管理员账号或恢复码错误}
+  /api/admin/access:
+    get:
+      summary: 获取管理员账号与访问配置状态
+      responses:
+        '200': {description: 不含任何明文凭据的配置状态}
+        '403': {description: 仅教师管理员可访问}
+    post:
+      summary: 重置教师账号、班级码、小组码或管理员恢复码
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [action, currentPassword]
+              properties:
+                action: {type: string, enum: [teacher, class_code, group_code, all_group_codes, recovery_code]}
+                currentPassword: {type: string}
+      responses:
+        '200': {description: 已更新并注销相关会话}
+        '401': {description: 当前教师密码错误}
+  /api/state:
+    get:
+      summary: 获取当前班级配置与本组状态
+      parameters:
+        - in: query
+          name: group
+          schema: {type: integer, minimum: 1, maximum: 20}
+          description: 仅教师可选择查看的小组
+      responses:
+        '200': {description: 状态对象}
+        '401': {description: 未登录}
+    put:
+      summary: 保存状态；学生只能写入本组字段
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [state]
+              properties:
+                state: {type: object}
+      responses:
+        '200': {description: 已保存}
+        '403': {description: 权限不足}
+  /api/hints:
+    post:
+      summary: 提交已有进展与卡点并请求分层提示
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [done, issue, type]
+              properties:
+                done: {type: string, maxLength: 1600}
+                issue: {type: string, maxLength: 1200}
+                type: {type: string, maxLength: 80}
+      responses:
+        '200': {description: DeepSeek 提示、教师静态支架或教师升级结果}
+        '403': {description: 仅学生小组可调用}
+  /api/escalations:
+    post:
+      summary: 学生主动转教师处理
+      responses:
+        '200': {description: 已进入教师队列}
+  /api/files:
+    get:
+      summary: 项目材料列表
+      responses:
+        '200': {description: 文件元数据}
+    post:
+      summary: 教师上传审核材料
+      responses:
+        '200': {description: 上传成功}
+        '403': {description: 仅教师可上传}
+  /api/export:
+    get:
+      summary: 教师导出去标识化课堂事件
+      parameters:
+        - in: query
+          name: format
+          schema: {type: string, enum: [csv, json]}
+      responses:
+        '200': {description: 下载文件}
+        '403': {description: 仅教师可导出}

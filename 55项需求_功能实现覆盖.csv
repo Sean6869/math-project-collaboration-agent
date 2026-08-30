@@ -1,0 +1,56 @@
+﻿需求编号,功能域,角色,功能点,优先级,平台覆盖页面,覆盖级别
+TR-P01,项目与阶段组织,教师,创建班级与项目,P0,teacher/project.html; teacher/template.html,已实现
+TR-P02,项目与阶段组织,教师,配置五阶段目标与产出,P0,teacher/project.html; teacher/stages.html,已实现
+TR-P03,项目与阶段组织,教师,上传教师审核项目包,P0,teacher/knowledge.html; teacher/project.html,已实现
+TR-P04,项目与阶段组织,学生小组,五阶段进度与当前任务,P0,student/dashboard.html; student/stage1.html; student/stage2.html; student/stage3.html; student/stage4.html; student/stage5.html,已实现
+TR-P05,项目与阶段组织,学生小组,阶段产出提交与版本保存,P0,student/history.html; student/stage2.html; student/stage3.html; student/stage4.html; student/stage5.html,已实现
+TR-P06,项目与阶段组织,教师,阶段开放暂停推进,P0,teacher/stages.html; teacher/dashboard.html,已实现
+TR-P07,项目与阶段组织,学生小组,成果用途与数学用途提示,P1,student/stage1.html; student/stage2.html,已实现
+TR-P08,项目与阶段组织,教师,微型标准深度项目配置,P1,teacher/template.html; teacher/project.html,已实现
+TR-C01,数学认知支架,学生小组,已有进展与具体卡点提交,P0,student/help.html; student/workspace.html,已实现
+TR-C02,数学认知支架,系统,任务理解与数学卡点轻量分类,P0,student/help.html,已实现
+TR-C03,数学认知支架,学生小组,L1定位提示,P0,student/help.html,已实现
+TR-C04,数学认知支架,学生小组,L2结构提示,P0,student/help.html,已实现
+TR-C05,数学认知支架,学生小组,L3局部支架,P0,student/help.html,已实现
+TR-C06,数学认知支架,系统/教师,连续无效自动转教师,P0,student/help.html; teacher/queue.html,已实现
+TR-C07,数学认知支架,学生小组,任务复述与信息约束表,P0,student/stage2.html; student/stage2-understanding.html,已实现
+TR-C08,数学认知支架,学生小组,变量关系与模型版本,P0,student/stage3.html; student/stage3-model.html; student/stage3-graph.html,已实现
+TR-C09,数学认知支架,学生小组,重复计算与图表辅助,P1,student/stage4-tools.html; student/stage3-graph.html,已实现
+TR-C10,数学认知支架,学生小组,范围单位条件与合理性检查,P0,student/stage3-check.html; student/stage5-product.html,已实现
+TR-C11,数学认知支架,教师,教师预设提示模板与最高层级,P0,teacher/scaffolds.html; teacher/project.html,已实现
+TR-C12,数学认知支架,学生小组,提示使用回看,P1,student/stage5-reflection.html; student/history.html,已实现
+TR-G01,小组协作,学生小组,阶段角色与轮换,P0,student/group.html; student/stage1-roles.html,已实现
+TR-G02,小组协作,学生小组,个人先想卡,P0,student/group.html; student/stage2-understanding.html,已实现
+TR-G03,小组协作,学生小组,共同问题空间,P0,student/workspace.html,已实现
+TR-G04,小组协作,学生小组,方案证据比较卡,P0,student/stage3-compare.html; student/stage4-discussion.html,已实现
+TR-G05,小组协作,学生小组,质疑与回应模板,P1,student/stage4-discussion.html,已实现
+TR-G06,小组协作,学生小组,非标签化参与提醒,P0,student/group.html; student/stage4.html,已实现
+TR-G07,小组协作,学生小组,同伴解释优先,P1,student/help.html; student/group.html,已实现
+TR-G08,小组协作,教师,复杂冲突教师转接,P0,student/stage4-discussion.html; teacher/queue.html,已实现
+TR-G09,小组协作,学生小组,角色与协作反思,P1,student/stage5-reflection.html,已实现
+TR-T01,教师总控,教师,多组阶段与状态总览,P0,teacher/dashboard.html; teacher/groups.html,已实现
+TR-T02,教师总控,教师,最近产出与求助摘要,P0,teacher/groups.html,已实现
+TR-T03,教师总控,教师,需要教师事项队列,P0,teacher/queue.html,已实现
+TR-T04,教师总控,教师,多组相似卡点聚合,P0,teacher/common.html,已实现
+TR-T05,教师总控,教师,全班AI开放与暂停,P0,teacher/dashboard.html; teacher/stages.html; teacher/governance.html,已实现
+TR-T06,教师总控,教师,广播提示与共性澄清,P0,teacher/broadcast.html; teacher/common.html,已实现
+TR-T07,教师总控,教师,小组过程证据详情,P0,teacher/group-detail.html,已实现
+TR-T08,教师总控,教师,成果证据辅助查看,P1,teacher/evaluation.html,已实现
+TR-T09,教师总控,教师,课堂过程摘要与导出,P1,teacher/report.html; teacher/export.html,已实现
+TR-D01,数据与研究,系统,课堂事件结构化留痕,P0,teacher/audit.html; teacher/export.html,已实现
+TR-D02,数据与研究,教师,去标识化CSV/XLSX导出,P1,teacher/export.html,部分实现（CSV/JSON；未提供XLSX）
+TR-D03,数据与研究,系统,最小必要采集,P0,teacher/governance.html; student/governance.html,已实现
+TR-D04,数据与研究,系统,班级小组角色权限,P0,teacher/governance.html; student/governance.html,已实现
+TR-D05,数据与研究,系统,关键操作审计,P1,teacher/audit.html,已实现
+TR-R01,治理与非功能,系统,首次响应禁止完整答案,P0,student/help.html; teacher/scaffolds.html,已实现
+TR-R02,治理与非功能,系统,禁止自动情绪识别,P0,student/governance.html; teacher/governance.html,已实现
+TR-R03,治理与非功能,系统,禁止自动能力标签,P0,student/governance.html; teacher/governance.html,已实现
+TR-R04,治理与非功能,系统,知识约束与不确定性标记,P0,teacher/knowledge.html; student/help.html,已实现
+TR-R05,治理与非功能,系统,课堂响应性能,P0,teacher/governance.html,部分实现（提供运行状态；未提供性能监控）
+TR-R06,治理与非功能,学生小组,平板多人可读与触控,P0,全站响应式布局,已实现
+TR-R07,治理与非功能,系统,网络模型故障降级,P0,teacher/governance.html; student/help.html,已实现
+TR-R08,治理与非功能,系统,HTTPS与数据保护,P0,teacher/governance.html; student/governance.html,已实现
+TR-R09,治理与非功能,教师/管理员,项目与提示规则可配置,P1,teacher/project.html; teacher/scaffolds.html,已实现
+TR-R10,治理与非功能,系统,错误与模型调用监控,P1,teacher/audit.html; teacher/governance.html,已实现
+TR-R11,治理与非功能,系统,浏览器与设备兼容,P0,全站,需上线环境验收
+TR-R12,治理与非功能,系统,需求与项目配置版本化,P1,student/stage4-versions.html; teacher/audit.html,部分实现（模型版本与配置操作审计）

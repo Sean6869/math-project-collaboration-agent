@@ -1,0 +1,6 @@
+data/
+.env
+*.db
+__pycache__/
+*.pyc
+*.inspect.ndjson
