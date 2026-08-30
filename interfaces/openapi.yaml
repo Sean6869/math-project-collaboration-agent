@@ -89,6 +89,23 @@ paths:
       responses:
         '200': {description: 密码已重置}
         '401': {description: 管理员账号或恢复码错误}
+  /api/admin/factory-reset:
+    post:
+      summary: 使用管理员恢复码清空课堂数据并保留管理员身份
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [recoveryCode, confirmation]
+              properties:
+                recoveryCode: {type: string, minLength: 16}
+                confirmation: {type: string, enum: [RESET]}
+      responses:
+        '200': {description: 课堂数据已清空，管理员账号、恢复码和访问规则保留}
+        '401': {description: 管理员恢复码错误}
+        '403': {description: 仅管理员教师可执行}
   /api/admin/access:
     get:
       summary: 获取管理员账号与访问配置状态

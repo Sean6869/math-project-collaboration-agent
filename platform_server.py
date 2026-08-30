@@ -682,6 +682,12 @@ class Handler(SimpleHTTPRequestHandler):
                 self.login(self.read_json())
             elif route == "/api/admin/recover":
                 self.recover_teacher(self.read_json())
+            elif route == "/api/admin/factory-reset":
+                session = self.require_session("teacher")
+                if session and session.get("isAdmin"):
+                    self.factory_reset(self.read_json(), session)
+                elif session:
+                    self.json_response({"error": "只有管理员教师可以恢复出厂数据"}, HTTPStatus.FORBIDDEN)
             elif route == "/api/admin/access":
                 session = self.require_session("teacher")
                 if session and session.get("isAdmin"):
@@ -949,6 +955,32 @@ class Handler(SimpleHTTPRequestHandler):
                 raise ValueError("不支持的管理员操作")
         record_event("teacher", None, f"admin_{action}", None, detail)
         self.json_response({"ok": True, "logoutRole": logout_role, **({"inviteCode": invite_code} if action == "teacher_invite" else {})})
+
+    def factory_reset(self, body: dict, session: dict) -> None:
+        if str(body.get("confirmation", "")).strip().upper() != "RESET":
+            raise ValueError("请输入 RESET 确认恢复出厂数据")
+        recovery_code = str(body.get("recoveryCode", "")).strip()
+        with database() as db:
+            recovery = db.execute("SELECT value FROM settings WHERE key='admin_recovery_hash'").fetchone()
+            if not recovery or not password_ok(recovery_code, recovery["value"]):
+                time.sleep(0.35)
+                self.json_response({"error": "管理员恢复码不正确"}, HTTPStatus.UNAUTHORIZED)
+                return
+            db.execute("DELETE FROM states")
+            db.execute("DELETE FROM events")
+            db.execute("DELETE FROM ai_calls")
+            db.execute("DELETE FROM files")
+            db.execute("DELETE FROM teachers WHERE is_admin=0")
+            db.execute("DELETE FROM sessions")
+            db.execute("DELETE FROM settings WHERE key='teacher_invite_hash'")
+        for path in UPLOAD_DIR.iterdir():
+            if path.is_file():
+                try:
+                    path.unlink()
+                except OSError:
+                    pass
+        record_event("system", None, "factory_reset", None, "课堂数据已清空，管理员账号与访问规则保留")
+        self.json_response({"ok": True, "preserved": ["admin", "recovery_code", "class_and_group_access"]})
 
     def register_teacher(self, body: dict) -> None:
         if not is_initialized():

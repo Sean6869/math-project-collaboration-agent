@@ -285,6 +285,53 @@ class PlatformTest(unittest.TestCase):
             )
         self.assertEqual(reuse_error.exception.code, 403)
 
+    def test_zz_admin_factory_reset_requires_recovery_code_and_clears_classroom(self):
+        admin = self.client()
+        status, login = self.json_request(
+            admin, "/api/login", "POST",
+            {"role": "teacher", "username": "admin_teacher", "password": "RecoveredTeacher#2026"},
+        )
+        self.assertEqual(status, 200)
+        status, _ = self.json_request(
+            admin, "/api/state", "PUT",
+            {"state": {"project": "temporary project", "className": "temporary class"}},
+        )
+        self.assertEqual(status, 200)
+
+        with self.assertRaises(urllib.error.HTTPError) as wrong_code:
+            self.json_request(
+                admin, "/api/admin/factory-reset", "POST",
+                {"recoveryCode": "WRONG-RECOVERY-CODE", "confirmation": "RESET"},
+            )
+        self.assertEqual(wrong_code.exception.code, 401)
+        with self.assertRaises(urllib.error.HTTPError) as wrong_confirmation:
+            self.json_request(
+                admin, "/api/admin/factory-reset", "POST",
+                {"recoveryCode": "RECOVERY-CODE-TEST-2026", "confirmation": "NO"},
+            )
+        self.assertEqual(wrong_confirmation.exception.code, 400)
+
+        status, result = self.json_request(
+            admin, "/api/admin/factory-reset", "POST",
+            {"recoveryCode": "RECOVERY-CODE-TEST-2026", "confirmation": "RESET"},
+        )
+        self.assertEqual(status, 200)
+        self.assertIn("admin", result["preserved"])
+        with app.database() as db:
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM states").fetchone()[0], 0)
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM teachers").fetchone()[0], 1)
+            self.assertEqual(db.execute("SELECT event_type FROM events ORDER BY id DESC LIMIT 1").fetchone()[0], "factory_reset")
+
+        fresh_admin = self.client()
+        status, login = self.json_request(
+            fresh_admin, "/api/login", "POST",
+            {"role": "teacher", "username": "admin_teacher", "password": "RecoveredTeacher#2026"},
+        )
+        self.assertEqual(status, 200)
+        status, data = self.json_request(fresh_admin, "/api/state")
+        self.assertEqual(status, 200)
+        self.assertNotIn("project", data["state"])
+
 
 if __name__ == "__main__":
     unittest.main()
