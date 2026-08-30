@@ -50,6 +50,23 @@ paths:
       responses:
         '200': {description: 登录成功}
         '401': {description: 登录信息错误}
+  /api/teacher/register:
+    post:
+      summary: 使用管理员生成的一次性注册码注册教师账号
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [inviteCode, username, password]
+              properties:
+                inviteCode: {type: string}
+                username: {type: string, minLength: 3, maxLength: 40}
+                password: {type: string, minLength: 12}
+      responses:
+        '201': {description: 教师账号已创建，注册码随即失效}
+        '403': {description: 注册码无效或已使用}
   /api/logout:
     post:
       summary: 退出登录
@@ -79,7 +96,7 @@ paths:
         '200': {description: 不含任何明文凭据的配置状态}
         '403': {description: 仅教师管理员可访问}
     post:
-      summary: 重置教师账号、班级码、小组码或管理员恢复码
+      summary: 重置管理员账号、访问码、恢复码或生成教师注册码
       requestBody:
         required: true
         content:
@@ -88,7 +105,7 @@ paths:
               type: object
               required: [action, currentPassword]
               properties:
-                action: {type: string, enum: [teacher, class_code, group_code, all_group_codes, recovery_code]}
+                action: {type: string, enum: [teacher, class_code, group_code, all_group_codes, recovery_code, teacher_invite]}
                 currentPassword: {type: string}
       responses:
         '200': {description: 已更新并注销相关会话}

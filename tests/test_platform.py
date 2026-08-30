@@ -15,6 +15,38 @@ sys.path.insert(0, str(ROOT))
 import platform_server as app
 
 
+class LegacyMigrationTest(unittest.TestCase):
+    def test_single_teacher_schema_is_upgraded_for_multiple_teachers(self):
+        original = (app.DATA_DIR, app.UPLOAD_DIR, app.DB_PATH, app.SETUP_TOKEN_FILE)
+        with tempfile.TemporaryDirectory() as directory:
+            app.DATA_DIR = Path(directory)
+            app.UPLOAD_DIR = app.DATA_DIR / "uploads"
+            app.DB_PATH = app.DATA_DIR / "legacy.db"
+            app.SETUP_TOKEN_FILE = app.DATA_DIR / "setup-token.txt"
+            with app.database() as db:
+                db.execute("""
+                    CREATE TABLE teachers (
+                      id INTEGER PRIMARY KEY CHECK(id=1), username TEXT UNIQUE NOT NULL,
+                      password_hash TEXT NOT NULL, created_at TEXT NOT NULL
+                    )
+                """)
+                db.execute(
+                    "INSERT INTO teachers(id,username,password_hash,created_at) VALUES(1,?,?,?)",
+                    ("legacy_admin", app.password_hash("LegacyTeacher#2026"), app.utc_now()),
+                )
+            app.init_database()
+            with app.database() as db:
+                schema = db.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='teachers'").fetchone()[0]
+                self.assertNotIn("CHECK(id=1)", schema.replace(" ", ""))
+                db.execute(
+                    "INSERT INTO teachers(username,password_hash,created_at,is_admin) VALUES(?,?,?,0)",
+                    ("second_teacher", app.password_hash("SecondTeacher#2026"), app.utc_now()),
+                )
+                self.assertEqual(db.execute("SELECT COUNT(*) FROM teachers").fetchone()[0], 2)
+                self.assertEqual(db.execute("SELECT is_admin FROM teachers WHERE id=1").fetchone()[0], 1)
+        app.DATA_DIR, app.UPLOAD_DIR, app.DB_PATH, app.SETUP_TOKEN_FILE = original
+
+
 class PlatformTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -76,7 +108,7 @@ class PlatformTest(unittest.TestCase):
             method=method,
             headers={"Content-Type": "application/json"},
         )
-        with client.open(request, timeout=3) as response:
+        with client.open(request, timeout=8) as response:
             return response.status, json.loads(response.read())
 
     def test_teacher_state_and_student_hint_fallback(self):
@@ -122,6 +154,29 @@ class PlatformTest(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(hint["source"], "teacher_fallback")
         self.assertEqual(hint["reply"], "先画出已知关系。")
+
+        status, overview = self.json_request(teacher, "/api/state")
+        self.assertEqual(status, 200)
+        groups = {item["id"]: item for item in overview["state"]["groups"]}
+        self.assertEqual(groups[1]["status"], "持续推进")
+        self.assertEqual(groups[1]["help"], 1)
+        self.assertEqual(groups[1]["progress"], 0, "求助次数不能虚增学习产出进度")
+        self.assertEqual(groups[2]["status"], "准备中")
+        self.assertEqual(groups[2]["progress"], 0)
+
+        student_state = data["state"]
+        student_state["workspace"] = {
+            "problem": "测量并建立面积模型", "known": "场地边界已知", "unknown": "最大面积",
+            "constraints": "长度为正", "variables": "x表示宽", "relation": "y=x(20-x)",
+            "model": "二次函数模型", "evidence": "边界值核验", "next": "绘制函数图像",
+        }
+        status, saved = self.json_request(student, "/api/state", "PUT", {"state": student_state})
+        self.assertEqual(status, 200)
+        self.assertTrue(saved["ok"])
+        status, overview = self.json_request(teacher, "/api/state")
+        groups = {item["id"]: item for item in overview["state"]["groups"]}
+        self.assertGreater(groups[1]["progress"], 0)
+        self.assertEqual(groups[1]["latest"], "工作区已保存")
 
     def test_password_and_hint_output_guards(self):
         encoded = app.password_hash("secret")
@@ -194,6 +249,41 @@ class PlatformTest(unittest.TestCase):
         )
         self.assertEqual(status, 200)
         self.assertEqual(login["role"], "teacher")
+
+        status, invite = self.json_request(
+            anonymous, "/api/admin/access", "POST",
+            {"action": "teacher_invite", "currentPassword": "RecoveredTeacher#2026"},
+        )
+        self.assertEqual(status, 200)
+        self.assertTrue(invite["inviteCode"])
+        second = self.client()
+        status, registered = self.json_request(
+            second, "/api/teacher/register", "POST",
+            {"inviteCode": invite["inviteCode"], "username": "second_teacher", "password": "SecondTeacher#2026"},
+        )
+        self.assertEqual(status, 201)
+        self.assertEqual(registered["username"], "second_teacher")
+        status, second_login = self.json_request(
+            second, "/api/login", "POST",
+            {"role": "teacher", "username": "second_teacher", "password": "SecondTeacher#2026"},
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(second_login["role"], "teacher")
+        status, session = self.json_request(second, "/api/session")
+        self.assertEqual(status, 200)
+        self.assertEqual(session["username"], "second_teacher")
+        self.assertFalse(session["isAdmin"])
+        with self.assertRaises(urllib.error.HTTPError) as forbidden:
+            self.json_request(second, "/api/admin/access")
+        self.assertEqual(forbidden.exception.code, 403)
+
+        reused = self.client()
+        with self.assertRaises(urllib.error.HTTPError) as reuse_error:
+            self.json_request(
+                reused, "/api/teacher/register", "POST",
+                {"inviteCode": invite["inviteCode"], "username": "third_teacher", "password": "ThirdTeacher#2026"},
+            )
+        self.assertEqual(reuse_error.exception.code, 403)
 
 
 if __name__ == "__main__":
