@@ -956,7 +956,10 @@ class Handler(SimpleHTTPRequestHandler):
 def main() -> None:
     init_database()
     env = os.environ.get("MPT_ENV", "development").lower()
-    print(f"数学项目协作智能体已启动：http://{HOST}:{PORT}/")
+    browser_host = "127.0.0.1" if HOST in {"0.0.0.0", "::"} else HOST
+    print(f"数学项目协作智能体已启动：http://{browser_host}:{PORT}/")
+    if browser_host != HOST:
+        print(f"监听地址：{HOST}:{PORT}（浏览器请使用上面的本地地址）")
     print(f"服务根目录：{ROOT}")
     print(f"数据目录：{DATA_DIR}")
     print(f"运行模式：{env}；DeepSeek：{'已配置' if os.environ.get('DEEPSEEK_API_KEY') else '未配置，将使用教师静态支架'}")
