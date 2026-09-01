@@ -52,7 +52,8 @@ DATA_DIR = Path(os.environ.get("MPT_DATA_DIR", ROOT / "data")).resolve()
 UPLOAD_DIR = DATA_DIR / "uploads"
 DB_PATH = DATA_DIR / "platform.db"
 HOST = os.environ.get("MPT_HOST", "127.0.0.1")
-PORT = int(os.environ.get("MPT_PORT", "8000"))
+# Railway injects PORT at runtime; keep MPT_PORT for local compatibility.
+PORT = int(os.environ.get("PORT") or os.environ.get("MPT_PORT", "8000"))
 SESSION_SECONDS = int(os.environ.get("MPT_SESSION_SECONDS", "28800"))
 MAX_JSON_BYTES = 2 * 1024 * 1024
 MAX_UPLOAD_BYTES = int(os.environ.get("MPT_MAX_UPLOAD_BYTES", str(10 * 1024 * 1024)))

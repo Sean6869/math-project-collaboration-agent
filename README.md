@@ -42,6 +42,10 @@ docker run --env-file .env -p 8000:8000 -v math-project-data:/app/data math-proj
 - 不把 `.env`、数据库、上传文件或 DeepSeek 密钥提交到代码仓库；
 - 由学校或项目负责人完成数据告知、授权、保留期限与账号发放。
 
+### Railway
+
+Railway 会自动注入 `PORT`，应用会优先使用该端口；部署时选择仓库根目录的 `Dockerfile`，设置 `MPT_ENV=production`、`MPT_COOKIE_SECURE=1`、`MPT_SETUP_TOKEN` 和 `DEEPSEEK_API_KEY`，并在服务设置中将 Healthcheck Path 设为 `/api/health`。首次部署后在 Railway 服务中添加持久化 Volume，并将挂载目录设为 `/app/data`，同时设置 `RAILWAY_RUN_UID=0` 以保证非 root 镜像可以写入 Railway Volume，否则 SQLite 数据和上传文件会在重新部署后丢失或无法写入。平台使用 SQLite 时保持单实例运行；如需多实例并发，应先迁移到 PostgreSQL 等服务端数据库。学生端和教师端使用同一域名的相对 API 路径与同一 `/app/data`，因此会连接到同一数据库。
+
 ## 验证
 
 ```bash

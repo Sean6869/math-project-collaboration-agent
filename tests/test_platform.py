@@ -1,6 +1,7 @@
 import http.cookiejar
 import json
 import os
+import subprocess
 import sys
 import tempfile
 import threading
@@ -184,6 +185,15 @@ class PlatformTest(unittest.TestCase):
         self.assertFalse(app.password_ok("wrong", encoded))
         self.assertIsNone(app.validate_hint("最终答案是 42"))
         self.assertEqual(app.validate_hint("先检查已知条件与目标量是否对应。"), "先检查已知条件与目标量是否对应。")
+
+    def test_railway_port_overrides_local_port(self):
+        environment = os.environ.copy()
+        environment.update({"PORT": "9187", "MPT_PORT": "8000"})
+        result = subprocess.run(
+            [sys.executable, "-c", "import platform_server; print(platform_server.PORT)"],
+            cwd=ROOT, env=environment, capture_output=True, text=True, check=True,
+        )
+        self.assertEqual(result.stdout.strip(), "9187")
 
     def test_old_entry_redirect_and_removed_static_routes(self):
         class NoRedirect(urllib.request.HTTPRedirectHandler):
