@@ -66,16 +66,17 @@ SETUP_TOKEN_DISPLAY = ""
 SETUP_TOKEN_FILE = DATA_DIR / "setup-token.txt"
 
 CLASS_KEYS = {
-    "project", "className", "groupCount", "currentStage", "stagePaused",
+    "project", "className", "currentStage", "stagePaused",
     "aiOpen", "projectType", "projectHours", "hintQuota",
     "maxHintLevel", "broadcast", "teacherConfig", "groups", "queue", "common",
     "evaluations", "audit",
 }
 GROUP_KEYS = {
-    "groupId", "roles", "members", "roleRound", "stageSubmitted", "stageTimes",
+    "groupId", "roles", "roleRound", "stageSubmitted", "stageTimes",
     "workspace", "versions", "evidence", "viewpoints", "firstThoughts", "helpHistory",
     "debate", "product", "hintUsed", "events", "questionTree", "graphConfig", "checklist",
 }
+ROLE_NAMES = ["建模者", "质疑者", "记录者", "解释者", "验证者", "资料员", "协调者", "展示者", "计算者", "检查者"]
 ALLOWED_UPLOADS = {
     ".pdf", ".docx", ".txt", ".md", ".csv", ".png", ".jpg", ".jpeg", ".webp",
 }
@@ -121,6 +122,24 @@ def token_hash(token: str) -> str:
 
 def clean_code(value: str) -> str:
     return re.sub(r"\s+", "", value or "").upper()[:32]
+
+
+def validated_members(value: object) -> list[str]:
+    if not isinstance(value, list) or not 1 <= len(value) <= len(ROLE_NAMES):
+        raise ValueError(f"成员数量应为1—{len(ROLE_NAMES)}人")
+    members = [str(item).strip()[:40] for item in value]
+    if any(not item for item in members):
+        raise ValueError("请填写全部成员称呼")
+    if len(set(members)) != len(members):
+        raise ValueError("成员称呼不能重复")
+    return members
+
+
+def roles_for_members(existing: object, count: int) -> list[str]:
+    roles = [str(item) for item in existing] if isinstance(existing, list) else []
+    roles = [item for item in roles if item in ROLE_NAMES]
+    roles.extend(item for item in ROLE_NAMES if item not in roles)
+    return roles[:count]
 
 
 def is_initialized() -> bool:
@@ -317,7 +336,7 @@ def group_completion(group_state: dict) -> tuple[int, int]:
     versions = group_state.get("versions", [])
     product = group_state.get("product", {})
     signals = [
-        [_has_value(group_state.get("members")), int(group_state.get("roleRound", 1)) > 1],
+        [bool(group_state.get("membersLocked")) and _has_value(group_state.get("members")), int(group_state.get("roleRound", 1)) > 1],
         [_has_value(first_thoughts), _has_value(workspace.get("problem")), _has_value(workspace.get("known")), _has_value(workspace.get("unknown")), _has_value(workspace.get("constraints")), _has_value(question_tree)],
         [_has_value(workspace.get("variables")), _has_value(workspace.get("relation")), _has_value(workspace.get("model")), _has_value(graph), _has_value(checklist)],
         [_has_value(evidence), _has_value(viewpoints), _has_value(versions), _has_value(group_state.get("debate"))],
@@ -695,6 +714,14 @@ class Handler(SimpleHTTPRequestHandler):
                     self.update_access(self.read_json(), session)
                 elif session:
                     self.json_response({"error": "只有管理员教师可以管理账号"}, HTTPStatus.FORBIDDEN)
+            elif route == "/api/groups/configure":
+                session = self.require_session("teacher")
+                if session:
+                    self.configure_groups(self.read_json(), session)
+            elif route == "/api/group/members":
+                session = self.require_session()
+                if session:
+                    self.update_group_members(self.read_json(), session)
             elif route == "/api/logout":
                 self.logout()
             elif route == "/api/hints":
@@ -745,6 +772,29 @@ class Handler(SimpleHTTPRequestHandler):
         group = int(session.get("groupId") or incoming.get("groupId") or 1)
         group = max(1, min(count, group))
         group_state = state_get(f"group:{group}")
+        if session["role"] == "student":
+            if "members" in incoming and incoming["members"] != group_state.get("members", []):
+                self.json_response({"error": "成员名单请在成员与角色页面提交"}, HTTPStatus.CONFLICT)
+                return
+            if "membersLocked" in incoming and bool(incoming["membersLocked"]) != bool(group_state.get("membersLocked", False)):
+                self.json_response({"error": "成员名单锁定状态只能通过正式提交或教师授权修改"}, HTTPStatus.CONFLICT)
+                return
+            current_roles = roles_for_members(group_state.get("roles"), len(group_state.get("members", [])))
+            incoming_roles = incoming.get("roles", current_roles)
+            try:
+                current_round = int(group_state.get("roleRound", 1))
+                incoming_round = int(incoming.get("roleRound", current_round))
+            except (TypeError, ValueError):
+                self.json_response({"error": "角色轮次必须是整数"}, HTTPStatus.BAD_REQUEST)
+                return
+            if incoming_roles != current_roles:
+                rotated = current_roles[-1:] + current_roles[:-1]
+                if not group_state.get("membersLocked") or incoming_roles != rotated or incoming_round != current_round + 1:
+                    self.json_response({"error": "成员角色只能按轮次整体轮换"}, HTTPStatus.CONFLICT)
+                    return
+            elif incoming_round != current_round:
+                self.json_response({"error": "角色轮次与当前分工不一致"}, HTTPStatus.CONFLICT)
+                return
         group_state.update({key: incoming[key] for key in GROUP_KEYS if key in incoming})
         group_state["groupId"] = group
         state_put(f"group:{group}", group_state)
@@ -982,6 +1032,86 @@ class Handler(SimpleHTTPRequestHandler):
                     pass
         record_event("system", None, "factory_reset", None, "课堂数据已清空，管理员账号与访问规则保留")
         self.json_response({"ok": True, "preserved": ["admin", "recovery_code", "class_and_group_access"]})
+
+    def configure_groups(self, body: dict, session: dict) -> None:
+        try:
+            count = int(body.get("groupCount"))
+        except (TypeError, ValueError) as exc:
+            raise ValueError("请填写有效的小组数量") from exc
+        if not 1 <= count <= 20:
+            raise ValueError("小组数量应为1—20组")
+        old_count = group_count()
+        if count == old_count:
+            self.json_response({"ok": True, "groupCount": count, "addedCodes": []})
+            return
+        prefix = clean_code(str(body.get("groupCodePrefix", "")))
+        if count > old_count and len(prefix) < 4:
+            raise ValueError("增加小组时请填写至少4位的小组访问码前缀")
+        added_codes = []
+        with database() as db:
+            if count > old_count:
+                for number in range(old_count + 1, count + 1):
+                    code = f"{prefix}{number:02d}"
+                    db.execute("INSERT INTO groups(group_no,access_hash) VALUES(?,?)", (number, password_hash(code)))
+                    added_codes.append({"groupNo": number, "code": code})
+            else:
+                db.execute("DELETE FROM sessions WHERE role='student' AND group_no>?", (count,))
+                db.execute("DELETE FROM groups WHERE group_no>?", (count,))
+                db.execute("DELETE FROM states WHERE scope LIKE 'group:%' AND CAST(substr(scope,7) AS INTEGER)>?", (count,))
+                db.execute("DELETE FROM events WHERE group_no>?", (count,))
+                db.execute("DELETE FROM ai_calls WHERE group_no>?", (count,))
+            db.execute("UPDATE settings SET value=? WHERE key='group_count'", (str(count),))
+        class_state = state_get("class")
+        class_state["groupCount"] = count
+        class_state["groups"] = dynamic_group_summaries(class_state)
+        evaluations = class_state.get("evaluations", {})
+        if isinstance(evaluations, dict):
+            class_state["evaluations"] = {key: value for key, value in evaluations.items() if str(key).isdigit() and int(key) <= count}
+        state_put("class", class_state)
+        record_event("teacher", None, "group_count_changed", None, f"{old_count}->{count};teacher={session.get('username', '')}")
+        self.json_response({"ok": True, "groupCount": count, "addedCodes": added_codes})
+
+    def update_group_members(self, body: dict, session: dict) -> None:
+        action = str(body.get("action", "submit"))
+        count = group_count()
+        try:
+            requested_group = int(body.get("groupId") or session.get("groupId") or 1)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("请选择有效小组") from exc
+        group = int(session.get("groupId")) if session["role"] == "student" else requested_group
+        if not 1 <= group <= count:
+            raise ValueError("小组不存在")
+        group_state = state_get(f"group:{group}")
+        if action == "unlock":
+            if session["role"] != "teacher":
+                self.json_response({"error": "只有教师可以开放成员信息修改"}, HTTPStatus.FORBIDDEN)
+                return
+            group_state["membersLocked"] = False
+            state_put(f"group:{group}", group_state)
+            record_event("teacher", group, "members_unlocked", 1, str(session.get("username", "")))
+            self.json_response({"ok": True, "members": group_state.get("members", []), "membersLocked": False})
+            return
+        if action != "submit":
+            raise ValueError("不支持的成员操作")
+        if session["role"] == "student" and group_state.get("membersLocked"):
+            self.json_response({"error": "成员信息已提交锁定，请联系教师开放修改"}, HTTPStatus.CONFLICT)
+            return
+        members = validated_members(body.get("members"))
+        old_members = group_state.get("members", [])
+        if members != old_members:
+            group_state["firstThoughts"] = {}
+        group_state["members"] = members
+        if len(members) != len(old_members):
+            group_state["roles"] = ROLE_NAMES[:len(members)]
+            group_state["roleRound"] = 1
+        else:
+            group_state["roles"] = roles_for_members(group_state.get("roles"), len(members))
+        group_state["membersLocked"] = True
+        state_put(f"group:{group}", group_state)
+        self.sync_group_summary(group, group_state)
+        event_type = "members_submitted" if session["role"] == "student" else "members_teacher_updated"
+        record_event(session["role"], group, event_type, 1, f"count={len(members)}")
+        self.json_response({"ok": True, "members": members, "roles": group_state["roles"], "membersLocked": True})
 
     def register_teacher(self, body: dict) -> None:
         if not is_initialized():

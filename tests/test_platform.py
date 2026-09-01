@@ -214,6 +214,85 @@ class PlatformTest(unittest.TestCase):
                 urllib.request.urlopen(self.base + route, timeout=3)
             self.assertEqual(context.exception.code, 404, route)
 
+    def test_group_count_and_member_lock_workflow(self):
+        teacher = self.client()
+        status, _ = self.json_request(
+            teacher, "/api/login", "POST",
+            {"role": "teacher", "username": "test_teacher", "password": "StrongTeacher#2026"},
+        )
+        self.assertEqual(status, 200)
+        student = self.client()
+        status, _ = self.json_request(
+            student, "/api/login", "POST",
+            {"role": "student", "classCode": "CLASS2026", "groupId": 3, "groupCode": "TEAM03"},
+        )
+        self.assertEqual(status, 200)
+
+        first_members = ["甲", "乙", "丙", "丁", "戊"]
+        status, result = self.json_request(
+            student, "/api/group/members", "POST",
+            {"action": "submit", "members": first_members},
+        )
+        self.assertEqual(status, 200)
+        self.assertTrue(result["membersLocked"])
+        self.assertEqual(len(result["roles"]), 5)
+        status, state_result = self.json_request(student, "/api/state")
+        locked_state = state_result["state"]
+        locked_state["members"] = first_members + ["越权修改"]
+        with self.assertRaises(urllib.error.HTTPError) as direct_change:
+            self.json_request(student, "/api/state", "PUT", {"state": locked_state})
+        self.assertEqual(direct_change.exception.code, 409)
+        locked_state["members"] = first_members
+        locked_state["roles"] = locked_state["roles"][-1:] + locked_state["roles"][:-1]
+        locked_state["roleRound"] = locked_state.get("roleRound", 1) + 1
+        status, rotated = self.json_request(student, "/api/state", "PUT", {"state": locked_state})
+        self.assertEqual(status, 200)
+        self.assertTrue(rotated["ok"])
+        with self.assertRaises(urllib.error.HTTPError) as locked:
+            self.json_request(
+                student, "/api/group/members", "POST",
+                {"action": "submit", "members": first_members + ["己"]},
+            )
+        self.assertEqual(locked.exception.code, 409)
+
+        status, _ = self.json_request(
+            teacher, "/api/group/members", "POST",
+            {"action": "unlock", "groupId": 3},
+        )
+        self.assertEqual(status, 200)
+        second_members = first_members + ["己"]
+        status, result = self.json_request(
+            student, "/api/group/members", "POST",
+            {"action": "submit", "members": second_members},
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(result["members"], second_members)
+        status, result = self.json_request(
+            teacher, "/api/group/members", "POST",
+            {"action": "submit", "groupId": 3, "members": ["甲", "乙", "丙", "丁"]},
+        )
+        self.assertEqual(status, 200)
+        self.assertTrue(result["membersLocked"])
+
+        status, result = self.json_request(
+            teacher, "/api/groups/configure", "POST",
+            {"groupCount": 5, "groupCodePrefix": "NEWG"},
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(result["addedCodes"][-1], {"groupNo": 5, "code": "NEWG05"})
+        fifth = self.client()
+        status, login = self.json_request(
+            fifth, "/api/login", "POST",
+            {"role": "student", "classCode": "CLASS2026", "groupId": 5, "groupCode": "NEWG05"},
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(login["groupId"], 5)
+        status, result = self.json_request(
+            teacher, "/api/groups/configure", "POST", {"groupCount": 3},
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(result["groupCount"], 3)
+
     def test_z_admin_access_reset_and_password_recovery(self):
         teacher = self.client()
         status, _ = self.json_request(
