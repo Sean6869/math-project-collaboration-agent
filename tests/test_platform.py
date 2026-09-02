@@ -148,6 +148,7 @@ class PlatformTest(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(login["groupId"], 1)
         status, data = self.json_request(student, "/api/state")
+        self.assertEqual(data["state"]["currentStage"], 2, "小组刷新不能被默认阶段1覆盖")
         self.assertEqual(data["state"]["project"], "集成测试项目")
         status, hint = self.json_request(
             student, "/api/hints", "POST",

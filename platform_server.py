@@ -435,6 +435,12 @@ def merged_state(group_no: int) -> dict:
     value = state_get("class")
     group_state = state_get(f"group:{group_no}")
     value.update(group_state)
+    # 课堂阶段、暂停状态和 AI 开关由教师端统一控制；小组初始状态中的
+    # currentStage=1 不能覆盖教师已经开放的阶段，否则学生刷新后会被误判回阶段1。
+    class_state = state_get("class")
+    for key in ("currentStage", "stagePaused", "aiOpen"):
+        if key in class_state:
+            value[key] = class_state[key]
     value["groupId"] = group_no
     value["hintPolicy"] = hint_policy(value)
     value["hintUsage"] = hint_usage(group_state)
