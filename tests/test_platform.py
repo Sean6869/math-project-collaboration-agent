@@ -8,6 +8,7 @@ import threading
 import unittest
 import urllib.error
 import urllib.request
+from unittest import mock
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -160,7 +161,7 @@ class PlatformTest(unittest.TestCase):
         self.assertEqual(status, 200)
         groups = {item["id"]: item for item in overview["state"]["groups"]}
         self.assertEqual(groups[1]["status"], "持续推进")
-        self.assertEqual(groups[1]["help"], 1)
+        self.assertEqual(groups[1]["help"], 0, "静态降级支架不应扣除AI额度")
         self.assertEqual(groups[1]["progress"], 0, "求助次数不能虚增学习产出进度")
         self.assertEqual(groups[2]["status"], "准备中")
         self.assertEqual(groups[2]["progress"], 0)
@@ -178,6 +179,50 @@ class PlatformTest(unittest.TestCase):
         groups = {item["id"]: item for item in overview["state"]["groups"]}
         self.assertGreater(groups[1]["progress"], 0)
         self.assertEqual(groups[1]["latest"], "工作区已保存")
+
+    def test_hint_level_state_machine_stays_in_level_until_student_advances(self):
+        student = self.client()
+        status, _ = self.json_request(
+            student, "/api/login", "POST",
+            {"role": "student", "classCode": "CLASS2026", "groupId": 3, "groupCode": "TEAM03"},
+        )
+        self.assertEqual(status, 200)
+        replies = [
+            ("诊断：目标量还不明确。\n支架：先区分总面积和可种植面积。\n下一步：列出两个面积分别包含哪些部分。", 80, "ok"),
+            ("诊断：已经区分面积，但条件还未对应。\n支架：逐条标记长度条件作用于外框还是内部区域。\n下一步：在草图旁写出条件来源。", 75, "ok"),
+            ("诊断：条件已经整理，可以开始拆解。\n支架：先建立外框面积，再单独表示小路面积，最后比较两者关系。\n下一步：定义一个表示宽度的变量并注明范围。", 90, "ok"),
+        ]
+        with mock.patch.object(app, "deepseek_hint", side_effect=replies):
+            for question in ("优化目标到底是哪一个面积", "小路宽度属于哪个条件"):
+                status, result = self.json_request(
+                    student, "/api/hints", "POST",
+                    {"action": "ask", "done": "已经画出场地草图并标出长度", "type": "变量关系", "issue": question},
+                )
+                self.assertEqual(status, 200)
+                self.assertEqual(result["level"], "L1")
+            self.assertEqual(result["hintUsage"]["L1"], 2)
+            status, advanced = self.json_request(
+                student, "/api/hints", "POST",
+                {"action": "advance", "attempt": "根据提示重新区分了总面积和种植面积"},
+            )
+            self.assertEqual(status, 200)
+            self.assertEqual(advanced["currentLevel"], 2)
+            status, result = self.json_request(
+                student, "/api/hints", "POST",
+                {"action": "ask", "done": "定义x表示小路宽度", "type": "变量关系", "issue": "怎样组织面积关系"},
+            )
+            self.assertEqual(status, 200)
+            self.assertEqual(result["level"], "L2")
+            self.assertEqual(result["hintUsage"], {"L1": 2, "L2": 1, "L3": 0, "L4": 0})
+        status, teacher_help = self.json_request(
+            student, "/api/hints", "POST", {"action": "teacher", "issue": "仍然不能确定面积关系"},
+        )
+        self.assertEqual(status, 200)
+        self.assertTrue(teacher_help["created"])
+        self.assertEqual(teacher_help["hintUsage"]["L4"], 1)
+        status, state = self.json_request(student, "/api/state")
+        self.assertEqual(status, 200)
+        self.assertEqual(state["state"]["activeHelpThread"]["currentLevel"], 4)
 
     def test_password_and_hint_output_guards(self):
         encoded = app.password_hash("secret")

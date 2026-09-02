@@ -22,7 +22,7 @@ $env:DEEPSEEK_API_KEY="你的密钥"
 python start_server.py
 ```
 
-默认调用 `https://api.deepseek.com/chat/completions`，模型为 `deepseek-v4-flash`，可通过 `DEEPSEEK_BASE_URL` 和 `DEEPSEEK_MODEL` 调整。平台关闭模型思考输出，限制提示长度和层级，并在超时、错误或越界回答时使用教师支架。
+默认调用 `https://api.deepseek.com/chat/completions`，模型为 `deepseek-v4-flash`，可通过 `DEEPSEEK_BASE_URL` 和 `DEEPSEEK_MODEL` 调整。平台关闭模型思考输出并要求结构化 JSON；L1、L2、L3 分别执行“定位—拆解—局部示范”契约，学生可在同一级连续提问并主动升级，L4 为独立教师求助额度。超时、错误或越界回答会使用教师支架且不扣除 AI 额度。
 
 ## 生产部署
 
@@ -53,6 +53,9 @@ python -m unittest discover -s tests -v
 python -m py_compile platform_server.py start_server.py
 node --check assets/app.js
 node --check assets/data.js
+python tests/evaluate_deepseek_hints.py
 ```
+
+最后一项使用服务器环境中已配置的 DeepSeek 密钥进行真实 L1—L3 教学支架验证，不会输出或写入密钥。
 
 详细接口见 `interfaces/openapi.yaml`。

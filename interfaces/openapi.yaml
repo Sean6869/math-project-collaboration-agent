@@ -154,20 +154,27 @@ paths:
         '403': {description: 权限不足}
   /api/hints:
     post:
-      summary: 提交已有进展与卡点并请求分层提示
+      summary: 在当前求助主题内提问、主动升级、结束主题或请求教师
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: object
-              required: [done, issue, type]
               properties:
+                action:
+                  type: string
+                  enum: [ask, advance, resolve, teacher]
+                  default: ask
                 done: {type: string, maxLength: 1600}
                 issue: {type: string, maxLength: 1200}
                 type: {type: string, maxLength: 80}
+                attempt: {type: string, maxLength: 1600}
+                peerTried: {type: boolean}
+                checkedWork: {type: boolean}
       responses:
-        '200': {description: DeepSeek 提示、教师静态支架或教师升级结果}
+        '200': {description: 当前层 DeepSeek 支架、无扣额静态支架、层级转换或教师升级结果}
+        '409': {description: 当前层额度已用完、AI暂停或主题状态不允许该操作}
         '403': {description: 仅学生小组可调用}
   /api/escalations:
     post:

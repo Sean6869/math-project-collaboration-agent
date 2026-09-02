@@ -68,14 +68,16 @@ SETUP_TOKEN_FILE = DATA_DIR / "setup-token.txt"
 CLASS_KEYS = {
     "project", "className", "currentStage", "stagePaused",
     "aiOpen", "projectType", "projectHours", "hintQuota",
-    "maxHintLevel", "broadcast", "teacherConfig", "groups", "queue", "common",
+    "maxHintLevel", "hintPolicy", "broadcast", "teacherConfig", "groups", "queue", "common",
     "evaluations", "audit",
 }
 GROUP_KEYS = {
     "groupId", "roles", "roleRound", "stageSubmitted", "stageTimes",
-    "workspace", "versions", "evidence", "viewpoints", "firstThoughts", "helpHistory",
-    "debate", "product", "hintUsed", "events", "questionTree", "graphConfig", "checklist",
+    "workspace", "versions", "evidence", "viewpoints", "firstThoughts",
+    "debate", "product", "events", "questionTree", "graphConfig", "checklist",
 }
+HINT_POLICY_DEFAULT = {"L1": 20, "L2": 10, "L3": 5, "L4": 3}
+HINT_LEVEL_NAMES = {1: "定位", 2: "拆解", 3: "局部示范", 4: "教师介入"}
 ROLE_NAMES = ["建模者", "质疑者", "记录者", "解释者", "验证者", "资料员", "协调者", "展示者", "计算者", "检查者"]
 ALLOWED_UPLOADS = {
     ".pdf", ".docx", ".txt", ".md", ".csv", ".png", ".jpg", ".jpeg", ".webp",
@@ -323,6 +325,52 @@ def _has_value(value: object) -> bool:
     return value is not None and value is not False
 
 
+def hint_policy(state: dict) -> dict[str, int]:
+    raw = state.get("hintPolicy") if isinstance(state.get("hintPolicy"), dict) else {}
+    result = {}
+    for level, default in HINT_POLICY_DEFAULT.items():
+        try:
+            result[level] = max(1, min(50, int(raw.get(level, default))))
+        except (TypeError, ValueError):
+            result[level] = default
+    return result
+
+
+def hint_usage(group_state: dict) -> dict[str, int]:
+    raw = group_state.get("hintUsage") if isinstance(group_state.get("hintUsage"), dict) else {}
+    result = {}
+    for level in HINT_POLICY_DEFAULT:
+        try:
+            result[level] = max(0, int(raw.get(level, 0)))
+        except (TypeError, ValueError):
+            result[level] = 0
+    return result
+
+
+def active_help_thread(group_state: dict) -> dict | None:
+    thread_id = str(group_state.get("activeHelpThreadId", ""))
+    threads = group_state.get("helpThreads", [])
+    if not thread_id or not isinstance(threads, list):
+        return None
+    return next(
+        (item for item in threads if isinstance(item, dict) and item.get("id") == thread_id and item.get("status") in {"active", "teacher"}),
+        None,
+    )
+
+
+def help_total(group_state: dict) -> int:
+    return sum(hint_usage(group_state).values())
+
+
+def highest_hint_level(group_state: dict) -> int:
+    levels = []
+    for item in group_state.get("helpHistory", []):
+        value = str(item.get("level", "")) if isinstance(item, dict) else ""
+        if re.fullmatch(r"L[1-4]", value):
+            levels.append(int(value[1:]))
+    return max(levels, default=0)
+
+
 def group_completion(group_state: dict) -> tuple[int, int]:
     submitted = group_state.get("stageSubmitted", {})
     submitted_count = sum(1 for number in range(1, 6) if isinstance(submitted, dict) and submitted.get(str(number), submitted.get(number, False)))
@@ -358,7 +406,7 @@ def dynamic_group_summaries(class_state: dict) -> list[dict]:
         progress, submitted_count = group_completion(group_state)
         versions = group_state.get("versions", [])
         latest = versions[-1].get("note", "模型版本已保存") if isinstance(versions, list) and versions and isinstance(versions[-1], dict) else "工作区已保存" if _has_value(group_state.get("workspace")) else "尚未保存"
-        active = progress > 0 or bool(group_state.get("hintUsed"))
+        active = progress > 0 or bool(help_total(group_state)) or bool(group_state.get("helpHistory"))
         waiting = bool(saved.get("teacher")) or any(int(item.get("group", 0)) == number and not item.get("resolved") for item in queue if isinstance(item, dict))
         status = "等待教师" if waiting else "已完成" if submitted_count == 5 else "持续推进" if active else "准备中"
         summaries.append({
@@ -373,8 +421,8 @@ def dynamic_group_summaries(class_state: dict) -> list[dict]:
                 )
             ),
             "status": status,
-            "help": int(group_state.get("hintUsed", 0)),
-            "maxHint": max((int(item.get("level", "L0")[1:]) for item in group_state.get("helpHistory", []) if isinstance(item, dict) and str(item.get("level", "L0")).startswith("L") and str(item.get("level", "L0"))[1:].isdigit()), default=0),
+            "help": help_total(group_state),
+            "maxHint": highest_hint_level(group_state),
             "teacher": bool(saved.get("teacher")),
             "latest": latest,
             "issue": str(saved.get("issue", ""))[:120],
@@ -385,8 +433,15 @@ def dynamic_group_summaries(class_state: dict) -> list[dict]:
 
 def merged_state(group_no: int) -> dict:
     value = state_get("class")
-    value.update(state_get(f"group:{group_no}"))
+    group_state = state_get(f"group:{group_no}")
+    value.update(group_state)
     value["groupId"] = group_no
+    value["hintPolicy"] = hint_policy(value)
+    value["hintUsage"] = hint_usage(group_state)
+    value["hintUsed"] = sum(value["hintUsage"].values())
+    value["hintQuota"] = sum(value["hintPolicy"].values())
+    value["maxHintLevel"] = 3
+    value["activeHelpThread"] = active_help_thread(group_state)
     value["groups"] = dynamic_group_summaries(value)
     topics: dict[str, list[int]] = {}
     for item in value["groups"]:
@@ -464,15 +519,49 @@ def static_hint(config: dict, level_no: int) -> str:
     return str(source[min(level_no - 1, len(source) - 1)])[:260]
 
 
-def validate_hint(text: str) -> str | None:
+def validate_hint(text: str, level: str = "L1") -> str | None:
     clean = re.sub(r"\s+", " ", text or "").strip()
-    blocked = ("最终答案", "答案是", "完整证明", "完整模型", "故最大值为", "直接得到最优")
-    if not clean or len(clean) > 360 or any(item in clean for item in blocked):
+    blocked = ("最终答案", "答案是", "完整证明", "完整模型", "故最大值为", "直接得到最优", "最终结论为")
+    limits = {"L1": 320, "L2": 450, "L3": 650}
+    if not clean or len(clean) > limits.get(level, 360) or any(item in clean for item in blocked):
         return None
     return clean
 
 
-def deepseek_hint(state: dict, level: str, done: str, issue_type: str, issue: str) -> tuple[str | None, int, str]:
+def parse_model_hint(text: str, level: str) -> str | None:
+    raw = re.sub(r"^```(?:json)?\s*|\s*```$", "", text or "", flags=re.IGNORECASE).strip()
+    try:
+        value = json.loads(raw)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(value, dict):
+        return None
+    diagnosis = re.sub(r"\s+", " ", str(value.get("diagnosis", ""))).strip()
+    guidance = re.sub(r"\s+", " ", str(value.get("guidance", ""))).strip()
+    next_action = re.sub(r"\s+", " ", str(value.get("nextAction", ""))).strip()
+    if not diagnosis or not guidance or not next_action:
+        return None
+    minimum = {"L1": 45, "L2": 90, "L3": 150}.get(level, 45)
+    combined = f"诊断：{diagnosis}\n支架：{guidance}\n下一步：{next_action}"
+    clean = validate_hint(combined, level) if len(combined) >= minimum else None
+    if not clean:
+        return None
+    if level == "L1" and any(item in clean for item in ("写出函数", "写出表达式", "列出不等式", "求最大", "求最小")):
+        return None
+    if level == "L2" and any(item in clean for item in ("直接得到最优", "完整证明", "最后化简并求出", "最终答案")):
+        return None
+    if level == "L3":
+        student_markers = ("请你完成", "由你完成", "学生完成", "小组完成", "留给你", "自行完成", "先停在这一步")
+        forbidden = ("最后化简", "求出最大值", "给出最终模型", "完成全部推导", "直接得到最优")
+        if not any(item in clean for item in student_markers) or any(item in clean for item in forbidden):
+            return None
+    return clean
+
+
+def deepseek_hint(
+    state: dict, level: str, done: str, issue_type: str, issue: str,
+    history: list[dict] | None = None, peer_tried: bool = False, checked_work: bool = False,
+) -> tuple[str | None, int, str]:
     api_key = os.environ.get("DEEPSEEK_API_KEY", "")
     if not api_key:
         return None, 0, "not_configured"
@@ -481,21 +570,37 @@ def deepseek_hint(state: dict, level: str, done: str, issue_type: str, issue: st
     with database() as db:
         texts = db.execute("SELECT original_name,extracted_text FROM files WHERE extracted_text<>'' ORDER BY uploaded_at DESC LIMIT 5").fetchall()
     knowledge = "\n".join(f"[{row['original_name']}] {row['extracted_text'][:4000]}" for row in texts)
+    contracts = {
+        "L1": "定位支架：只指出一个尚未明确的目标、条件或检查项；提出一个聚焦问题和一个立即可执行的观察/核对动作。不得让学生写函数、表达式、不等式，不得给完整公式、建模方法或结果。",
+        "L2": "结构支架：把卡点拆成2—3个子问题，建议变量、图表或数量关系的组织方式和处理顺序；下一步只让学生做第一个整理动作。不得完成全部建模或推导。",
+        "L3": "局部示范：只给一个类比小例子或一步局部推导，说明核验方法；必须明确写‘请你完成/由学生完成’的剩余一步。不得要求学生最后化简、求最大值、完成全部推导，不得给最终模型、证明、最优值或成品答案。",
+    }
     system = (
-        "你是初中数学项目式学习的小组支架。你只能给当前层级的最小充分提示，不能给完整模型、完整证明、最终数值答案或代替学生决策。"
-        "L1只定位目标、条件或检查项；L2只给子问题、变量关系或表征结构；L3只给局部例子或一步核验。"
-        "回答使用简体中文，不超过180字，最多提出两个问题。材料不足、存在冲突或需要高阶判断时明确写‘请教师核验’。"
+        "你是服务于中国初中数学项目式学习小组的教学支架。必须依据学生当前尝试和历史提示生成有推进作用、但保留学生思考责任的反馈。"
+        f"当前严格执行{level}：{contracts[level]}"
+        "不得重复历史提示；信息不足时先澄清，不得猜测。材料冲突、数学结论不可靠或需要教师判断时，在nextAction中写明请教师核验。"
+        "只输出一个JSON对象，不要Markdown和额外文字，格式为："
+        '{"diagnosis":"针对本次尝试的简短诊断","guidance":"符合当前层级的支架","nextAction":"学生下一步可执行动作；L3必须明确留下由学生完成的剩余一步"}'
     )
+    recent = []
+    for item in (history or [])[-6:]:
+        if isinstance(item, dict):
+            recent.append({
+                "层级": item.get("level", ""), "学生提问": item.get("question", item.get("prompt", "")),
+                "学生尝试": item.get("done", ""), "支架": item.get("reply", ""),
+            })
     user = {
         "项目": state.get("project", ""), "数学主题": config.get("mathTopic", ""),
         "课程目标": config.get("standard", ""), "当前阶段": state.get("currentStage", 1),
         "提示层级": level, "已完成": done, "卡点类型": issue_type, "具体卡点": issue,
-        "共享工作区": state.get("workspace", {}), "已审核材料": knowledge_names, "材料摘录": knowledge,
+        "共享工作区": state.get("workspace", {}), "已请组员解释": peer_tried, "已检查工作区": checked_work,
+        "同一求助主题的最近对话": recent, "已审核材料": knowledge_names, "材料摘录": knowledge,
     }
     payload = json.dumps({
         "model": DEEPSEEK_MODEL,
         "messages": [{"role": "system", "content": system}, {"role": "user", "content": json.dumps(user, ensure_ascii=False)}],
-        "thinking": {"type": "disabled"}, "stream": False, "temperature": 0.2, "max_tokens": 240,
+        "thinking": {"type": "disabled"}, "response_format": {"type": "json_object"},
+        "stream": False, "temperature": 0.15, "max_tokens": 700,
     }, ensure_ascii=False).encode()
     request = urllib.request.Request(
         DEEPSEEK_URL, data=payload,
@@ -504,11 +609,19 @@ def deepseek_hint(state: dict, level: str, done: str, issue_type: str, issue: st
     )
     started = time.perf_counter()
     try:
-        with urllib.request.urlopen(request, timeout=8) as response:
+        with urllib.request.urlopen(request, timeout=20) as response:
             body = json.loads(response.read())
         latency = round((time.perf_counter() - started) * 1000)
-        return validate_hint(body["choices"][0]["message"]["content"]), latency, "ok"
-    except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, KeyError, ValueError, json.JSONDecodeError) as exc:
+        return parse_model_hint(body["choices"][0]["message"]["content"], level), latency, "ok"
+    except urllib.error.HTTPError as exc:
+        latency = round((time.perf_counter() - started) * 1000)
+        try:
+            detail = json.loads(exc.read()).get("error", {})
+            message = re.sub(r"\s+", " ", str(detail.get("message", ""))).strip()[:160]
+        except (json.JSONDecodeError, AttributeError, ValueError):
+            message = ""
+        return None, latency, f"HTTP {exc.code}: {message}".rstrip(": ")
+    except (urllib.error.URLError, TimeoutError, KeyError, ValueError, json.JSONDecodeError) as exc:
         latency = round((time.perf_counter() - started) * 1000)
         return None, latency, type(exc).__name__
 
@@ -736,9 +849,7 @@ class Handler(SimpleHTTPRequestHandler):
                 session = self.require_session("student")
                 if session:
                     body = self.read_json()
-                    state = merged_state(int(session["groupId"]))
-                    self.escalate(int(session["groupId"]), state, "学生主动求助", str(body.get("reason", "需要教师介入"))[:300])
-                    self.json_response({"ok": True})
+                    self.hint(session, {"action": "teacher", "issue": str(body.get("reason", "需要教师介入"))[:300], "type": "教师求助"})
             elif route == "/api/state/reset":
                 if self.require_session("teacher"):
                     with database() as db:
@@ -795,6 +906,23 @@ class Handler(SimpleHTTPRequestHandler):
             elif incoming_round != current_round:
                 self.json_response({"error": "角色轮次与当前分工不一致"}, HTTPStatus.CONFLICT)
                 return
+        if session["role"] == "teacher" and "hintPolicy" in incoming:
+            raw_policy = incoming["hintPolicy"]
+            if not isinstance(raw_policy, dict):
+                self.json_response({"error": "分层提示额度格式无效"}, HTTPStatus.BAD_REQUEST)
+                return
+            try:
+                checked_policy = {level: int(raw_policy[level]) for level in HINT_POLICY_DEFAULT}
+            except (KeyError, TypeError, ValueError):
+                self.json_response({"error": "请完整填写L1—L4额度"}, HTTPStatus.BAD_REQUEST)
+                return
+            if any(not 1 <= value <= 50 for value in checked_policy.values()):
+                self.json_response({"error": "每层额度应为1—50次"}, HTTPStatus.BAD_REQUEST)
+                return
+            if not checked_policy["L1"] > checked_policy["L2"] > checked_policy["L3"] > checked_policy["L4"]:
+                self.json_response({"error": "额度必须按L1、L2、L3、L4逐级递减"}, HTTPStatus.BAD_REQUEST)
+                return
+            incoming["hintPolicy"] = checked_policy
         group_state.update({key: incoming[key] for key in GROUP_KEYS if key in incoming})
         group_state["groupId"] = group
         state_put(f"group:{group}", group_state)
@@ -1151,24 +1279,105 @@ class Handler(SimpleHTTPRequestHandler):
     def hint(self, session: dict, body: dict) -> None:
         group = int(session["groupId"])
         state = merged_state(group)
-        if not state.get("aiOpen", True):
-            self.json_response({"error": "AI已由教师暂停"}, HTTPStatus.CONFLICT)
-            return
+        group_state = state_get(f"group:{group}")
+        policy = hint_policy(state)
+        usage = hint_usage(group_state)
+        threads = group_state.get("helpThreads", [])
+        if not isinstance(threads, list):
+            threads = []
+        thread = active_help_thread(group_state)
+        action = str(body.get("action", "ask")).strip().lower()
         done = str(body.get("done", "")).strip()[:1600]
-        issue = str(body.get("issue", "")).strip()[:1200]
+        issue = str(body.get("issue", body.get("reason", ""))).strip()[:1200]
         issue_type = str(body.get("type", "其他")).strip()[:80]
+
+        if action == "resolve":
+            if not thread:
+                raise ValueError("当前没有进行中的求助主题")
+            thread["status"] = "resolved"
+            thread["resolvedAt"] = utc_now()
+            group_state["activeHelpThreadId"] = ""
+            group_state["helpThreads"] = threads[-30:]
+            state_put(f"group:{group}", group_state)
+            record_event("student", group, "help_resolved", state.get("currentStage"), str(thread.get("id")))
+            self.json_response({"ok": True, "message": "当前问题已关闭，可以从L1开始新的求助主题"})
+            return
+
+        if action == "advance":
+            if not thread or thread.get("status") != "active":
+                raise ValueError("请先建立并使用当前求助主题")
+            attempt = str(body.get("attempt", done)).strip()[:1600]
+            if len(attempt) < 5:
+                raise ValueError("请先写出根据上一条提示完成的新尝试")
+            messages = thread.get("messages", []) if isinstance(thread.get("messages"), list) else []
+            if not messages:
+                raise ValueError("当前层级至少获得一次支架后才能升级")
+            level_no = int(thread.get("currentLevel", 1))
+            if level_no >= 3:
+                raise ValueError("L3之后请提交教师介入")
+            thread["currentLevel"] = level_no + 1
+            thread.setdefault("transitions", []).append({"time": utc_now(), "from": f"L{level_no}", "to": f"L{level_no + 1}", "attempt": attempt})
+            thread["updatedAt"] = utc_now()
+            group_state["helpThreads"] = threads[-30:]
+            state_put(f"group:{group}", group_state)
+            record_event("student", group, "hint_level_advanced", state.get("currentStage"), f"L{level_no}->L{level_no + 1}")
+            self.json_response({"ok": True, "currentLevel": level_no + 1, "hintUsage": usage, "hintPolicy": policy})
+            return
+
+        if action == "teacher":
+            if usage["L4"] >= policy["L4"]:
+                self.json_response({"error": "本项目教师求助额度已用完，请当面联系教师"}, HTTPStatus.CONFLICT)
+                return
+            if not thread:
+                thread = {
+                    "id": secrets.token_hex(8), "status": "active", "currentLevel": 1,
+                    "type": issue_type, "issue": issue or "需要教师介入", "createdAt": utc_now(), "updatedAt": utc_now(),
+                    "messages": [], "transitions": [],
+                }
+                threads.append(thread)
+                group_state["activeHelpThreadId"] = thread["id"]
+            created = self.escalate(group, state, "学生请求教师介入", issue or str(thread.get("issue", "需要教师介入")), str(thread.get("id", "")))
+            if created:
+                usage["L4"] += 1
+            thread["status"] = "teacher"
+            thread["currentLevel"] = 4
+            thread["updatedAt"] = utc_now()
+            group_state["hintUsage"] = usage
+            group_state["hintUsed"] = sum(usage.values())
+            group_state["helpThreads"] = threads[-30:]
+            state_put(f"group:{group}", group_state)
+            self.sync_group_summary(group, group_state, issue_type)
+            self.json_response({"ok": True, "created": created, "message": "已提交教师介入", "hintUsage": usage, "hintPolicy": policy})
+            return
+
+        if action != "ask":
+            raise ValueError("不支持的求助操作")
+        if not state.get("aiOpen", True):
+            self.json_response({"error": "AI已由教师暂停，可直接请求教师介入"}, HTTPStatus.CONFLICT)
+            return
         if not done or not issue:
             raise ValueError("请先填写已有进展和具体卡点")
-        used = int(state.get("hintUsed", 0))
-        quota = int(state.get("hintQuota", 3))
-        maximum = int(state.get("maxHintLevel", 3))
-        if used >= quota:
-            self.escalate(group, state, "提示额度已用完", issue)
-            self.json_response({"escalated": True, "message": "提示额度已用完，已转教师"})
+        if not thread:
+            thread = {
+                "id": secrets.token_hex(8), "status": "active", "currentLevel": 1,
+                "type": issue_type, "issue": issue, "createdAt": utc_now(), "updatedAt": utc_now(),
+                "messages": [], "transitions": [],
+            }
+            threads.append(thread)
+            group_state["activeHelpThreadId"] = thread["id"]
+        if thread.get("status") != "active":
+            self.json_response({"error": "当前主题已转教师，请关闭后再新建问题"}, HTTPStatus.CONFLICT)
             return
-        level_no = min(used + 1, maximum)
+        level_no = max(1, min(3, int(thread.get("currentLevel", 1))))
         level = f"L{level_no}"
-        reply, latency, status = deepseek_hint(state, level, done, issue_type, issue)
+        if usage[level] >= policy[level]:
+            self.json_response({"error": f"{level}额度已用完，请选择进入下一层、关闭问题或请求教师", "currentLevel": level_no}, HTTPStatus.CONFLICT)
+            return
+        messages = thread.get("messages", []) if isinstance(thread.get("messages"), list) else []
+        reply, latency, status = deepseek_hint(
+            state, level, done, issue_type, issue, messages,
+            bool(body.get("peerTried")), bool(body.get("checkedWork")),
+        )
         if not reply:
             reply = static_hint(state.get("teacherConfig", {}), level_no)
             result = "fallback" if status != "ok" else "rejected"
@@ -1176,27 +1385,44 @@ class Handler(SimpleHTTPRequestHandler):
             result = "returned"
         with database() as db:
             db.execute("INSERT INTO ai_calls(ts,group_no,level,model,latency_ms,status,detail) VALUES(?,?,?,?,?,?,?)", (utc_now(), group, level, DEEPSEEK_MODEL, latency, result, status[:200]))
-        group_state = state_get(f"group:{group}")
         history = group_state.get("helpHistory", [])
         if not isinstance(history, list):
             history = []
-        history.append({"time": datetime.now().strftime("%H:%M"), "level": level if result == "returned" else "静态支架", "type": issue_type, "prompt": issue, "reply": reply})
-        group_state["helpHistory"] = history[-50:]
-        group_state["hintUsed"] = used + 1
+        entry = {
+            "time": datetime.now().strftime("%H:%M"), "ts": utc_now(), "threadId": thread["id"],
+            "level": level, "type": issue_type, "prompt": issue, "question": issue, "done": done,
+            "reply": reply, "source": "deepseek" if result == "returned" else "teacher_fallback",
+        }
+        history.append(entry)
+        messages.append(entry)
+        thread["messages"] = messages[-40:]
+        thread["updatedAt"] = utc_now()
+        if result == "returned":
+            usage[level] += 1
+        group_state["helpHistory"] = history[-120:]
+        group_state["helpThreads"] = threads[-30:]
+        group_state["hintUsage"] = usage
+        group_state["hintUsed"] = sum(usage.values())
         state_put(f"group:{group}", group_state)
         self.sync_group_summary(group, group_state, issue_type)
         record_event("student", group, "hint_return" if result == "returned" else "fallback_hint", state.get("currentStage"), f"{level}|{issue_type}")
-        self.json_response({"reply": reply, "level": level, "source": "deepseek" if result == "returned" else "teacher_fallback", "hintUsed": used + 1, "latencyMs": latency})
+        self.json_response({
+            "reply": reply, "level": level, "source": "deepseek" if result == "returned" else "teacher_fallback",
+            "hintUsage": usage, "hintPolicy": policy, "currentLevel": level_no, "threadId": thread["id"], "latencyMs": latency,
+        })
 
-    def escalate(self, group: int, state: dict, reason: str, issue: str) -> None:
+    def escalate(self, group: int, state: dict, reason: str, issue: str, thread_id: str = "") -> bool:
         class_state = state_get("class")
         queue = class_state.get("queue", [])
         if not isinstance(queue, list):
             queue = []
-        queue.append({"id": f"Q-{int(time.time())}", "group": group, "type": "教师介入", "reason": f"{reason}：{issue}"[:300], "priority": "高", "time": datetime.now().strftime("%H:%M"), "resolved": False})
+        if thread_id and any(item.get("threadId") == thread_id and not item.get("resolved") for item in queue if isinstance(item, dict)):
+            return False
+        queue.append({"id": f"Q-{time.time_ns()}", "group": group, "threadId": thread_id, "type": "教师介入", "reason": f"{reason}：{issue}"[:300], "priority": "高", "time": datetime.now().strftime("%H:%M"), "resolved": False})
         class_state["queue"] = queue[-100:]
         state_put("class", class_state)
         record_event("system", group, "teacher_escalate", state.get("currentStage"), reason)
+        return True
 
     def sync_group_summary(self, group: int, group_state: dict, issue: str = "") -> None:
         class_state = state_get("class")
@@ -1214,7 +1440,7 @@ class Handler(SimpleHTTPRequestHandler):
         progress = round(sum(1 for value in submitted.values() if value) / 5 * 100) if isinstance(submitted, dict) else 0
         item.update({
             "id": group, "stage": int(group_state.get("currentStage", class_state.get("currentStage", 1))),
-            "help": int(group_state.get("hintUsed", 0)), "maxHint": int(group_state.get("hintUsed", 0)),
+            "help": help_total(group_state), "maxHint": highest_hint_level(group_state),
             "latest": latest, "status": "等待教师" if item.get("teacher") else "持续推进", "progress": progress,
         })
         if issue:
