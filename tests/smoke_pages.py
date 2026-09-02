@@ -32,8 +32,16 @@ def main():
                 route = "/" + path.relative_to(ROOT).as_posix()
                 with urllib.request.urlopen(base + route, timeout=3) as response:
                     body = response.read().decode("utf-8")
-                assert response.status == 200 and 'id="root"' in body, route
-            for route in ("/assets/styles.css", "/assets/data.js", "/assets/app.js", "/assets/images/starry-night-login.jpg"):
+                assert response.status == 200 and 'id="root"' in body and "迈谱 Maple" in body, route
+            resources = (
+                "/assets/styles.css",
+                "/assets/data.js",
+                "/assets/app.js",
+                "/assets/images/starry-night-login.jpg",
+                "/assets/images/maple-brand.png",
+                "/assets/images/maple-mark-light.png",
+            )
+            for route in resources:
                 with urllib.request.urlopen(base + route, timeout=3) as response:
                     assert response.status == 200 and response.read(), route
             with urllib.request.urlopen(base + "/api/health", timeout=3) as response:
@@ -45,7 +53,7 @@ def main():
                     raise AssertionError(f"已删除页面仍可访问：{route}")
                 except urllib.error.HTTPError as error:
                     assert error.code == 404, route
-            print(f"通过：{len(pages)} 个页面、4 个静态资源和健康接口")
+            print(f"通过：{len(pages)} 个页面、{len(resources)} 个静态资源和健康接口")
         finally:
             server.shutdown()
             server.server_close()

@@ -1,5 +1,5 @@
 {
-  "name": "数学项目协作智能体",
+  "name": "迈谱 Maple",
   "runtime": "Python 3.11+",
   "database": "SQLite",
   "ai_provider": "DeepSeek",

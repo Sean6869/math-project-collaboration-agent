@@ -1,4 +1,4 @@
-"""数学项目协作智能体：无第三方运行依赖的生产服务。"""
+"""迈谱 Maple：无第三方运行依赖的数学项目式学习服务。"""
 
 from __future__ import annotations
 
@@ -610,7 +610,7 @@ def deepseek_hint(
     }, ensure_ascii=False).encode()
     request = urllib.request.Request(
         DEEPSEEK_URL, data=payload,
-        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json", "User-Agent": "MPT-Platform/1"},
+        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json", "User-Agent": "Maple-Platform/1"},
         method="POST",
     )
     started = time.perf_counter()
@@ -633,7 +633,7 @@ def deepseek_hint(
 
 
 class Handler(SimpleHTTPRequestHandler):
-    server_version = "MPT"
+    server_version = "Maple"
 
     def translate_path(self, path: str) -> str:
         clean = urlparse(path).path.lstrip("/")
@@ -1524,7 +1524,7 @@ def main() -> None:
     init_database()
     env = os.environ.get("MPT_ENV", "development").lower()
     browser_host = "127.0.0.1" if HOST in {"0.0.0.0", "::"} else HOST
-    print(f"数学项目协作智能体已启动：http://{browser_host}:{PORT}/")
+    print(f"迈谱 Maple 已启动：http://{browser_host}:{PORT}/")
     if browser_host != HOST:
         print(f"监听地址：{HOST}:{PORT}（浏览器请使用上面的本地地址）")
     print(f"服务根目录：{ROOT}")

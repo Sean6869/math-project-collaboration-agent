@@ -1,6 +1,6 @@
 openapi: 3.0.3
 info:
-  title: 数学项目协作智能体 API
+  title: 迈谱 Maple API
   version: production
   description: 同源会话接口；教师与学生权限由 HttpOnly 会话 Cookie 控制。
 servers:
