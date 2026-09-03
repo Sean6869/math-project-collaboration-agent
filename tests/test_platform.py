@@ -278,6 +278,8 @@ class PlatformTest(unittest.TestCase):
             self.assertEqual(probe.payload[1], 200)
             self.assertTrue(probe.payload[0]["ok"])
             self.assertEqual(urlopen.call_count, 1, "b64_json 响应不应再下载临时图片地址")
+            request_body = json.loads(urlopen.call_args.args[0].data)
+            self.assertNotIn("sequential_image_generation", request_body, "单图请求不应发送当前模型不支持的组图参数")
         finally:
             if original_key is None:
                 os.environ.pop("ARK_API_KEY", None)

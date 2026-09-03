@@ -1596,7 +1596,7 @@ class Handler(SimpleHTTPRequestHandler):
         response_format = ARK_IMAGE_RESPONSE_FORMAT if ARK_IMAGE_RESPONSE_FORMAT in {"url", "b64_json"} else "b64_json"
         payload = json.dumps({
             "model": ARK_IMAGE_MODEL, "prompt": prompt, "size": "2K",
-            "sequential_image_generation": "disabled", "stream": False,
+            "stream": False,
             "response_format": response_format, "watermark": True,
         }, ensure_ascii=False).encode()
         request = urllib.request.Request(
