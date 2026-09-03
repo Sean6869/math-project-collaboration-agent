@@ -62,7 +62,8 @@ DEEPSEEK_URL = DEEPSEEK_BASE_URL + "/chat/completions"
 DEEPSEEK_MODEL = os.environ.get("DEEPSEEK_MODEL", "deepseek-v4-flash")
 DEEPSEEK_REASONING_MODEL = os.environ.get("DEEPSEEK_REASONING_MODEL", "deepseek-v4-pro")
 ARK_IMAGE_URL = os.environ.get("ARK_IMAGE_URL", "https://ark.cn-beijing.volces.com/api/v3/images/generations")
-ARK_IMAGE_MODEL = os.environ.get("ARK_IMAGE_MODEL", "doubao-seedream-4.5")
+ARK_IMAGE_MODEL = os.environ.get("ARK_IMAGE_MODEL", "doubao-seedream-5-0-pro-260628")
+ARK_IMAGE_RESPONSE_FORMAT = os.environ.get("ARK_IMAGE_RESPONSE_FORMAT", "b64_json").strip().lower()
 FREE_AI_QUOTA_DEFAULT = 30
 FREE_AI_HISTORY_LIMIT = 40
 COOKIE_NAME = "mpt_session"
@@ -1592,10 +1593,11 @@ class Handler(SimpleHTTPRequestHandler):
         if not api_key:
             self.json_response({"error": "图片生成服务尚未配置，请教师在部署环境填写 ARK_API_KEY"}, HTTPStatus.SERVICE_UNAVAILABLE)
             return
+        response_format = ARK_IMAGE_RESPONSE_FORMAT if ARK_IMAGE_RESPONSE_FORMAT in {"url", "b64_json"} else "b64_json"
         payload = json.dumps({
             "model": ARK_IMAGE_MODEL, "prompt": prompt, "size": "2K",
             "sequential_image_generation": "disabled", "stream": False,
-            "response_format": "url", "watermark": True,
+            "response_format": response_format, "watermark": True,
         }, ensure_ascii=False).encode()
         request = urllib.request.Request(
             ARK_IMAGE_URL, data=payload,
@@ -1606,23 +1608,37 @@ class Handler(SimpleHTTPRequestHandler):
         try:
             with urllib.request.urlopen(request, timeout=60) as response:
                 result = json.loads(response.read())
-            image = result.get("data", [{}])[0]
-            image_url = str(image.get("url", ""))
-            if image_url.startswith("data:image/"):
-                encoded = image_url.split(",", 1)[1]
-                raw = base64.b64decode(encoded, validate=True)
-            elif image_url:
-                with urllib.request.urlopen(image_url, timeout=30) as image_response:
-                    raw = image_response.read(20 * 1024 * 1024 + 1)
-                if len(raw) > 20 * 1024 * 1024:
-                    raise ValueError("生成图片超过20MB限制")
-            else:
-                raise ValueError("图片服务未返回图片")
-            metadata = save_generated_file(group, "迈谱-项目配图.png", "image/png", raw)
         except urllib.error.HTTPError as exc:
-            raise ValueError(f"图片生成服务返回HTTP {exc.code}") from exc
-        except (urllib.error.URLError, TimeoutError, KeyError, ValueError, json.JSONDecodeError) as exc:
-            raise ValueError(f"图片生成失败：{type(exc).__name__}") from exc
+            detail = exc.read(1200).decode("utf-8", "replace").replace("\n", " ").strip()
+            suffix = f": {detail}" if detail else ""
+            raise ValueError(f"图片生成接口HTTP {exc.code}{suffix}") from exc
+        except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
+            raise ValueError(f"图片生成接口请求失败：{type(exc).__name__}") from exc
+
+        try:
+            image = result.get("data", [{}])[0]
+            encoded = str(image.get("b64_json", ""))
+            if encoded:
+                raw = base64.b64decode(encoded, validate=True)
+            else:
+                image_url = str(image.get("url", ""))
+                if image_url.startswith("data:image/"):
+                    raw = base64.b64decode(image_url.split(",", 1)[1], validate=True)
+                elif image_url:
+                    try:
+                        with urllib.request.urlopen(image_url, timeout=30) as image_response:
+                            raw = image_response.read(20 * 1024 * 1024 + 1)
+                    except urllib.error.HTTPError as exc:
+                        raise ValueError(f"生成图片地址下载HTTP {exc.code}，接口本身已返回结果") from exc
+                else:
+                    raise ValueError("图片服务未返回图片内容（既无b64_json也无url）")
+            if not raw:
+                raise ValueError("生成图片为空")
+            if len(raw) > 20 * 1024 * 1024:
+                raise ValueError("生成图片超过20MB限制")
+            metadata = save_generated_file(group, "迈谱-项目配图.png", "image/png", raw)
+        except (AttributeError, IndexError, KeyError, TypeError) as exc:
+            raise ValueError(f"图片生成结果解析失败：{type(exc).__name__}") from exc
         workspace["files"].append({**metadata, "time": utc_now(), "kind": "image"})
         workspace["usage"] += 1
         group_state["freeAi"] = workspace

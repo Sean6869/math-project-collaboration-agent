@@ -246,6 +246,44 @@ class PlatformTest(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(result["source"], "platform_fallback")
         self.assertEqual(result["usage"], 0, "未配置模型时不应扣自由AI额度")
+
+        class FakeResponse:
+            def __init__(self, payload):
+                self.payload = payload
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc_value, traceback):
+                return False
+
+            def read(self, limit=None):
+                return self.payload
+
+        class Probe:
+            def __init__(self):
+                self.payload = None
+
+            def json_response(self, payload, status=200, **kwargs):
+                self.payload = (payload, status)
+
+        original_key = os.environ.get("ARK_API_KEY")
+        os.environ["ARK_API_KEY"] = "test-key"
+        encoded = app.base64.b64encode(b"fake-png").decode("ascii")
+        upstream = FakeResponse(json.dumps({"data": [{"b64_json": encoded}]}).encode())
+        probe = Probe()
+        try:
+            with mock.patch.object(app.urllib.request, "urlopen", return_value=upstream) as urlopen:
+                app.Handler.free_ai_image(probe, {"groupId": 2}, {"prompt": "生成一张项目配图"})
+            self.assertEqual(probe.payload[1], 200)
+            self.assertTrue(probe.payload[0]["ok"])
+            self.assertEqual(urlopen.call_count, 1, "b64_json 响应不应再下载临时图片地址")
+        finally:
+            if original_key is None:
+                os.environ.pop("ARK_API_KEY", None)
+            else:
+                os.environ["ARK_API_KEY"] = original_key
+
         status, file_result = self.json_request(
             student, "/api/ai/file", "POST", {"kind": "csv", "prompt": "保留单位列"},
         )

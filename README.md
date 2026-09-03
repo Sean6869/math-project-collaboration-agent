@@ -39,7 +39,8 @@ python start_server.py
 DEEPSEEK_REASONING_MODEL=deepseek-v4-pro
 ARK_API_KEY=你的火山方舟密钥
 ARK_IMAGE_URL=https://ark.cn-beijing.volces.com/api/v3/images/generations
-ARK_IMAGE_MODEL=doubao-seedream-4.5
+ARK_IMAGE_MODEL=doubao-seedream-5-0-pro-260628
+ARK_IMAGE_RESPONSE_FORMAT=b64_json
 ```
 
 CSV、JSON 和 PPT 可编辑提纲由平台自身生成，不依赖豆包网页或额外的“文件生成模型”。图片生成结果会保存到 `/app/data/uploads`；如果使用 Railway，必须将该目录挂载到持久化 Volume。正式部署前应把 API 密钥只填入部署平台的环境变量，不要提交到 GitHub。
