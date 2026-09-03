@@ -7,9 +7,18 @@ const now=()=>new Date().toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-di
 const iso=()=>new Date().toISOString();
 const ROLE_NAMES=['建模者','质疑者','记录者','解释者','验证者','资料员','协调者','展示者','计算者','检查者'];
 const ROLE_DUTIES=['形成模型和图示','质疑条件、范围和证据','保存证据与修改理由','负责组内复述和成果表达','核验计算、单位与结论','整理任务资料与来源','协调分工与提交节奏','组织成果展示与答疑','承担关键计算过程','复查步骤、边界和遗漏'];
-const BRAND={name:'迈谱',latin:'MAPLE',full:'迈谱 Maple',slogan:'每迈一步，皆有章谱。',mark:'/assets/images/maple-mark-light.png',logo:'/assets/images/maple-brand.png',wideLogo:'/assets/images/maple-horizontal.png'};
+const BRAND={name:'迈谱',latin:'MAPLE',full:'迈谱 Maple',slogan:'每迈一步，皆有章谱。',mark:'/assets/images/maple-mark-light.png',wideLogo:'/assets/images/maple-horizontal.png',markBackground:'#12466f'};
 const brandMark=()=>`<span class="brand-mark"><img src="${BRAND.mark}" alt=""></span>`;
 const brandLockup=()=>`<div class="brand app-brand">${brandMark()}<span class="brand-text"><b>${BRAND.name}</b><small>${BRAND.latin}</small></span></div>`;
+function installFavicon(){
+ let icon=document.querySelector('link[rel="icon"]');
+ if(!icon){icon=document.createElement('link');icon.rel='icon';document.head.appendChild(icon)}
+ icon.type='image/png';icon.href=BRAND.mark;
+ const canvas=document.createElement('canvas'),ctx=canvas.getContext('2d'),mark=new Image();
+ canvas.width=64;canvas.height=64;
+ mark.onload=()=>{ctx.fillStyle=BRAND.markBackground;ctx.beginPath();ctx.arc(32,32,32,0,Math.PI*2);ctx.fill();ctx.drawImage(mark,5,5,54,54);icon.href=canvas.toDataURL('image/png')};
+ mark.src=BRAND.mark;
+}
 const rolesFor=(roles,count)=>[...(Array.isArray(roles)?roles:[]).filter((x,i,a)=>ROLE_NAMES.includes(x)&&a.indexOf(x)===i),...ROLE_NAMES].filter((x,i,a)=>a.indexOf(x)===i).slice(0,count);
 const memberRows=(members,roles,key,readonly=false)=>members.map((m,i)=>`<tr><td><div class="field"><input data-${key}="${i}" value="${esc(m)}" placeholder="成员${i+1}" ${readonly?'readonly':''}></div></td><td><b>${roles[i]}</b></td><td>${ROLE_DUTIES[ROLE_NAMES.indexOf(roles[i])]||'共同完成数学任务'}</td></tr>`).join('');
 const baseState=()=>({
@@ -228,6 +237,6 @@ const pages={
  'teacher-dashboard':renderTeacherDashboard,'teacher-project':renderProject,'teacher-template':renderTemplate,'teacher-knowledge':renderKnowledge,'teacher-scaffolds':renderScaffolds,'teacher-stages':renderStagesTeacher,'teacher-groups':renderGroups,'teacher-group-detail':renderGroupDetail,'teacher-queue':renderQueue,'teacher-common':renderCommon,'teacher-broadcast':renderBroadcast,'teacher-evaluation':renderEvaluation,'teacher-report':renderReport,'teacher-export':renderExport,'teacher-governance':renderTeacherGovernance,'teacher-audit':renderAudit,'teacher-access':renderAdminAccess,
  'portal':renderAccessPortal
 };
-async function boot(id){const fn=pages[id];if(!fn)throw new Error('Unknown page '+id);const pageName=document.title.split('·')[0].trim();document.title=pageName&&pageName!==BRAND.full?`${pageName} · ${BRAND.full}`:BRAND.full;let icon=document.querySelector('link[rel="icon"]');if(!icon){icon=document.createElement('link');icon.rel='icon';document.head.appendChild(icon)}icon.href=BRAND.logo;try{_session=await api('/api/session');if(id==='portal'){if(_session.authenticated){const data=await api('/api/state');_state=Object.assign(defaultState(),data.state||{})}await fn();return}const required=id.startsWith('student-')?'student':'teacher';if(!_session.authenticated||_session.role!==required){location.href='/?current';return}const group=_session.role==='teacher'?new URLSearchParams(location.search).get('g'):null;const data=await api('/api/state'+(group?`?group=${encodeURIComponent(group)}`:''));_state=Object.assign(defaultState(),data.state||{});const requested=id.match(/^student-stage([1-5])/);if(requested&&Number(requested[1])>_state.currentStage){location.href='dashboard.html';return}await fn();restoreDraft();installDraftAutosave();if(!Object.keys(data.state||{}).length)save(_state)}catch(e){setRoot(`<div class="hero"><div class="card"><h2>平台暂时不可用</h2><p>${esc(e.message)}</p><a class="btn" href="/?current">返回登录</a></div></div>`)}}
+async function boot(id){const fn=pages[id];if(!fn)throw new Error('Unknown page '+id);const pageName=document.title.split('·')[0].trim();document.title=pageName&&pageName!==BRAND.full?`${pageName} · ${BRAND.full}`:BRAND.full;installFavicon();try{_session=await api('/api/session');if(id==='portal'){if(_session.authenticated){const data=await api('/api/state');_state=Object.assign(defaultState(),data.state||{})}await fn();return}const required=id.startsWith('student-')?'student':'teacher';if(!_session.authenticated||_session.role!==required){location.href='/?current';return}const group=_session.role==='teacher'?new URLSearchParams(location.search).get('g'):null;const data=await api('/api/state'+(group?`?group=${encodeURIComponent(group)}`:''));_state=Object.assign(defaultState(),data.state||{});const requested=id.match(/^student-stage([1-5])/);if(requested&&Number(requested[1])>_state.currentStage){location.href='dashboard.html';return}await fn();restoreDraft();installDraftAutosave();if(!Object.keys(data.state||{}).length)save(_state)}catch(e){setRoot(`<div class="hero"><div class="card"><h2>平台暂时不可用</h2><p>${esc(e.message)}</p><a class="btn" href="/?current">返回登录</a></div></div>`)}}
 window.MPT={boot,load,save,reset,toast};
 })();
