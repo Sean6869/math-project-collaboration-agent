@@ -57,8 +57,14 @@ PORT = int(os.environ.get("PORT") or os.environ.get("MPT_PORT", "8000"))
 SESSION_SECONDS = int(os.environ.get("MPT_SESSION_SECONDS", "28800"))
 MAX_JSON_BYTES = 2 * 1024 * 1024
 MAX_UPLOAD_BYTES = int(os.environ.get("MPT_MAX_UPLOAD_BYTES", str(10 * 1024 * 1024)))
-DEEPSEEK_URL = os.environ.get("DEEPSEEK_BASE_URL", "https://api.deepseek.com").rstrip("/") + "/chat/completions"
+DEEPSEEK_BASE_URL = os.environ.get("DEEPSEEK_BASE_URL", "https://api.deepseek.com").rstrip("/")
+DEEPSEEK_URL = DEEPSEEK_BASE_URL + "/chat/completions"
 DEEPSEEK_MODEL = os.environ.get("DEEPSEEK_MODEL", "deepseek-v4-flash")
+DEEPSEEK_REASONING_MODEL = os.environ.get("DEEPSEEK_REASONING_MODEL", "deepseek-v4-pro")
+ARK_IMAGE_URL = os.environ.get("ARK_IMAGE_URL", "https://ark.cn-beijing.volces.com/api/v3/images/generations")
+ARK_IMAGE_MODEL = os.environ.get("ARK_IMAGE_MODEL", "doubao-seedream-4.5")
+FREE_AI_QUOTA_DEFAULT = 30
+FREE_AI_HISTORY_LIMIT = 40
 COOKIE_NAME = "mpt_session"
 LOGIN_FAILURES: dict[str, list[float]] = {}
 LOGIN_LOCK = threading.Lock()
@@ -67,14 +73,14 @@ SETUP_TOKEN_FILE = DATA_DIR / "setup-token.txt"
 
 CLASS_KEYS = {
     "project", "className", "currentStage", "stagePaused",
-    "aiOpen", "projectType", "projectHours", "hintQuota",
+    "aiOpen", "freeAiEnabled", "freeAiQuota", "projectType", "projectHours", "hintQuota",
     "maxHintLevel", "hintPolicy", "broadcast", "teacherConfig", "groups", "queue", "common",
     "evaluations", "audit",
 }
 GROUP_KEYS = {
     "groupId", "roles", "roleRound", "stageSubmitted", "stageTimes",
     "workspace", "versions", "evidence", "viewpoints", "firstThoughts",
-    "debate", "product", "events", "questionTree", "graphConfig", "checklist",
+    "debate", "product", "events", "questionTree", "graphConfig", "checklist", "freeAi",
 }
 HINT_POLICY_DEFAULT = {"L1": 20, "L2": 10, "L3": 5, "L4": 3}
 HINT_LEVEL_NAMES = {1: "定位", 2: "拆解", 3: "局部示范", 4: "教师介入"}
@@ -229,7 +235,7 @@ def init_database() -> None:
             CREATE TABLE IF NOT EXISTS files (
               id TEXT PRIMARY KEY, original_name TEXT NOT NULL, stored_name TEXT NOT NULL,
               mime TEXT NOT NULL, size INTEGER NOT NULL, extracted_text TEXT NOT NULL,
-              uploaded_at TEXT NOT NULL, uploaded_by TEXT NOT NULL
+              uploaded_at TEXT NOT NULL, uploaded_by TEXT NOT NULL, group_no INTEGER
             );
             CREATE TABLE IF NOT EXISTS ai_calls (
               id INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT NOT NULL, group_no INTEGER NOT NULL,
@@ -264,6 +270,9 @@ def init_database() -> None:
         session_columns = {row[1] for row in db.execute("PRAGMA table_info(sessions)").fetchall()}
         if "teacher_id" not in session_columns:
             db.execute("ALTER TABLE sessions ADD COLUMN teacher_id INTEGER")
+        file_columns = {row[1] for row in db.execute("PRAGMA table_info(files)").fetchall()}
+        if "group_no" not in file_columns:
+            db.execute("ALTER TABLE files ADD COLUMN group_no INTEGER")
         db.execute("DELETE FROM sessions WHERE expires_at < ?", (int(time.time()),))
     env = os.environ.get("MPT_ENV", "development").lower()
     supplied = {
@@ -441,6 +450,11 @@ def merged_state(group_no: int) -> dict:
     for key in ("currentStage", "stagePaused", "aiOpen"):
         if key in class_state:
             value[key] = class_state[key]
+    value["freeAiEnabled"] = class_state.get("freeAiEnabled", True) is not False
+    try:
+        value["freeAiQuota"] = max(1, min(100, int(class_state.get("freeAiQuota", FREE_AI_QUOTA_DEFAULT))))
+    except (TypeError, ValueError):
+        value["freeAiQuota"] = FREE_AI_QUOTA_DEFAULT
     value["groupId"] = group_no
     value["hintPolicy"] = hint_policy(value)
     value["hintUsage"] = hint_usage(group_state)
@@ -632,6 +646,163 @@ def deepseek_hint(
         return None, latency, type(exc).__name__
 
 
+FREE_AI_MODES = {
+    "chat": "自由讨论",
+    "formula": "公式与数学表达",
+    "table": "表格整理",
+    "ppt": "展示提纲",
+}
+
+
+def free_ai_settings(state: dict) -> tuple[bool, int]:
+    enabled = state.get("freeAiEnabled", True) is not False
+    try:
+        quota = max(1, min(100, int(state.get("freeAiQuota", FREE_AI_QUOTA_DEFAULT))))
+    except (TypeError, ValueError):
+        quota = FREE_AI_QUOTA_DEFAULT
+    return enabled, quota
+
+
+def free_ai_state(group_state: dict) -> dict:
+    raw = group_state.get("freeAi") if isinstance(group_state.get("freeAi"), dict) else {}
+    messages = raw.get("messages") if isinstance(raw.get("messages"), list) else []
+    files = raw.get("files") if isinstance(raw.get("files"), list) else []
+    try:
+        usage = max(0, int(raw.get("usage", 0)))
+    except (TypeError, ValueError):
+        usage = 0
+    return {"messages": messages[-FREE_AI_HISTORY_LIMIT:], "files": files[-30:], "usage": usage}
+
+
+def free_ai_context(state: dict, group: int) -> str:
+    config = state.get("teacherConfig", {}) if isinstance(state.get("teacherConfig"), dict) else {}
+    workspace = state.get("workspace", {}) if isinstance(state.get("workspace"), dict) else {}
+    context = {
+        "项目": state.get("project", ""), "数学主题": config.get("mathTopic", ""),
+        "课程目标": config.get("standard", ""), "最终成果": config.get("finalProduct", ""),
+        "当前阶段": state.get("currentStage", 1), "小组": group, "共享工作区": workspace,
+    }
+    return json.dumps(context, ensure_ascii=False)
+
+
+def deepseek_free_chat(
+    state: dict, group: int, mode: str, prompt: str, history: list[dict],
+) -> tuple[str | None, int, str, str]:
+    api_key = os.environ.get("DEEPSEEK_API_KEY", "")
+    if not api_key:
+        return None, 0, "not_configured", DEEPSEEK_MODEL
+    model = DEEPSEEK_REASONING_MODEL if mode == "chat" and len(prompt) > 500 else DEEPSEEK_MODEL
+    system = (
+        "你是‘迈谱 Maple’学生小组自由工作区的数学与项目助手。"
+        "你的任务是帮助学生减少机械性整理，把更多时间留给小组协作和高阶思考。"
+        "你可以解释概念、检查思路、生成公式、整理表格和设计展示提纲，但不要替学生完成未经讨论的整个项目，"
+        "不要伪造数据；缺少信息时明确列出需要补充的内容。数学表达式使用LaTeX，回答使用清晰的Markdown。"
+        f"当前工作模式：{FREE_AI_MODES.get(mode, FREE_AI_MODES['chat'])}。"
+        f"当前项目上下文：{free_ai_context(state, group)}"
+    )
+    messages = [{"role": "system", "content": system}]
+    for item in history[-12:]:
+        if not isinstance(item, dict) or item.get("role") not in {"user", "assistant"}:
+            continue
+        content = str(item.get("content", "")).strip()[:3000]
+        if content:
+            messages.append({"role": item["role"], "content": content})
+    messages.append({"role": "user", "content": prompt})
+    payload = json.dumps({
+        "model": model, "messages": messages, "thinking": {"type": "disabled"},
+        "stream": False, "temperature": 0.25, "max_tokens": 1400,
+    }, ensure_ascii=False).encode()
+    request = urllib.request.Request(
+        DEEPSEEK_URL, data=payload,
+        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json", "User-Agent": "Maple-Platform/1"},
+        method="POST",
+    )
+    started = time.perf_counter()
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            body = json.loads(response.read())
+        latency = round((time.perf_counter() - started) * 1000)
+        answer = str(body["choices"][0]["message"]["content"]).strip()
+        return answer[:12000] if answer else None, latency, "ok", model
+    except urllib.error.HTTPError as exc:
+        latency = round((time.perf_counter() - started) * 1000)
+        return None, latency, f"HTTP {exc.code}", model
+    except (urllib.error.URLError, TimeoutError, KeyError, ValueError, json.JSONDecodeError) as exc:
+        latency = round((time.perf_counter() - started) * 1000)
+        return None, latency, type(exc).__name__, model
+
+
+def fallback_free_ai(state: dict, mode: str, prompt: str) -> str:
+    workspace = state.get("workspace", {}) if isinstance(state.get("workspace"), dict) else {}
+    if mode == "formula":
+        return "暂未连接外部模型。请先写清楚：已知量、未知量、单位和数量关系；平台连接 DeepSeek 后会在此基础上帮助你检查并整理为 LaTeX 公式。"
+    if mode == "table":
+        return "暂未连接外部模型。你可以先在共享工作区填写数据来源、字段名称、单位和待核验值，连接模型后再生成结构化表格。"
+    if mode == "ppt":
+        return "暂未连接外部模型。建议展示提纲至少包含：问题情境、数学化过程、模型与假设、证据核验、结论与局限。"
+    if workspace.get("problem"):
+        return "暂未连接外部模型。请围绕共享工作区中的共同问题，先由组员分别写出一种解释，再比较它们的依据和待核验点。"
+    return "自由工作区尚未连接外部模型。请先填写具体问题，或请教师在部署环境中配置 DEEPSEEK_API_KEY。"
+
+
+def generated_rows(state: dict, group: int, prompt: str) -> list[list[str]]:
+    config = state.get("teacherConfig", {}) if isinstance(state.get("teacherConfig"), dict) else {}
+    workspace = state.get("workspace", {}) if isinstance(state.get("workspace"), dict) else {}
+    rows = [["迈谱 Maple 小组工作区导出"], ["项目", str(state.get("project", ""))], ["小组", f"{group}组"], ["当前阶段", str(state.get("currentStage", 1))], []]
+    rows.append(["字段", "内容"])
+    rows.extend([
+        ["数学主题", str(config.get("mathTopic", ""))], ["共同问题", str(workspace.get("problem", ""))],
+        ["已知信息", str(workspace.get("known", ""))], ["变量", str(workspace.get("variables", ""))],
+        ["数量关系", str(workspace.get("relation", ""))], ["当前模型", str(workspace.get("model", ""))],
+        ["证据/待核验", str(workspace.get("evidence", ""))], ["下一步", str(workspace.get("next", ""))],
+    ])
+    if prompt.strip():
+        rows.extend([[], ["学生补充要求", prompt.strip()[:1000]]])
+    return rows
+
+
+def save_generated_file(group: int, name: str, mime: str, raw: bytes) -> dict:
+    file_id = secrets.token_hex(12)
+    stored = f"ai-{file_id}{Path(name).suffix or '.bin'}"
+    UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+    (UPLOAD_DIR / stored).write_bytes(raw)
+    with database() as db:
+        db.execute(
+            "INSERT INTO files(id,original_name,stored_name,mime,size,extracted_text,uploaded_at,uploaded_by,group_no) VALUES(?,?,?,?,?,?,?,?,?)",
+            (file_id, name[:160], stored, mime, len(raw), "", utc_now(), "student-ai", group),
+        )
+    return {"id": file_id, "name": name[:160], "mime": mime, "size": len(raw), "url": f"/api/ai/files/{file_id}"}
+
+
+def make_generated_file(state: dict, group: int, kind: str, prompt: str) -> tuple[dict, bytes]:
+    rows = generated_rows(state, group, prompt)
+    if kind == "csv":
+        output = io.StringIO()
+        writer = csv.writer(output, lineterminator="\n")
+        writer.writerows(rows)
+        raw = ("\ufeff" + output.getvalue()).encode("utf-8")
+        return save_generated_file(group, "迈谱-小组工作区.csv", "text/csv; charset=utf-8", raw), raw
+    if kind == "json":
+        payload = {"platform": "迈谱 Maple", "group": group, "stage": state.get("currentStage", 1), "project": state.get("project", ""), "workspace": state.get("workspace", {}), "request": prompt[:1000]}
+        raw = json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8")
+        return save_generated_file(group, "迈谱-小组工作区.json", "application/json; charset=utf-8", raw), raw
+    if kind == "ppt_outline":
+        config = state.get("teacherConfig", {}) if isinstance(state.get("teacherConfig"), dict) else {}
+        workspace = state.get("workspace", {}) if isinstance(state.get("workspace"), dict) else {}
+        text = "\n".join([
+            f"# {state.get('project') or '数学项目'}：小组展示提纲", "", f"> 第{group}组 · 当前阶段 {state.get('currentStage', 1)}", "",
+            "## 1. 问题情境", str(workspace.get("problem", "待补充")), "",
+            "## 2. 数学化过程", f"主题：{config.get('mathTopic', '')}", f"已知信息：{workspace.get('known', '待补充')}", f"变量与关系：{workspace.get('variables', '待补充')}；{workspace.get('relation', '待补充')}", "",
+            "## 3. 模型与假设", str(workspace.get("model", "待补充")), "",
+            "## 4. 证据与核验", str(workspace.get("evidence", "待补充")), "",
+            "## 5. 结论、局限与下一步", f"下一步：{workspace.get('next', '待补充')}", f"补充要求：{prompt[:1000] or '请小组自行补充结论与局限。'}", "",
+            "> 这是可编辑的展示提纲，不是自动评分或最终答案。",
+        ])
+        raw = text.encode("utf-8")
+        return save_generated_file(group, "迈谱-小组展示提纲.md", "text/markdown; charset=utf-8", raw), raw
+    raise ValueError("暂不支持此文件类型")
+
+
 class Handler(SimpleHTTPRequestHandler):
     server_version = "Maple"
 
@@ -792,11 +963,55 @@ class Handler(SimpleHTTPRequestHandler):
             self.json_response({"state": merged_state(group), "role": session["role"]})
             return
         if route.path == "/api/files":
-            if not self.require_session():
+            session = self.require_session()
+            if not session:
                 return
             with database() as db:
-                rows = db.execute("SELECT id,original_name,mime,size,uploaded_at,uploaded_by,extracted_text<>'' AS indexed FROM files ORDER BY uploaded_at DESC").fetchall()
+                if session["role"] == "student":
+                    rows = db.execute(
+                        "SELECT id,original_name,mime,size,uploaded_at,uploaded_by,extracted_text<>'' AS indexed "
+                        "FROM files WHERE group_no=? OR uploaded_by='teacher' ORDER BY uploaded_at DESC",
+                        (session["groupId"],),
+                    ).fetchall()
+                else:
+                    rows = db.execute(
+                        "SELECT id,original_name,mime,size,uploaded_at,uploaded_by,extracted_text<>'' AS indexed "
+                        "FROM files ORDER BY uploaded_at DESC"
+                    ).fetchall()
             self.json_response({"files": [dict(row) for row in rows]})
+            return
+        if route.path.startswith("/api/ai/files/"):
+            session = self.require_session()
+            if not session:
+                return
+            file_id = route.path.rsplit("/", 1)[-1]
+            if not re.fullmatch(r"[A-Za-z0-9]+", file_id):
+                self.json_response({"error": "文件标识无效"}, HTTPStatus.BAD_REQUEST)
+                return
+            with database() as db:
+                if session["role"] == "student":
+                    row = db.execute(
+                        "SELECT original_name,stored_name,mime,size FROM files "
+                        "WHERE id=? AND uploaded_by='student-ai' AND group_no=?",
+                        (file_id, session["groupId"]),
+                    ).fetchone()
+                else:
+                    row = db.execute(
+                        "SELECT original_name,stored_name,mime,size FROM files WHERE id=? AND uploaded_by='student-ai'",
+                        (file_id,),
+                    ).fetchone()
+            target = UPLOAD_DIR / row["stored_name"] if row else None
+            if not row or not target.is_file() or target.resolve().parent != UPLOAD_DIR.resolve():
+                self.json_response({"error": "文件不存在"}, HTTPStatus.NOT_FOUND)
+                return
+            raw = target.read_bytes()
+            self.send_response(HTTPStatus.OK)
+            self.send_header("Content-Type", row["mime"])
+            self.send_header("Content-Disposition", f"attachment; filename*=UTF-8''{quote(row['original_name'])}")
+            self.send_header("Content-Length", str(len(raw)))
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(raw)
             return
         if route.path == "/api/export":
             if not self.require_session("teacher"):
@@ -847,6 +1062,18 @@ class Handler(SimpleHTTPRequestHandler):
                 session = self.require_session("student")
                 if session:
                     self.hint(session, self.read_json())
+            elif route == "/api/ai/chat":
+                session = self.require_session("student")
+                if session:
+                    self.free_ai_chat(session, self.read_json())
+            elif route == "/api/ai/file":
+                session = self.require_session("student")
+                if session:
+                    self.free_ai_file(session, self.read_json())
+            elif route == "/api/ai/image":
+                session = self.require_session("student")
+                if session:
+                    self.free_ai_image(session, self.read_json())
             elif route == "/api/files":
                 session = self.require_session("teacher")
                 if session:
@@ -1281,6 +1508,133 @@ class Handler(SimpleHTTPRequestHandler):
             with database() as db:
                 db.execute("DELETE FROM sessions WHERE token_hash=?", (token_hash(cookie[COOKIE_NAME].value),))
         self.json_response({"ok": True}, cookie=f"{COOKIE_NAME}=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0")
+
+    def free_ai_chat(self, session: dict, body: dict) -> None:
+        group = int(session["groupId"])
+        state = merged_state(group)
+        enabled, quota = free_ai_settings(state)
+        if not enabled or not state.get("aiOpen", True):
+            self.json_response({"error": "自由工作区已由教师暂停"}, HTTPStatus.CONFLICT)
+            return
+        prompt = str(body.get("prompt", "")).strip()[:2400]
+        mode = str(body.get("mode", "chat")).strip().lower()
+        if not prompt:
+            raise ValueError("请输入要讨论的内容")
+        if mode not in FREE_AI_MODES:
+            raise ValueError("不支持的自由工作区模式")
+        group_state = state_get(f"group:{group}")
+        workspace = free_ai_state(group_state)
+        if workspace["usage"] >= quota:
+            self.json_response({"error": "自由工作区本组额度已用完，请联系教师调整"}, HTTPStatus.CONFLICT)
+            return
+        answer, latency, status, model = deepseek_free_chat(state, group, mode, prompt, workspace["messages"])
+        returned = bool(answer)
+        answer = answer or fallback_free_ai(state, mode, prompt)
+        history = workspace["messages"]
+        history.extend([
+            {"role": "user", "mode": mode, "content": prompt, "time": datetime.now().strftime("%H:%M")},
+            {"role": "assistant", "mode": mode, "content": answer, "time": datetime.now().strftime("%H:%M"), "source": "deepseek" if returned else "fallback"},
+        ])
+        workspace["messages"] = history[-FREE_AI_HISTORY_LIMIT:]
+        if returned:
+            workspace["usage"] += 1
+        group_state["freeAi"] = workspace
+        state_put(f"group:{group}", group_state)
+        result = "returned" if returned else "fallback"
+        with database() as db:
+            db.execute(
+                "INSERT INTO ai_calls(ts,group_no,level,model,latency_ms,status,detail) VALUES(?,?,?,?,?,?,?)",
+                (utc_now(), group, "FREE", model, latency, result, f"mode={mode};status={status}"),
+            )
+        record_event("student", group, "free_ai_chat", state.get("currentStage"), f"{mode}|{status}")
+        self.json_response({
+            "ok": True, "answer": answer, "source": "deepseek" if returned else "platform_fallback",
+            "model": model if returned else "platform", "mode": mode,
+            "usage": workspace["usage"], "quota": quota,
+        })
+
+    def free_ai_file(self, session: dict, body: dict) -> None:
+        group = int(session["groupId"])
+        state = merged_state(group)
+        enabled, _ = free_ai_settings(state)
+        if not enabled or not state.get("aiOpen", True):
+            self.json_response({"error": "自由工作区已由教师暂停"}, HTTPStatus.CONFLICT)
+            return
+        kind = str(body.get("kind", "csv")).strip().lower()
+        if kind not in {"csv", "json", "ppt_outline"}:
+            raise ValueError("文件类型仅支持CSV、JSON或PPT提纲")
+        prompt = str(body.get("prompt", "")).strip()[:1000]
+        group_state = state_get(f"group:{group}")
+        metadata, _ = make_generated_file(state, group, kind, prompt)
+        workspace = free_ai_state(group_state)
+        workspace["files"].append({**metadata, "time": utc_now(), "kind": kind})
+        group_state["freeAi"] = workspace
+        state_put(f"group:{group}", group_state)
+        record_event("student", group, "free_ai_file", state.get("currentStage"), f"{kind}|{metadata['name']}")
+        self.json_response({"ok": True, "file": metadata, "source": "platform"})
+
+    def free_ai_image(self, session: dict, body: dict) -> None:
+        group = int(session["groupId"])
+        state = merged_state(group)
+        enabled, quota = free_ai_settings(state)
+        if not enabled or not state.get("aiOpen", True):
+            self.json_response({"error": "自由工作区已由教师暂停"}, HTTPStatus.CONFLICT)
+            return
+        prompt = str(body.get("prompt", "")).strip()[:1200]
+        if not prompt:
+            raise ValueError("请输入图片生成要求")
+        group_state = state_get(f"group:{group}")
+        workspace = free_ai_state(group_state)
+        if workspace["usage"] >= quota:
+            self.json_response({"error": "自由工作区本组额度已用完，请联系教师调整"}, HTTPStatus.CONFLICT)
+            return
+        api_key = os.environ.get("ARK_API_KEY", "")
+        if not api_key:
+            self.json_response({"error": "图片生成服务尚未配置，请教师在部署环境填写 ARK_API_KEY"}, HTTPStatus.SERVICE_UNAVAILABLE)
+            return
+        payload = json.dumps({
+            "model": ARK_IMAGE_MODEL, "prompt": prompt, "size": "2K",
+            "sequential_image_generation": "disabled", "stream": False,
+            "response_format": "url", "watermark": True,
+        }, ensure_ascii=False).encode()
+        request = urllib.request.Request(
+            ARK_IMAGE_URL, data=payload,
+            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json", "User-Agent": "Maple-Platform/1"},
+            method="POST",
+        )
+        started = time.perf_counter()
+        try:
+            with urllib.request.urlopen(request, timeout=60) as response:
+                result = json.loads(response.read())
+            image = result.get("data", [{}])[0]
+            image_url = str(image.get("url", ""))
+            if image_url.startswith("data:image/"):
+                encoded = image_url.split(",", 1)[1]
+                raw = base64.b64decode(encoded, validate=True)
+            elif image_url:
+                with urllib.request.urlopen(image_url, timeout=30) as image_response:
+                    raw = image_response.read(20 * 1024 * 1024 + 1)
+                if len(raw) > 20 * 1024 * 1024:
+                    raise ValueError("生成图片超过20MB限制")
+            else:
+                raise ValueError("图片服务未返回图片")
+            metadata = save_generated_file(group, "迈谱-项目配图.png", "image/png", raw)
+        except urllib.error.HTTPError as exc:
+            raise ValueError(f"图片生成服务返回HTTP {exc.code}") from exc
+        except (urllib.error.URLError, TimeoutError, KeyError, ValueError, json.JSONDecodeError) as exc:
+            raise ValueError(f"图片生成失败：{type(exc).__name__}") from exc
+        workspace["files"].append({**metadata, "time": utc_now(), "kind": "image"})
+        workspace["usage"] += 1
+        group_state["freeAi"] = workspace
+        state_put(f"group:{group}", group_state)
+        latency = round((time.perf_counter() - started) * 1000)
+        with database() as db:
+            db.execute(
+                "INSERT INTO ai_calls(ts,group_no,level,model,latency_ms,status,detail) VALUES(?,?,?,?,?,?,?)",
+                (utc_now(), group, "FREE_IMAGE", ARK_IMAGE_MODEL, latency, "returned", "image_saved"),
+            )
+        record_event("student", group, "free_ai_image", state.get("currentStage"), metadata["name"])
+        self.json_response({"ok": True, "file": metadata, "usage": workspace["usage"], "quota": quota, "source": "ark"})
 
     def hint(self, session: dict, body: dict) -> None:
         group = int(session["groupId"])

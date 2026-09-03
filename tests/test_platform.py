@@ -232,6 +232,61 @@ class PlatformTest(unittest.TestCase):
         self.assertIsNone(app.validate_hint("最终答案是 42"))
         self.assertEqual(app.validate_hint("先检查已知条件与目标量是否对应。"), "先检查已知条件与目标量是否对应。")
 
+    def test_free_ai_workspace_fallback_and_generated_file(self):
+        student = self.client()
+        status, login = self.json_request(
+            student, "/api/login", "POST",
+            {"role": "student", "classCode": "CLASS2026", "groupId": 2, "groupCode": "TEAM02"},
+        )
+        self.assertEqual(status, 200)
+        status, result = self.json_request(
+            student, "/api/ai/chat", "POST",
+            {"mode": "formula", "prompt": "请帮我们梳理这个项目需要哪些变量"},
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(result["source"], "platform_fallback")
+        self.assertEqual(result["usage"], 0, "未配置模型时不应扣自由AI额度")
+        status, file_result = self.json_request(
+            student, "/api/ai/file", "POST", {"kind": "csv", "prompt": "保留单位列"},
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(file_result["source"], "platform")
+        with student.open(self.base + file_result["file"]["url"], timeout=3) as response:
+            self.assertIn("text/csv", response.headers["Content-Type"])
+            self.assertIn("迈谱 Maple", response.read().decode("utf-8-sig"))
+
+        teacher = self.client()
+        status, _ = self.json_request(
+            teacher, "/api/login", "POST",
+            {"role": "teacher", "username": "test_teacher", "password": "StrongTeacher#2026"},
+        )
+        self.assertEqual(status, 200)
+        status, teacher_state = self.json_request(teacher, "/api/state")
+        self.assertEqual(status, 200)
+        controlled_state = teacher_state["state"]
+        controlled_state["aiOpen"] = False
+        status, _ = self.json_request(teacher, "/api/state", "PUT", {"state": controlled_state})
+        self.assertEqual(status, 200)
+        with self.assertRaises(urllib.error.HTTPError) as context:
+            self.json_request(student, "/api/ai/file", "POST", {"kind": "json"})
+        self.assertEqual(context.exception.code, 409)
+        controlled_state["aiOpen"] = True
+        status, _ = self.json_request(teacher, "/api/state", "PUT", {"state": controlled_state})
+        self.assertEqual(status, 200)
+
+        other_student = self.client()
+        status, _ = self.json_request(
+            other_student, "/api/login", "POST",
+            {"role": "student", "classCode": "CLASS2026", "groupId": 3, "groupCode": "TEAM03"},
+        )
+        self.assertEqual(status, 200)
+        with self.assertRaises(urllib.error.HTTPError) as context:
+            self.json_request(other_student, file_result["file"]["url"])
+        self.assertEqual(context.exception.code, 404)
+        with self.assertRaises(urllib.error.HTTPError) as context:
+            self.json_request(teacher, "/api/ai/chat", "POST", {"prompt": "越权"})
+        self.assertEqual(context.exception.code, 403)
+
     def test_railway_port_overrides_local_port(self):
         environment = os.environ.copy()
         environment.update({"PORT": "9187", "MPT_PORT": "8000"})

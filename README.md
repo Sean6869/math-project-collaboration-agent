@@ -4,7 +4,7 @@
 
 每迈一步，皆有章谱。
 
-面向初中数学项目式学习的一组一平板协作平台。平台采用后台管理式布局，课堂数据由服务端鉴权并保存到 SQLite；智能提示由服务端接入 DeepSeek，模型不可用时自动返回教师预设支架。页面不内置教师、学生、项目或课堂演示数据。
+面向初中数学项目式学习的一组一平板协作平台。平台采用后台管理式布局，课堂数据由服务端鉴权并保存到 SQLite；智能提示与学生自由工作区均由服务端统一接入模型，模型不可用时自动保留教学支架或平台引导。页面不内置教师、学生、项目或课堂演示数据。
 
 ## 本地启动
 
@@ -28,6 +28,21 @@ python start_server.py
 ```
 
 默认调用 `https://api.deepseek.com/chat/completions`，模型为 `deepseek-v4-flash`，可通过 `DEEPSEEK_BASE_URL` 和 `DEEPSEEK_MODEL` 调整。平台关闭模型思考输出并要求结构化 JSON；L1、L2、L3 分别执行“定位—拆解—局部示范”契约，学生可在同一级连续提问并主动升级，L4 为独立教师求助额度。超时、错误或越界回答会使用教师支架且不扣除 AI 额度。
+
+## 学生自由AI工作区
+
+学生端的“自由AI工作区”与分层提示分开：文字、数学表达、表格整理和展示提纲调用 DeepSeek；图片生成通过可选的火山方舟 Ark 图片接口完成。自由工作区的对话、生成文件和图片会绑定当前小组并写入服务端状态与课堂事件；没有配置外部密钥时，页面仍可使用共享工作区，并显示平台降级引导。
+
+可选环境变量：
+
+```text
+DEEPSEEK_REASONING_MODEL=deepseek-v4-pro
+ARK_API_KEY=你的火山方舟密钥
+ARK_IMAGE_URL=https://ark.cn-beijing.volces.com/api/v3/images/generations
+ARK_IMAGE_MODEL=doubao-seedream-4.5
+```
+
+CSV、JSON 和 PPT 可编辑提纲由平台自身生成，不依赖豆包网页或额外的“文件生成模型”。图片生成结果会保存到 `/app/data/uploads`；如果使用 Railway，必须将该目录挂载到持久化 Volume。正式部署前应把 API 密钥只填入部署平台的环境变量，不要提交到 GitHub。
 
 ## 生产部署
 

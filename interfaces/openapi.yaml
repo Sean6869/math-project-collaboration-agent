@@ -176,6 +176,65 @@ paths:
         '200': {description: 当前层 DeepSeek 支架、无扣额静态支架、层级转换或教师升级结果}
         '409': {description: 当前层额度已用完、AI暂停或主题状态不允许该操作}
         '403': {description: 仅学生小组可调用}
+  /api/ai/chat:
+    post:
+      summary: 学生自由AI工作区多轮对话
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [prompt]
+              properties:
+                prompt: {type: string, maxLength: 2400}
+                mode: {type: string, enum: [chat, formula, table, ppt], default: chat}
+      responses:
+        '200': {description: DeepSeek回答或未配置时的平台降级引导}
+        '409': {description: AI暂停或自由工作区额度已用完}
+        '403': {description: 仅学生小组可调用}
+  /api/ai/file:
+    post:
+      summary: 根据共享工作区生成并归档CSV、JSON或PPT提纲
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                kind: {type: string, enum: [csv, json, ppt_outline], default: csv}
+                prompt: {type: string, maxLength: 1000}
+      responses:
+        '200': {description: 文件已保存到本组生成记录}
+        '403': {description: 仅学生小组可调用}
+  /api/ai/image:
+    post:
+      summary: 使用Ark图片模型生成并归档项目配图
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [prompt]
+              properties:
+                prompt: {type: string, maxLength: 1200}
+      responses:
+        '200': {description: 图片已保存到本组生成记录}
+        '503': {description: ARK_API_KEY尚未配置}
+        '403': {description: 仅学生小组可调用}
+  /api/ai/files/{fileId}:
+    get:
+      summary: 下载本平台生成的文件
+      parameters:
+        - in: path
+          name: fileId
+          required: true
+          schema: {type: string}
+      responses:
+        '200': {description: 文件内容}
+        '404': {description: 文件不存在}
   /api/escalations:
     post:
       summary: 学生主动转教师处理
