@@ -40,6 +40,7 @@ def main():
                 "/assets/images/starry-night-login.jpg",
                 "/assets/images/maple-brand.png",
                 "/assets/images/maple-horizontal.png",
+                "/assets/images/maple-login-light.png",
                 "/assets/images/maple-mark-light.png",
             )
             for route in resources:
