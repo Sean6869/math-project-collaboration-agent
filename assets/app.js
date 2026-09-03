@@ -7,7 +7,7 @@ const now=()=>new Date().toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-di
 const iso=()=>new Date().toISOString();
 const ROLE_NAMES=['建模者','质疑者','记录者','解释者','验证者','资料员','协调者','展示者','计算者','检查者'];
 const ROLE_DUTIES=['形成模型和图示','质疑条件、范围和证据','保存证据与修改理由','负责组内复述和成果表达','核验计算、单位与结论','整理任务资料与来源','协调分工与提交节奏','组织成果展示与答疑','承担关键计算过程','复查步骤、边界和遗漏'];
-const BRAND={name:'迈谱',latin:'MAPLE',full:'迈谱 Maple',slogan:'每迈一步，皆有章谱。',mark:'/assets/images/maple-mark-light.png',wideLogo:'/assets/images/maple-horizontal.png',markBackground:'#12466f'};
+const BRAND={name:'迈谱',latin:'MAPLE',full:'迈谱 Maple',slogan:'每迈一步，皆有章谱。',mark:'/assets/images/maple-mark-light.png',wideLogo:'/assets/images/maple-horizontal.png',faviconBackground:'#000'};
 const brandMark=()=>`<span class="brand-mark"><img src="${BRAND.mark}" alt=""></span>`;
 const brandLockup=()=>`<div class="brand app-brand">${brandMark()}<span class="brand-text"><b>${BRAND.name}</b><small>${BRAND.latin}</small></span></div>`;
 function installFavicon(){
@@ -16,7 +16,7 @@ function installFavicon(){
  icon.type='image/png';icon.href=BRAND.mark;
  const canvas=document.createElement('canvas'),ctx=canvas.getContext('2d'),mark=new Image();
  canvas.width=64;canvas.height=64;
- mark.onload=()=>{ctx.fillStyle=BRAND.markBackground;ctx.beginPath();ctx.arc(32,32,32,0,Math.PI*2);ctx.fill();ctx.drawImage(mark,5,5,54,54);icon.href=canvas.toDataURL('image/png')};
+ mark.onload=()=>{ctx.fillStyle=BRAND.faviconBackground;ctx.beginPath();ctx.arc(32,32,32,0,Math.PI*2);ctx.fill();ctx.drawImage(mark,5,5,54,54);icon.href=canvas.toDataURL('image/png')};
  mark.src=BRAND.mark;
 }
 const rolesFor=(roles,count)=>[...(Array.isArray(roles)?roles:[]).filter((x,i,a)=>ROLE_NAMES.includes(x)&&a.indexOf(x)===i),...ROLE_NAMES].filter((x,i,a)=>a.indexOf(x)===i).slice(0,count);
