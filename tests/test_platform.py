@@ -1,4 +1,5 @@
 import http.cookiejar
+import io
 import json
 import os
 import subprocess
@@ -280,6 +281,22 @@ class PlatformTest(unittest.TestCase):
             self.assertEqual(urlopen.call_count, 1, "b64_json 响应不应再下载临时图片地址")
             request_body = json.loads(urlopen.call_args.args[0].data)
             self.assertNotIn("sequential_image_generation", request_body, "单图请求不应发送当前模型不支持的组图参数")
+
+            rate_limit_body = json.dumps({
+                "error": {"code": "SetLimitExceeded", "message": "model service paused"},
+                "request_id": "test-request-id",
+            }).encode()
+            rate_limit = urllib.error.HTTPError(
+                "https://ark.test/images", 429, "Too Many Requests", {}, io.BytesIO(rate_limit_body),
+            )
+            before = app.free_ai_state(app.state_get("group:2"))["usage"]
+            with mock.patch.object(app.urllib.request, "urlopen", side_effect=rate_limit):
+                with self.assertRaises(app.UpstreamServiceError) as context:
+                    app.Handler.free_ai_image(probe, {"groupId": 2}, {"prompt": "再次生成项目配图"})
+            self.assertEqual(context.exception.status, 429)
+            self.assertIn("Safe Experience Mode", str(context.exception))
+            after = app.free_ai_state(app.state_get("group:2"))["usage"]
+            self.assertEqual(after, before, "上游限流失败不应扣小组图片额度")
         finally:
             if original_key is None:
                 os.environ.pop("ARK_API_KEY", None)

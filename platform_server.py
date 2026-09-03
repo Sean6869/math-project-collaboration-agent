@@ -62,7 +62,7 @@ DEEPSEEK_URL = DEEPSEEK_BASE_URL + "/chat/completions"
 DEEPSEEK_MODEL = os.environ.get("DEEPSEEK_MODEL", "deepseek-v4-flash")
 DEEPSEEK_REASONING_MODEL = os.environ.get("DEEPSEEK_REASONING_MODEL", "deepseek-v4-pro")
 ARK_IMAGE_URL = os.environ.get("ARK_IMAGE_URL", "https://ark.cn-beijing.volces.com/api/v3/images/generations")
-ARK_IMAGE_MODEL = os.environ.get("ARK_IMAGE_MODEL", "doubao-seedream-5-0-pro-260628")
+ARK_IMAGE_MODEL = os.environ.get("ARK_IMAGE_MODEL", "doubao-seedream-5-0-260128")
 ARK_IMAGE_RESPONSE_FORMAT = os.environ.get("ARK_IMAGE_RESPONSE_FORMAT", "b64_json").strip().lower()
 FREE_AI_QUOTA_DEFAULT = 30
 FREE_AI_HISTORY_LIMIT = 40
@@ -100,6 +100,12 @@ class ClosingConnection(sqlite3.Connection):
         result = super().__exit__(exc_type, exc_value, traceback)
         self.close()
         return result
+
+
+class UpstreamServiceError(ValueError):
+    def __init__(self, message: str, status: int):
+        super().__init__(message)
+        self.status = status
 
 
 def database() -> sqlite3.Connection:
@@ -1093,6 +1099,8 @@ class Handler(SimpleHTTPRequestHandler):
                     self.json_response({"ok": True})
             else:
                 self.json_response({"error": "接口不存在"}, HTTPStatus.NOT_FOUND)
+        except UpstreamServiceError as exc:
+            self.json_response({"error": str(exc)}, exc.status)
         except ValueError as exc:
             self.json_response({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
 
@@ -1609,9 +1617,44 @@ class Handler(SimpleHTTPRequestHandler):
             with urllib.request.urlopen(request, timeout=60) as response:
                 result = json.loads(response.read())
         except urllib.error.HTTPError as exc:
-            detail = exc.read(1200).decode("utf-8", "replace").replace("\n", " ").strip()
-            suffix = f": {detail}" if detail else ""
-            raise ValueError(f"图片生成接口HTTP {exc.code}{suffix}") from exc
+            detail = exc.read(2000).decode("utf-8", "replace").replace("\n", " ").strip()
+            error_code = ""
+            error_message = ""
+            request_id = ""
+            try:
+                decoded = json.loads(detail)
+                error = decoded.get("error", {}) if isinstance(decoded, dict) else {}
+                if isinstance(error, dict):
+                    error_code = str(error.get("code", "")).strip()
+                    error_message = str(error.get("message", "")).strip()
+                request_id = str(decoded.get("request_id", "")).strip() if isinstance(decoded, dict) else ""
+            except (AttributeError, TypeError, json.JSONDecodeError):
+                pass
+            if exc.code == HTTPStatus.TOO_MANY_REQUESTS and error_code == "SetLimitExceeded":
+                message = (
+                    "方舟图片模型已被当前账号暂停：已达到该模型的推理上限。"
+                    "请在火山方舟的模型激活页面调整或关闭 Safe Experience Mode 后再重试。"
+                )
+                status = HTTPStatus.TOO_MANY_REQUESTS
+            else:
+                message = f"图片生成接口HTTP {exc.code}"
+                if error_message:
+                    message += f": {error_message[:500]}"
+                elif detail:
+                    message += f": {detail[:500]}"
+                status = exc.code if 400 <= exc.code < 500 else HTTPStatus.BAD_GATEWAY
+            audit_detail = f"HTTP {exc.code};code={error_code};message={error_message[:400]}"
+            if request_id:
+                audit_detail += f";request_id={request_id[:120]}"
+            with database() as db:
+                db.execute(
+                    "INSERT INTO ai_calls(ts,group_no,level,model,latency_ms,status,detail) VALUES(?,?,?,?,?,?,?)",
+                    (utc_now(), group, "FREE_IMAGE", ARK_IMAGE_MODEL,
+                     round((time.perf_counter() - started) * 1000),
+                     "rate_limited" if exc.code == HTTPStatus.TOO_MANY_REQUESTS else "failed",
+                     audit_detail[:2000]),
+                )
+            raise UpstreamServiceError(message, int(status)) from exc
         except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
             raise ValueError(f"图片生成接口请求失败：{type(exc).__name__}") from exc
 

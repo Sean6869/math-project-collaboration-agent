@@ -222,6 +222,7 @@ paths:
                 prompt: {type: string, maxLength: 1200}
       responses:
         '200': {description: 图片已保存到本组生成记录}
+        '429': {description: 方舟账户或模型推理额度达到上限，需在模型激活页调整 Safe Experience Mode}
         '503': {description: ARK_API_KEY尚未配置}
         '403': {description: 仅学生小组可调用}
   /api/ai/files/{fileId}:
