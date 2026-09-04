@@ -92,6 +92,10 @@ class PlatformTest(unittest.TestCase):
         with urllib.request.urlopen(request, timeout=3) as response:
             if response.status != 201:
                 raise AssertionError(f"setup failed with status {response.status}")
+        with app.database() as db:
+            prefix = db.execute("SELECT value FROM settings WHERE key='group_code_prefix'").fetchone()
+        if not prefix or prefix["value"] != "TEAM":
+            raise AssertionError("initial group-code prefix was not persisted")
 
     @classmethod
     def tearDownClass(cls):
@@ -437,11 +441,14 @@ class PlatformTest(unittest.TestCase):
             {"groupCount": 5, "groupCodePrefix": "NEWG"},
         )
         self.assertEqual(status, 200)
-        self.assertEqual(result["addedCodes"][-1], {"groupNo": 5, "code": "NEWG05"})
+        self.assertEqual(result["addedCodes"], [
+            {"groupNo": 4, "code": "TEAM04"},
+            {"groupNo": 5, "code": "TEAM05"},
+        ])
         fifth = self.client()
         status, login = self.json_request(
             fifth, "/api/login", "POST",
-            {"role": "student", "classCode": "CLASS2026", "groupId": 5, "groupCode": "NEWG05"},
+            {"role": "student", "classCode": "CLASS2026", "groupId": 5, "groupCode": "TEAM05"},
         )
         self.assertEqual(status, 200)
         self.assertEqual(login["groupId"], 5)

@@ -58,6 +58,8 @@ docker run --env-file .env -p 8000:8000 -v math-project-data:/app/data math-proj
 
 - 设置 `MPT_ENV=production` 和至少12位的一次性教师注册码，首位教师在入口页注册后该注册码立即失效；
 - 如需无人值守初始化，也可同时设置教师账号、强密码、`MPT_ADMIN_RECOVERY_CODE`、班级码、小组码前缀和小组数量；
+- 小组访问码前缀在初始化时写入班级配置；教师扩容时只需修改小组数量，系统会沿用此前缀自动生成连续编号（例如 `TEAM04`）。
+- 旧数据库若尚未保存前缀，升级后会优先从 `MPT_GROUP_CODE_PREFIX` 自动迁移；若部署环境也没有该变量，系统会拒绝猜测并提示配置一次，以避免生成错误访问码。
 - 设置 `MPT_COOKIE_SECURE=1`，仅通过 HTTPS 提供服务；本地 `127.0.0.1` 预览会自动使用非 Secure 会话 Cookie；
 - 持久化并定期备份 `/app/data`；
 - 不把 `.env`、数据库、上传文件或 DeepSeek 密钥提交到代码仓库；

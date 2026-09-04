@@ -171,6 +171,29 @@ def group_count() -> int:
     return int(row["value"]) if row else 0
 
 
+def group_code_prefix() -> str:
+    """Return the immutable prefix used to issue sequential group access codes."""
+    with database() as db:
+        row = db.execute("SELECT value FROM settings WHERE key='group_code_prefix'").fetchone()
+    stored = clean_code(row["value"]) if row else ""
+    if len(stored) >= 4:
+        return stored
+
+    # Upgrade installations created before the prefix was persisted. The
+    # fallback is only accepted from the existing deployment configuration and
+    # is immediately persisted; expansion never trusts a request field.
+    legacy_prefix = clean_code(os.environ.get("MPT_GROUP_CODE_PREFIX", ""))
+    if len(legacy_prefix) < 4:
+        return ""
+    with database() as db:
+        db.execute(
+            "INSERT INTO settings(key,value) VALUES('group_code_prefix',?) "
+            "ON CONFLICT(key) DO NOTHING",
+            (legacy_prefix,),
+        )
+    return legacy_prefix
+
+
 def initialize_platform(username: str, teacher_password: str, recovery_code: str, class_code: str, group_prefix: str, count: int) -> None:
     username = username.strip()
     recovery_code = recovery_code.strip()
@@ -198,6 +221,7 @@ def initialize_platform(username: str, teacher_password: str, recovery_code: str
         db.execute("INSERT INTO settings(key,value) VALUES('class_code_hash',?)", (password_hash(class_code),))
         db.execute("INSERT INTO settings(key,value) VALUES('admin_recovery_hash',?)", (password_hash(recovery_code),))
         db.execute("INSERT INTO settings(key,value) VALUES('group_count',?)", (str(count),))
+        db.execute("INSERT INTO settings(key,value) VALUES('group_code_prefix',?)", (group_prefix,))
         db.execute("DELETE FROM settings WHERE key='setup_token_hash'")
         for number in range(1, count + 1):
             db.execute(
@@ -1414,9 +1438,9 @@ class Handler(SimpleHTTPRequestHandler):
         if count == old_count:
             self.json_response({"ok": True, "groupCount": count, "addedCodes": []})
             return
-        prefix = clean_code(str(body.get("groupCodePrefix", "")))
+        prefix = group_code_prefix() if count > old_count else ""
         if count > old_count and len(prefix) < 4:
-            raise ValueError("增加小组时请填写至少4位的小组访问码前缀")
+            raise ValueError("当前班级缺少已保存的小组访问码前缀，无法安全扩容；请先配置 MPT_GROUP_CODE_PREFIX 后重启服务")
         added_codes = []
         with database() as db:
             if count > old_count:
