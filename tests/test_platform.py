@@ -317,7 +317,8 @@ class PlatformTest(unittest.TestCase):
         self.assertIn('class="icon-btn" id="copyRecovery"', script)
         self.assertNotIn("document.querySelector('#setupGroupCount')", script)
         self.assertNotIn("document.querySelector('#setupGroupPrefix')", script)
-        self.assertIn('.setup-form .span-2{grid-column:1/-1}', styles)
+        self.assertNotIn('class="field span-2"', script)
+        self.assertIn('.copy-field:focus-within', styles)
         self.assertEqual(app.group_prefix_from_code("TEAM01"), "TEAM")
         self.assertEqual(app.group_prefix_from_code("TEAM"), "TEAM")
 
