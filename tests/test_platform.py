@@ -297,6 +297,27 @@ class PlatformTest(unittest.TestCase):
         self.assertIsNotNone(structured)
         self.assertIsNone(app.parse_model_hint('{"diagnosis":"太短","guidance":"太短","nextAction":"太短"}', "L2"))
 
+    def test_login_portal_uses_one_selected_role_and_form_submit(self):
+        script = (ROOT / "assets" / "app.js").read_text(encoding="utf-8")
+        styles = (ROOT / "assets" / "styles.css").read_text(encoding="utf-8")
+        self.assertIn('class="auth-role-switch"', script)
+        self.assertIn('<form id="studentAuthForm">', script)
+        self.assertIn('<form id="teacherAuthForm">', script)
+        self.assertIn("const setAuthRole=role=>", script)
+        self.assertIn("event.preventDefault()", script)
+        self.assertNotIn('class="auth-options"', script)
+        self.assertIn('.auth-card:has(.auth-role-switch)', styles)
+
+    def test_setup_portal_uses_aligned_form_and_enter_submit(self):
+        script = (ROOT / "assets" / "app.js").read_text(encoding="utf-8")
+        styles = (ROOT / "assets" / "styles.css").read_text(encoding="utf-8")
+        self.assertIn('<form id="setupForm" class="setup-form">', script)
+        self.assertIn("document.querySelector('#setupForm').onsubmit=async event=>", script)
+        self.assertIn("groupCount:3,groupCodePrefix:'TEAM'", script)
+        self.assertNotIn("document.querySelector('#setupGroupCount')", script)
+        self.assertNotIn("document.querySelector('#setupGroupPrefix')", script)
+        self.assertIn('.setup-form .span-2{grid-column:1/-1}', styles)
+
     def test_free_ai_conversations_text_image_routing_and_access(self):
         self.assertEqual(app.free_ai_intent("请解释如何生成函数图像"), "text")
         self.assertEqual(app.free_ai_intent("不要生成图片，只解释原理"), "text")
