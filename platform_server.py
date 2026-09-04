@@ -62,7 +62,7 @@ DEEPSEEK_URL = DEEPSEEK_BASE_URL + "/chat/completions"
 DEEPSEEK_MODEL = os.environ.get("DEEPSEEK_MODEL", "deepseek-v4-flash")
 DEEPSEEK_REASONING_MODEL = os.environ.get("DEEPSEEK_REASONING_MODEL", "deepseek-v4-pro")
 ARK_TEXT_URL = os.environ.get("ARK_TEXT_URL", "https://ark.cn-beijing.volces.com/api/v3/chat/completions")
-ARK_TEXT_MODEL = os.environ.get("ARK_TEXT_MODEL", "doubao-seed-2-0-lite-260215")
+ARK_TEXT_MODEL = os.environ.get("ARK_TEXT_MODEL", "doubao-seed-2-1-pro-260628")
 ARK_IMAGE_URL = os.environ.get("ARK_IMAGE_URL", "https://ark.cn-beijing.volces.com/api/v3/images/generations")
 ARK_IMAGE_MODEL = os.environ.get("ARK_IMAGE_MODEL", "doubao-seedream-5-0-260128")
 ARK_IMAGE_RESPONSE_FORMAT = os.environ.get("ARK_IMAGE_RESPONSE_FORMAT", "b64_json").strip().lower()
@@ -785,8 +785,7 @@ def ark_free_chat(
             messages.append({"role": item["role"], "content": content})
     messages.append({"role": "user", "content": prompt})
     payload = json.dumps({
-        "model": ARK_TEXT_MODEL, "messages": messages,
-        "stream": False, "temperature": 0.25, "max_tokens": 1800,
+        "model": ARK_TEXT_MODEL, "messages": messages, "stream": False,
     }, ensure_ascii=False).encode()
     request = urllib.request.Request(
         ARK_TEXT_URL, data=payload,
@@ -811,13 +810,6 @@ def ark_free_chat(
     except (urllib.error.URLError, TimeoutError, KeyError, ValueError, json.JSONDecodeError) as exc:
         latency = round((time.perf_counter() - started) * 1000)
         return None, latency, type(exc).__name__, ARK_TEXT_MODEL
-
-
-def fallback_free_ai(state: dict) -> str:
-    workspace = state.get("workspace", {}) if isinstance(state.get("workspace"), dict) else {}
-    if workspace.get("problem"):
-        return "豆包文本服务暂不可用。请先围绕共享工作区中的共同问题，由组员分别写出解释并比较依据。"
-    return "豆包服务尚未连接。请教师在部署环境配置 ARK_API_KEY 和可用的 ARK_TEXT_MODEL。"
 
 
 def free_ai_intent(prompt: str) -> str:
@@ -1696,9 +1688,29 @@ class Handler(SimpleHTTPRequestHandler):
             }
         else:
             answer, latency, status, model = ark_free_chat(state, group, prompt, history)
-            returned = bool(answer)
-            answer = answer or fallback_free_ai(state)
-            source = "ark" if returned else "platform_fallback"
+            if not answer:
+                with database() as db:
+                    db.execute(
+                        "INSERT INTO ai_calls(ts,group_no,level,model,latency_ms,status,detail) VALUES(?,?,?,?,?,?,?)",
+                        (utc_now(), group, "FREE_TEXT", model, latency, "failed", status[:1000]),
+                    )
+                if status == "not_configured":
+                    raise UpstreamServiceError(
+                        "豆包文本服务未配置 ARK_API_KEY", HTTPStatus.SERVICE_UNAVAILABLE,
+                    )
+                match = re.match(r"HTTP (\d+):?\s*(.*)", status)
+                if match:
+                    upstream_status = int(match.group(1))
+                    detail = match.group(2) or "方舟未返回错误详情"
+                    response_status = upstream_status if 400 <= upstream_status < 500 else HTTPStatus.BAD_GATEWAY
+                    raise UpstreamServiceError(
+                        f"豆包文本接口HTTP {upstream_status}: {detail}", int(response_status),
+                    )
+                raise UpstreamServiceError(
+                    f"豆包文本接口请求失败：{status}", HTTPStatus.BAD_GATEWAY,
+                )
+            returned = True
+            source = "ark"
             assistant_message = {
                 "role": "assistant", "kind": "text", "content": answer,
                 "time": timestamp, "source": source,

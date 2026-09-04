@@ -308,20 +308,18 @@ class PlatformTest(unittest.TestCase):
             {"role": "student", "classCode": "CLASS2026", "groupId": 2, "groupCode": "TEAM02"},
         )
         self.assertEqual(status, 200)
-        status, fallback = self.json_request(
-            student, "/api/ai/chat", "POST",
-            {"prompt": "请解释如何生成函数图像", "newConversation": True},
-        )
-        self.assertEqual(status, 200)
-        self.assertEqual(fallback["intent"], "text")
-        self.assertEqual(fallback["source"], "platform_fallback")
-        self.assertEqual(fallback["usage"], 0, "未配置模型时不应扣自由AI额度")
-        conversation_id = fallback["conversationId"]
+        with self.assertRaises(urllib.error.HTTPError) as context:
+            self.json_request(
+                student, "/api/ai/chat", "POST",
+                {"prompt": "请解释如何生成函数图像", "newConversation": True},
+            )
+        self.assertEqual(context.exception.code, 503)
+        self.assertIn("ARK_API_KEY", context.exception.read().decode())
 
         status, saved = self.json_request(student, "/api/state")
         self.assertEqual(status, 200)
-        self.assertEqual(saved["state"]["freeAi"]["activeConversationId"], conversation_id)
-        self.assertEqual(len(saved["state"]["freeAi"]["conversations"]), 1)
+        self.assertEqual(saved["state"]["freeAi"]["activeConversationId"], "")
+        self.assertEqual(saved["state"]["freeAi"]["conversations"], [])
 
         class FakeResponse:
             def __init__(self, payload):
@@ -346,7 +344,7 @@ class PlatformTest(unittest.TestCase):
             with mock.patch.object(app.urllib.request, "urlopen", return_value=text_upstream) as urlopen:
                 status, text_result = self.json_request(
                     student, "/api/ai/chat", "POST",
-                    {"prompt": "请检查一元一次不等式", "conversationId": conversation_id},
+                    {"prompt": "请检查一元一次不等式", "newConversation": True},
                 )
             self.assertEqual(status, 200)
             self.assertEqual(text_result["intent"], "text")
@@ -355,7 +353,24 @@ class PlatformTest(unittest.TestCase):
             self.assertEqual(text_request.full_url, app.ARK_TEXT_URL)
             text_body = json.loads(text_request.data)
             self.assertEqual(text_body["model"], app.ARK_TEXT_MODEL)
-            self.assertGreaterEqual(len(text_body["messages"]), 4, "连续对话应携带同主题历史")
+            self.assertEqual(text_body["messages"][0]["role"], "system")
+            self.assertEqual(text_body["messages"][-1]["content"], "请检查一元一次不等式")
+            conversation_id = text_result["conversationId"]
+
+            error_body = json.dumps({
+                "error": {"code": "InvalidParameter", "message": "model is unavailable"},
+            }).encode()
+            upstream_error = urllib.error.HTTPError(
+                app.ARK_TEXT_URL, 400, "Bad Request", {}, io.BytesIO(error_body),
+            )
+            with mock.patch.object(app.urllib.request, "urlopen", side_effect=upstream_error):
+                with self.assertRaises(urllib.error.HTTPError) as context:
+                    self.json_request(
+                        student, "/api/ai/chat", "POST",
+                        {"prompt": "继续检查", "conversationId": conversation_id},
+                    )
+            self.assertEqual(context.exception.code, 400)
+            self.assertIn("model is unavailable", context.exception.read().decode())
 
             encoded = app.base64.b64encode(b"fake-png").decode("ascii")
             image_upstream = FakeResponse(json.dumps({"data": [{"b64_json": encoded}]}).encode())
