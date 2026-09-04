@@ -212,14 +212,34 @@ class PlatformTest(unittest.TestCase):
                 self.assertEqual(status, 200)
                 self.assertEqual(result["level"], "L1")
             self.assertEqual(result["hintUsage"]["L1"], 2)
+            thread_id = result["threadId"]
+            status, resolved = self.json_request(
+                student, "/api/hints", "POST", {"action": "resolve", "threadId": thread_id},
+            )
+            self.assertEqual(status, 200)
+            self.assertTrue(resolved["ok"])
+            with self.assertRaises(urllib.error.HTTPError) as missing_attempt:
+                self.json_request(
+                    student, "/api/hints", "POST", {"action": "advance", "threadId": thread_id},
+                )
+            self.assertEqual(missing_attempt.exception.code, 400)
             status, advanced = self.json_request(
                 student, "/api/hints", "POST",
-                {"action": "advance", "attempt": "根据提示重新区分了总面积和种植面积"},
+                {"action": "advance", "threadId": thread_id,
+                 "done": "根据L1提示重新区分了总面积和种植面积", "type": "数学建模"},
             )
             self.assertEqual(status, 200)
             self.assertEqual(advanced["currentLevel"], 2)
             self.assertEqual(advanced["level"], "L2")
             self.assertIn("你们已经把变量和面积对象分开记录", advanced["reply"])
+            status, reopened = self.json_request(student, "/api/state")
+            self.assertEqual(status, 200)
+            self.assertEqual(reopened["state"]["activeHelpThread"]["status"], "active")
+            self.assertEqual(reopened["state"]["activeHelpThread"]["type"], "数学建模")
+            self.assertEqual(
+                reopened["state"]["activeHelpThread"]["messages"][-1]["done"],
+                "根据L1提示重新区分了总面积和种植面积",
+            )
             status, result = self.json_request(
                 student, "/api/hints", "POST",
                 {"action": "ask", "done": "定义x表示小路宽度", "type": "变量关系", "issue": "怎样组织面积关系"},
@@ -238,7 +258,8 @@ class PlatformTest(unittest.TestCase):
             self.assertEqual(status, 200)
             self.assertEqual(refreshed["state"]["activeHelpThread"]["type"], "数学建模")
             status, advanced_again = self.json_request(
-                student, "/api/hints", "POST", {"action": "advance", "threadId": result["threadId"]},
+                student, "/api/hints", "POST",
+                {"action": "advance", "threadId": result["threadId"], "done": "核对变量单位后确认了面积关系"},
             )
             self.assertEqual(status, 200)
             self.assertEqual(advanced_again["level"], "L3")
@@ -247,7 +268,7 @@ class PlatformTest(unittest.TestCase):
             self.assertEqual(status, 200)
             active_messages = final_state["state"]["activeHelpThread"]["messages"]
             self.assertEqual(active_messages[-1]["level"], "L3")
-            self.assertEqual(active_messages[-1]["done"], "定义x表示小路宽度")
+            self.assertEqual(active_messages[-1]["done"], "核对变量单位后确认了面积关系")
         status, teacher_help = self.json_request(
             student, "/api/hints", "POST", {"action": "teacher", "issue": "仍然不能确定面积关系"},
         )

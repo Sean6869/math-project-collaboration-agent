@@ -1793,8 +1793,17 @@ class Handler(SimpleHTTPRequestHandler):
             return
 
         if action == "advance":
-            if not thread or thread.get("status") != "active":
+            if not thread or thread.get("status") not in {"active", "resolved"}:
                 raise ValueError("请先建立并使用当前求助主题")
+            if not state.get("aiOpen", True):
+                self.json_response({"error": "AI已由教师暂停，可直接请求教师介入"}, HTTPStatus.CONFLICT)
+                return
+            if not done:
+                raise ValueError("请填写看完当前层提示后的新尝试，再进入下一层")
+            if thread.get("status") == "resolved":
+                thread["status"] = "active"
+                thread.pop("resolvedAt", None)
+                group_state["activeHelpThreadId"] = thread["id"]
             messages = thread.get("messages", []) if isinstance(thread.get("messages"), list) else []
             if not messages:
                 raise ValueError("当前层级至少获得一次支架后才能升级")
@@ -1805,27 +1814,21 @@ class Handler(SimpleHTTPRequestHandler):
             next_level = f"L{next_level_no}"
             if usage[next_level] >= policy[next_level]:
                 raise ValueError(f"{next_level}额度已用完，请先联系教师调整")
-            last_message = next(
-                (item for item in reversed(messages)
-                 if isinstance(item, dict) and item.get("level") == f"L{level_no}"),
-                None,
-            )
-            attempt = str(last_message.get("done", "")).strip()[:1600]
-            if len(attempt) < 5:
-                raise ValueError("当前主题没有可带入下一层的最近一次尝试")
+            attempt = done
+            thread["type"] = issue_type
             thread["currentLevel"] = next_level_no
             thread.setdefault("transitions", []).append({"time": utc_now(), "from": f"L{level_no}", "to": next_level, "attempt": attempt})
             reply, latency, status = deepseek_hint(
-                state, next_level, attempt, str(thread.get("type", "其他")), str(thread.get("issue", "")),
-                messages, False, False,
+                state, next_level, attempt, issue_type, issue, messages,
+                bool(body.get("peerTried")), bool(body.get("checkedWork")),
             )
             result = "returned" if reply else "fallback"
             if not reply:
                 reply = static_hint(state.get("teacherConfig", {}), next_level_no)
             entry = {
                 "time": datetime.now().strftime("%H:%M"), "ts": utc_now(), "threadId": thread["id"],
-                "level": next_level, "type": str(thread.get("type", "其他")),
-                "prompt": "基于上一层尝试继续拆解", "question": "基于上一层尝试继续拆解",
+                "level": next_level, "type": issue_type,
+                "prompt": issue, "question": issue,
                 "done": attempt, "reply": reply, "source": "deepseek" if result == "returned" else "teacher_fallback",
             }
             messages.append(entry)
@@ -1847,7 +1850,7 @@ class Handler(SimpleHTTPRequestHandler):
             group_state["hintUsage"] = usage
             group_state["hintUsed"] = sum(usage.values())
             state_put(f"group:{group}", group_state)
-            self.sync_group_summary(group, group_state, str(thread.get("type", "其他")))
+            self.sync_group_summary(group, group_state, issue_type)
             record_event("student", group, "hint_level_advanced", state.get("currentStage"), f"{level_no}->{next_level_no}")
             self.json_response({
                 "ok": True, "reply": reply, "level": next_level, "source": "deepseek" if result == "returned" else "teacher_fallback",
