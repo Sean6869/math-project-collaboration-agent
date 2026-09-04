@@ -373,6 +373,8 @@ def hint_policy(state: dict) -> dict[str, int]:
             result[level] = max(1, min(50, int(raw.get(level, default))))
         except (TypeError, ValueError):
             result[level] = default
+    if not result["L1"] > result["L2"] > result["L3"] > result["L4"]:
+        return HINT_POLICY_DEFAULT.copy()
     return result
 
 
@@ -493,6 +495,7 @@ def merged_state(group_no: int) -> dict:
     value["hintQuota"] = sum(value["hintPolicy"].values())
     value["maxHintLevel"] = 3
     value["activeHelpThread"] = active_help_thread(group_state)
+    value["helpThreads"] = group_state.get("helpThreads", []) if isinstance(group_state.get("helpThreads", []), list) else []
     value["groups"] = dynamic_group_summaries(value)
     topics: dict[str, list[int]] = {}
     for item in value["groups"]:
@@ -567,13 +570,37 @@ def static_hint(config: dict, level_no: int) -> str:
     ]
     hints = config.get("staticHints") if isinstance(config, dict) else None
     source = hints if isinstance(hints, list) and hints else defaults
-    return str(source[min(level_no - 1, len(source) - 1)])[:260]
+    scaffold = str(source[min(level_no - 1, len(source) - 1)]).strip().rstrip("。.!！？；; ")[:180]
+    diagnosis = (
+        "你们已经愿意记录尝试并把卡点交给教师支架继续核对，这说明小组在依据过程调整思路，而不是直接等待结论。"
+        "当前需要补足的是对对象、条件和依据的对应检查，也便于后续复盘。"
+    )
+    guidance = (
+        f"教师预设支架是：{scaffold}。请先判断这条支架具体帮助你们检查哪个量、哪个关系或哪条证据，"
+        "再由一名组员向另一名组员追问：如果删去一项条件，当前判断还成立吗？请说出判断依据。"
+    )
+    if level_no <= 1:
+        next_action = (
+            "下一步请把题目中的一个目标量和至少两个相关条件写在同一处，并用自己的话说明它们为什么有关。"
+            "完成后由组员互相核对：是否漏掉了范围、单位或现实限制；暂时不要跳到后续计算。"
+        )
+    elif level_no == 2:
+        next_action = (
+            "下一步请把当前卡点拆成一个最小可检查的问题，分别写出它的已知、未知和需要连接的两个对象。"
+            "然后选择表格、草图或关系式中的一种表示，并由小组说明这一步如何支持下一步判断。"
+        )
+    else:
+        next_action = (
+            "下一步请由小组完成一次局部核验：选择一个边界值、单位检查或反例，记录输入、观察和依据。"
+            "先不要替教师补出最终结论，请你们说明核验结果支持了哪一处关系，以及还剩哪一步需要自己判断。"
+        )
+    return f"诊断：{diagnosis}\n支架：{guidance}\n下一步：{next_action}"
 
 
 def validate_hint(text: str, level: str = "L1") -> str | None:
     clean = re.sub(r"\s+", " ", text or "").strip()
     blocked = ("最终答案", "答案是", "完整证明", "完整模型", "故最大值为", "直接得到最优", "最终结论为")
-    limits = {"L1": 320, "L2": 450, "L3": 650}
+    limits = {"L1": 760, "L2": 900, "L3": 1100}
     if not clean or len(clean) > limits.get(level, 360) or any(item in clean for item in blocked):
         return None
     return clean
@@ -592,7 +619,11 @@ def parse_model_hint(text: str, level: str) -> str | None:
     next_action = re.sub(r"\s+", " ", str(value.get("nextAction", ""))).strip()
     if not diagnosis or not guidance or not next_action:
         return None
-    minimum = {"L1": 45, "L2": 90, "L3": 150}.get(level, 45)
+    # Keep the three-part contract meaningful even when the model returns
+    # syntactically valid JSON with very short, generic content.
+    if any(len(part) < 80 for part in (diagnosis, guidance, next_action)):
+        return None
+    minimum = {"L1": 240, "L2": 240, "L3": 240}.get(level, 240)
     combined = f"诊断：{diagnosis}\n支架：{guidance}\n下一步：{next_action}"
     clean = validate_hint(combined, level) if len(combined) >= minimum else None
     if not clean:
@@ -630,6 +661,8 @@ def deepseek_hint(
         "你是服务于中国初中数学项目式学习小组的教学支架。必须依据学生当前尝试和历史提示生成有推进作用、但保留学生思考责任的反馈。"
         f"当前严格执行{level}：{contracts[level]}"
         "不得重复历史提示；信息不足时先澄清，不得猜测。材料冲突、数学结论不可靠或需要教师判断时，在nextAction中写明请教师核验。"
+        "回答必须体现苏格拉底式引导：诊断开头先具体肯定学生已经完成的有效工作，再指出一个可改进点；支架至少提出一个能让学生自己判断的追问；下一步给出一个可在当前材料上执行的动作，并保留学生作出数学判断的责任。"
+        "diagnosis、guidance、nextAction三个字段都不少于80个中文字符，目标各100字左右，不能用空话凑字数。"
         "只输出一个JSON对象，不要Markdown和额外文字，格式为："
         '{"diagnosis":"针对本次尝试的简短诊断","guidance":"符合当前层级的支架","nextAction":"学生下一步可执行动作；L3必须明确留下由学生完成的剩余一步"}'
     )
@@ -1731,8 +1764,21 @@ class Handler(SimpleHTTPRequestHandler):
         thread = active_help_thread(group_state)
         action = str(body.get("action", "ask")).strip().lower()
         done = str(body.get("done", "")).strip()[:1600]
+        requested_thread_id = str(body.get("threadId", "")).strip()
+        if requested_thread_id:
+            thread = next(
+                (item for item in threads if isinstance(item, dict) and item.get("id") == requested_thread_id
+                 and item.get("status") in {"active", "resolved", "teacher"}),
+                None,
+            )
+        raw_issue_type = str(body.get("type", "")).strip()
+        if thread:
+            issue_type = raw_issue_type[:80] or str(thread.get("type", "其他"))[:80]
+        else:
+            issue_type = raw_issue_type[:80] or "其他"
         issue = str(body.get("issue", body.get("reason", ""))).strip()[:1200]
-        issue_type = str(body.get("type", "其他")).strip()[:80]
+        if not issue and thread:
+            issue = str(thread.get("issue", "")).strip()[:1200]
 
         if action == "resolve":
             if not thread:
@@ -1749,22 +1795,64 @@ class Handler(SimpleHTTPRequestHandler):
         if action == "advance":
             if not thread or thread.get("status") != "active":
                 raise ValueError("请先建立并使用当前求助主题")
-            attempt = str(body.get("attempt", done)).strip()[:1600]
-            if len(attempt) < 5:
-                raise ValueError("请先写出根据上一条提示完成的新尝试")
             messages = thread.get("messages", []) if isinstance(thread.get("messages"), list) else []
             if not messages:
                 raise ValueError("当前层级至少获得一次支架后才能升级")
             level_no = int(thread.get("currentLevel", 1))
             if level_no >= 3:
                 raise ValueError("L3之后请提交教师介入")
-            thread["currentLevel"] = level_no + 1
-            thread.setdefault("transitions", []).append({"time": utc_now(), "from": f"L{level_no}", "to": f"L{level_no + 1}", "attempt": attempt})
+            next_level_no = level_no + 1
+            next_level = f"L{next_level_no}"
+            if usage[next_level] >= policy[next_level]:
+                raise ValueError(f"{next_level}额度已用完，请先联系教师调整")
+            last_message = next(
+                (item for item in reversed(messages)
+                 if isinstance(item, dict) and item.get("level") == f"L{level_no}"),
+                None,
+            )
+            attempt = str(last_message.get("done", "")).strip()[:1600]
+            if len(attempt) < 5:
+                raise ValueError("当前主题没有可带入下一层的最近一次尝试")
+            thread["currentLevel"] = next_level_no
+            thread.setdefault("transitions", []).append({"time": utc_now(), "from": f"L{level_no}", "to": next_level, "attempt": attempt})
+            reply, latency, status = deepseek_hint(
+                state, next_level, attempt, str(thread.get("type", "其他")), str(thread.get("issue", "")),
+                messages, False, False,
+            )
+            result = "returned" if reply else "fallback"
+            if not reply:
+                reply = static_hint(state.get("teacherConfig", {}), next_level_no)
+            entry = {
+                "time": datetime.now().strftime("%H:%M"), "ts": utc_now(), "threadId": thread["id"],
+                "level": next_level, "type": str(thread.get("type", "其他")),
+                "prompt": "基于上一层尝试继续拆解", "question": "基于上一层尝试继续拆解",
+                "done": attempt, "reply": reply, "source": "deepseek" if result == "returned" else "teacher_fallback",
+            }
+            messages.append(entry)
+            history = group_state.get("helpHistory", [])
+            if not isinstance(history, list):
+                history = []
+            history.append(entry)
+            thread["messages"] = messages[-40:]
             thread["updatedAt"] = utc_now()
+            if result == "returned":
+                usage[next_level] += 1
+            with database() as db:
+                db.execute(
+                    "INSERT INTO ai_calls(ts,group_no,level,model,latency_ms,status,detail) VALUES(?,?,?,?,?,?,?)",
+                    (utc_now(), group, next_level, DEEPSEEK_MODEL, latency, result, status[:200]),
+                )
+            group_state["helpHistory"] = history[-120:]
             group_state["helpThreads"] = threads[-30:]
+            group_state["hintUsage"] = usage
+            group_state["hintUsed"] = sum(usage.values())
             state_put(f"group:{group}", group_state)
-            record_event("student", group, "hint_level_advanced", state.get("currentStage"), f"L{level_no}->L{level_no + 1}")
-            self.json_response({"ok": True, "currentLevel": level_no + 1, "hintUsage": usage, "hintPolicy": policy})
+            self.sync_group_summary(group, group_state, str(thread.get("type", "其他")))
+            record_event("student", group, "hint_level_advanced", state.get("currentStage"), f"{level_no}->{next_level_no}")
+            self.json_response({
+                "ok": True, "reply": reply, "level": next_level, "source": "deepseek" if result == "returned" else "teacher_fallback",
+                "currentLevel": next_level_no, "hintUsage": usage, "hintPolicy": policy, "threadId": thread["id"], "latencyMs": latency,
+            })
             return
 
         if action == "teacher":
@@ -1779,6 +1867,11 @@ class Handler(SimpleHTTPRequestHandler):
                 }
                 threads.append(thread)
                 group_state["activeHelpThreadId"] = thread["id"]
+            elif thread.get("status") == "resolved":
+                thread["status"] = "active"
+                thread.pop("resolvedAt", None)
+                group_state["activeHelpThreadId"] = thread["id"]
+            thread["type"] = issue_type
             created = self.escalate(group, state, "学生请求教师介入", issue or str(thread.get("issue", "需要教师介入")), str(thread.get("id", "")))
             if created:
                 usage["L4"] += 1
@@ -1798,7 +1891,7 @@ class Handler(SimpleHTTPRequestHandler):
         if not state.get("aiOpen", True):
             self.json_response({"error": "AI已由教师暂停，可直接请求教师介入"}, HTTPStatus.CONFLICT)
             return
-        if not done or not issue:
+        if not done or (not issue and not thread):
             raise ValueError("请先填写已有进展和具体卡点")
         if not thread:
             thread = {
@@ -1808,14 +1901,26 @@ class Handler(SimpleHTTPRequestHandler):
             }
             threads.append(thread)
             group_state["activeHelpThreadId"] = thread["id"]
+        if thread.get("status") == "resolved":
+            thread["status"] = "active"
+            thread.pop("resolvedAt", None)
+            group_state["activeHelpThreadId"] = thread["id"]
         if thread.get("status") != "active":
             self.json_response({"error": "当前主题已转教师，请关闭后再新建问题"}, HTTPStatus.CONFLICT)
             return
         level_no = max(1, min(3, int(thread.get("currentLevel", 1))))
+        try:
+            requested_level_no = int(body.get("level", level_no))
+        except (TypeError, ValueError):
+            requested_level_no = level_no
+        if not 1 <= requested_level_no <= level_no:
+            raise ValueError(f"当前主题最多只能选择已解锁的L1—L{level_no}")
+        level_no = requested_level_no
         level = f"L{level_no}"
         if usage[level] >= policy[level]:
             self.json_response({"error": f"{level}额度已用完，请选择进入下一层、关闭问题或请求教师", "currentLevel": level_no}, HTTPStatus.CONFLICT)
             return
+        thread["type"] = issue_type
         messages = thread.get("messages", []) if isinstance(thread.get("messages"), list) else []
         reply, latency, status = deepseek_hint(
             state, level, done, issue_type, issue, messages,

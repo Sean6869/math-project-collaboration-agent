@@ -161,7 +161,9 @@ class PlatformTest(unittest.TestCase):
         )
         self.assertEqual(status, 200)
         self.assertEqual(hint["source"], "teacher_fallback")
-        self.assertEqual(hint["reply"], "先画出已知关系。")
+        self.assertTrue(hint["reply"].startswith("诊断："))
+        self.assertIn("支架：教师预设支架是：先画出已知关系。", hint["reply"])
+        self.assertIn("下一步：", hint["reply"])
 
         status, overview = self.json_request(teacher, "/api/state")
         self.assertEqual(status, 200)
@@ -196,7 +198,10 @@ class PlatformTest(unittest.TestCase):
         replies = [
             ("诊断：目标量还不明确。\n支架：先区分总面积和可种植面积。\n下一步：列出两个面积分别包含哪些部分。", 80, "ok"),
             ("诊断：已经区分面积，但条件还未对应。\n支架：逐条标记长度条件作用于外框还是内部区域。\n下一步：在草图旁写出条件来源。", 75, "ok"),
+            ("诊断：你们已经把变量和面积对象分开记录，说明整理方向是有效的。\n支架：现在请比较两个面积表达式分别依赖哪些量，并追问其中一个量是否还缺少现实约束。\n下一步：把外框面积和内部面积各写成一行，只标出第一处仍需核对的关系。", 90, "ok"),
             ("诊断：条件已经整理，可以开始拆解。\n支架：先建立外框面积，再单独表示小路面积，最后比较两者关系。\n下一步：定义一个表示宽度的变量并注明范围。", 90, "ok"),
+            ("诊断：你们回到前一层重新检查对象关系，说明没有急于接受结论，这是很好的核验习惯。\n支架：请重新观察当前模型中每个量的现实含义，并追问它是否真正对应题目中的一个条件。\n下一步：选择一个变量写出它的含义、单位和来源，再由小组判断是否需要修改。", 90, "ok"),
+            ("诊断：你们已经把当前层的变量关系重新核对，说明能够根据证据修正思路。\n支架：请把变量、关系式和现实条件逐一对应，判断哪一项仍然缺少验证依据。\n下一步：任选一处关系做一次边界或单位核验，并由小组说明核验结果支持或否定了什么。", 90, "ok"),
         ]
         with mock.patch.object(app, "deepseek_hint", side_effect=replies):
             for question in ("优化目标到底是哪一个面积", "小路宽度属于哪个条件"):
@@ -213,13 +218,36 @@ class PlatformTest(unittest.TestCase):
             )
             self.assertEqual(status, 200)
             self.assertEqual(advanced["currentLevel"], 2)
+            self.assertEqual(advanced["level"], "L2")
+            self.assertIn("你们已经把变量和面积对象分开记录", advanced["reply"])
             status, result = self.json_request(
                 student, "/api/hints", "POST",
                 {"action": "ask", "done": "定义x表示小路宽度", "type": "变量关系", "issue": "怎样组织面积关系"},
             )
             self.assertEqual(status, 200)
             self.assertEqual(result["level"], "L2")
-            self.assertEqual(result["hintUsage"], {"L1": 2, "L2": 1, "L3": 0, "L4": 0})
+            self.assertEqual(result["hintUsage"], {"L1": 2, "L2": 2, "L3": 0, "L4": 0})
+            status, revisited = self.json_request(
+                student, "/api/hints", "POST",
+                {"action": "ask", "threadId": result["threadId"], "level": 1,
+                 "done": "重新核对了变量含义", "type": "数学建模"},
+            )
+            self.assertEqual(status, 200)
+            self.assertEqual(revisited["level"], "L1")
+            status, refreshed = self.json_request(student, "/api/state")
+            self.assertEqual(status, 200)
+            self.assertEqual(refreshed["state"]["activeHelpThread"]["type"], "数学建模")
+            status, advanced_again = self.json_request(
+                student, "/api/hints", "POST", {"action": "advance", "threadId": result["threadId"]},
+            )
+            self.assertEqual(status, 200)
+            self.assertEqual(advanced_again["level"], "L3")
+            self.assertEqual(advanced_again["currentLevel"], 3)
+            status, final_state = self.json_request(student, "/api/state")
+            self.assertEqual(status, 200)
+            active_messages = final_state["state"]["activeHelpThread"]["messages"]
+            self.assertEqual(active_messages[-1]["level"], "L3")
+            self.assertEqual(active_messages[-1]["done"], "定义x表示小路宽度")
         status, teacher_help = self.json_request(
             student, "/api/hints", "POST", {"action": "teacher", "issue": "仍然不能确定面积关系"},
         )
@@ -234,8 +262,16 @@ class PlatformTest(unittest.TestCase):
         encoded = app.password_hash("secret")
         self.assertTrue(app.password_ok("secret", encoded))
         self.assertFalse(app.password_ok("wrong", encoded))
+        self.assertEqual(app.hint_policy({"hintPolicy": {"L1": 4, "L2": 3, "L3": 3, "L4": 1}}), app.HINT_POLICY_DEFAULT)
         self.assertIsNone(app.validate_hint("最终答案是 42"))
         self.assertEqual(app.validate_hint("先检查已知条件与目标量是否对应。"), "先检查已知条件与目标量是否对应。")
+        structured = app.parse_model_hint(json.dumps({
+            "diagnosis": "你们已经完成了有效的条件整理，并且能够说明当前尝试依据了哪些信息。现在还需要继续核对对象之间的对应关系，避免把形式相似误认为意义相同，这一步值得保留并说明，便于后续复盘。",
+            "guidance": "请比较两个对象分别由哪些条件决定，再追问如果删去其中一条条件，当前判断是否仍然成立。请由组员说出理由，并用题目中的材料逐项核对，而不是直接接受模型给出的描述，确保追问能够推动判断。",
+            "nextAction": "下一步请小组选择一个最容易检查的关系，写出对象、条件和核验依据，再通过单位、边界值或草图进行一次局部检查。记录观察到的现象，并说明它支持或暴露了哪一处仍需修订的地方。",
+        }), "L2")
+        self.assertIsNotNone(structured)
+        self.assertIsNone(app.parse_model_hint('{"diagnosis":"太短","guidance":"太短","nextAction":"太短"}', "L2"))
 
     def test_free_ai_workspace_fallback_and_generated_file(self):
         student = self.client()
