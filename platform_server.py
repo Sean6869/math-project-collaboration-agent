@@ -142,6 +142,12 @@ def clean_code(value: str) -> str:
     return re.sub(r"\s+", "", value or "").upper()[:32]
 
 
+def group_prefix_from_code(value: str) -> str:
+    """Persist the prefix while accepting a first code such as TEAM01."""
+    code = clean_code(value)
+    return re.sub(r"\d+$", "", code) or code
+
+
 def validated_members(value: object) -> list[str]:
     if not isinstance(value, list) or not 1 <= len(value) <= len(ROLE_NAMES):
         raise ValueError(f"成员数量应为1—{len(ROLE_NAMES)}人")
@@ -201,7 +207,7 @@ def initialize_platform(username: str, teacher_password: str, recovery_code: str
     username = username.strip()
     recovery_code = recovery_code.strip()
     class_code = clean_code(class_code)
-    group_prefix = clean_code(group_prefix)
+    group_prefix = group_prefix_from_code(group_prefix)
     if len(username) < 3 or len(username) > 40:
         raise ValueError("教师账号长度应为3—40个字符")
     if len(teacher_password) < 12:

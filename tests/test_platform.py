@@ -83,7 +83,7 @@ class PlatformTest(unittest.TestCase):
         payload = json.dumps({
             "setupToken": "TEST-SETUP-TOKEN-2026", "username": "test_teacher",
             "password": "StrongTeacher#2026", "recoveryCode": "RECOVERY-CODE-TEST-2026", "classCode": "CLASS2026",
-            "groupCodePrefix": "TEAM", "groupCount": 3,
+            "groupCodePrefix": "TEAM01", "groupCount": 3,
         }).encode()
         request = urllib.request.Request(
             cls.base + "/api/setup", data=payload, method="POST",
@@ -313,10 +313,13 @@ class PlatformTest(unittest.TestCase):
         styles = (ROOT / "assets" / "styles.css").read_text(encoding="utf-8")
         self.assertIn('<form id="setupForm" class="setup-form">', script)
         self.assertIn("document.querySelector('#setupForm').onsubmit=async event=>", script)
-        self.assertIn("groupCount:3,groupCodePrefix:'TEAM'", script)
+        self.assertIn("document.querySelector('#setupGroupCode').value", script)
+        self.assertIn('class="icon-btn" id="copyRecovery"', script)
         self.assertNotIn("document.querySelector('#setupGroupCount')", script)
         self.assertNotIn("document.querySelector('#setupGroupPrefix')", script)
         self.assertIn('.setup-form .span-2{grid-column:1/-1}', styles)
+        self.assertEqual(app.group_prefix_from_code("TEAM01"), "TEAM")
+        self.assertEqual(app.group_prefix_from_code("TEAM"), "TEAM")
 
     def test_free_ai_conversations_text_image_routing_and_access(self):
         self.assertEqual(app.free_ai_intent("请解释如何生成函数图像"), "text")
