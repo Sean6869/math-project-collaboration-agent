@@ -31,19 +31,21 @@ python start_server.py
 
 ## 学生自由AI工作区
 
-学生端的“自由AI工作区”与分层提示分开：文字、数学表达、表格整理和展示提纲调用 DeepSeek；图片生成通过可选的火山方舟 Ark 图片接口完成。自由工作区的对话、生成文件和图片会绑定当前小组并写入服务端状态与课堂事件；没有配置外部密钥时，页面仍可使用共享工作区，并显示平台降级引导。
+学生端的“自由AI工作区”与分层提示分开，采用一个连续聊天界面：普通问题调用火山方舟豆包文本模型；学生明确要求“生成一张图片、绘制配图”等内容时，系统自动切换到 Seedream 图片模型。每个主题独立保存在“最近”列表中，文本和图片属于同一对话链。AI 返回的 Markdown 与常用 LaTeX 数学符号由前端安全转换后展示。表格、JSON、PPT 和展示提纲生成入口已移除。
 
 可选环境变量：
 
 ```text
 DEEPSEEK_REASONING_MODEL=deepseek-v4-pro
 ARK_API_KEY=你的火山方舟密钥
+ARK_TEXT_URL=https://ark.cn-beijing.volces.com/api/v3/chat/completions
+ARK_TEXT_MODEL=doubao-seed-2-0-lite-260215
 ARK_IMAGE_URL=https://ark.cn-beijing.volces.com/api/v3/images/generations
 ARK_IMAGE_MODEL=doubao-seedream-5-0-260128
 ARK_IMAGE_RESPONSE_FORMAT=b64_json
 ```
 
-CSV、JSON 和 PPT 可编辑提纲由平台自身生成，不依赖豆包网页或额外的“文件生成模型”。图片生成结果会保存到 `/app/data/uploads`；如果使用 Railway，必须将该目录挂载到持久化 Volume。正式部署前应把 API 密钥只填入部署平台的环境变量，不要提交到 GitHub。
+图片生成结果会保存到 `/app/data/uploads`；如果使用 Railway，必须将该目录挂载到持久化 Volume。正式部署前应把 API 密钥只填入部署平台的环境变量，不要提交到 GitHub。
 
 ## 生产部署
 

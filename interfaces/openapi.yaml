@@ -188,42 +188,13 @@ paths:
               required: [prompt]
               properties:
                 prompt: {type: string, maxLength: 2400}
-                mode: {type: string, enum: [chat, formula, table, ppt], default: chat}
+                conversationId: {type: string, description: 要继续的自由AI对话ID}
+                newConversation: {type: boolean, default: false}
       responses:
-        '200': {description: DeepSeek回答或未配置时的平台降级引导}
+        '200': {description: 豆包文本回答或Seedream图片结果；未配置文本模型时返回平台降级引导}
+        '429': {description: 方舟账户或模型达到推理限额}
+        '503': {description: 生图请求缺少ARK_API_KEY}
         '409': {description: AI暂停或自由工作区额度已用完}
-        '403': {description: 仅学生小组可调用}
-  /api/ai/file:
-    post:
-      summary: 根据共享工作区生成并归档CSV、JSON或PPT提纲
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                kind: {type: string, enum: [csv, json, ppt_outline], default: csv}
-                prompt: {type: string, maxLength: 1000}
-      responses:
-        '200': {description: 文件已保存到本组生成记录}
-        '403': {description: 仅学生小组可调用}
-  /api/ai/image:
-    post:
-      summary: 使用Ark图片模型生成并归档项目配图
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [prompt]
-              properties:
-                prompt: {type: string, maxLength: 1200}
-      responses:
-        '200': {description: 图片已保存到本组生成记录}
-        '429': {description: 方舟账户或模型推理额度达到上限，需在模型激活页调整 Safe Experience Mode}
-        '503': {description: ARK_API_KEY尚未配置}
         '403': {description: 仅学生小组可调用}
   /api/ai/files/{fileId}:
     get:

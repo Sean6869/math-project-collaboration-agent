@@ -144,6 +144,9 @@ class PlatformTest(unittest.TestCase):
         self.assertTrue(runtime["database"]["healthy"])
         self.assertEqual(runtime["data"]["groups"], 3)
         self.assertTrue(runtime["ai"]["model"])
+        self.assertIn("freeAiConfigured", runtime["ai"])
+        self.assertEqual(runtime["ai"]["freeAiTextModel"], app.ARK_TEXT_MODEL)
+        self.assertEqual(runtime["ai"]["freeAiImageModel"], app.ARK_IMAGE_MODEL)
 
         student = self.client()
         status, login = self.json_request(
@@ -294,20 +297,31 @@ class PlatformTest(unittest.TestCase):
         self.assertIsNotNone(structured)
         self.assertIsNone(app.parse_model_hint('{"diagnosis":"太短","guidance":"太短","nextAction":"太短"}', "L2"))
 
-    def test_free_ai_workspace_fallback_and_generated_file(self):
+    def test_free_ai_conversations_text_image_routing_and_access(self):
+        self.assertEqual(app.free_ai_intent("请解释如何生成函数图像"), "text")
+        self.assertEqual(app.free_ai_intent("不要生成图片，只解释原理"), "text")
+        self.assertEqual(app.free_ai_intent("请生成一张双曲线示意图"), "image")
+
         student = self.client()
-        status, login = self.json_request(
+        status, _ = self.json_request(
             student, "/api/login", "POST",
             {"role": "student", "classCode": "CLASS2026", "groupId": 2, "groupCode": "TEAM02"},
         )
         self.assertEqual(status, 200)
-        status, result = self.json_request(
+        status, fallback = self.json_request(
             student, "/api/ai/chat", "POST",
-            {"mode": "formula", "prompt": "请帮我们梳理这个项目需要哪些变量"},
+            {"prompt": "请解释如何生成函数图像", "newConversation": True},
         )
         self.assertEqual(status, 200)
-        self.assertEqual(result["source"], "platform_fallback")
-        self.assertEqual(result["usage"], 0, "未配置模型时不应扣自由AI额度")
+        self.assertEqual(fallback["intent"], "text")
+        self.assertEqual(fallback["source"], "platform_fallback")
+        self.assertEqual(fallback["usage"], 0, "未配置模型时不应扣自由AI额度")
+        conversation_id = fallback["conversationId"]
+
+        status, saved = self.json_request(student, "/api/state")
+        self.assertEqual(status, 200)
+        self.assertEqual(saved["state"]["freeAi"]["activeConversationId"], conversation_id)
+        self.assertEqual(len(saved["state"]["freeAi"]["conversations"]), 1)
 
         class FakeResponse:
             def __init__(self, payload):
@@ -322,26 +336,52 @@ class PlatformTest(unittest.TestCase):
             def read(self, limit=None):
                 return self.payload
 
-        class Probe:
-            def __init__(self):
-                self.payload = None
-
-            def json_response(self, payload, status=200, **kwargs):
-                self.payload = (payload, status)
-
         original_key = os.environ.get("ARK_API_KEY")
         os.environ["ARK_API_KEY"] = "test-key"
-        encoded = app.base64.b64encode(b"fake-png").decode("ascii")
-        upstream = FakeResponse(json.dumps({"data": [{"b64_json": encoded}]}).encode())
-        probe = Probe()
+        image_file = None
         try:
-            with mock.patch.object(app.urllib.request, "urlopen", return_value=upstream) as urlopen:
-                app.Handler.free_ai_image(probe, {"groupId": 2}, {"prompt": "生成一张项目配图"})
-            self.assertEqual(probe.payload[1], 200)
-            self.assertTrue(probe.payload[0]["ok"])
-            self.assertEqual(urlopen.call_count, 1, "b64_json 响应不应再下载临时图片地址")
-            request_body = json.loads(urlopen.call_args.args[0].data)
-            self.assertNotIn("sequential_image_generation", request_body, "单图请求不应发送当前模型不支持的组图参数")
+            text_upstream = FakeResponse(json.dumps({
+                "choices": [{"message": {"content": "当 $x \\neq 0$ 时，可以继续化简。"}}],
+            }).encode())
+            with mock.patch.object(app.urllib.request, "urlopen", return_value=text_upstream) as urlopen:
+                status, text_result = self.json_request(
+                    student, "/api/ai/chat", "POST",
+                    {"prompt": "请检查一元一次不等式", "conversationId": conversation_id},
+                )
+            self.assertEqual(status, 200)
+            self.assertEqual(text_result["intent"], "text")
+            self.assertEqual(text_result["source"], "ark")
+            text_request = urlopen.call_args.args[0]
+            self.assertEqual(text_request.full_url, app.ARK_TEXT_URL)
+            text_body = json.loads(text_request.data)
+            self.assertEqual(text_body["model"], app.ARK_TEXT_MODEL)
+            self.assertGreaterEqual(len(text_body["messages"]), 4, "连续对话应携带同主题历史")
+
+            encoded = app.base64.b64encode(b"fake-png").decode("ascii")
+            image_upstream = FakeResponse(json.dumps({"data": [{"b64_json": encoded}]}).encode())
+            with mock.patch.object(app.urllib.request, "urlopen", return_value=image_upstream) as urlopen:
+                status, image_result = self.json_request(
+                    student, "/api/ai/chat", "POST",
+                    {"prompt": "请生成一张双曲线示意图", "conversationId": conversation_id},
+                )
+            self.assertEqual(status, 200)
+            self.assertEqual(image_result["intent"], "image")
+            self.assertEqual(image_result["source"], "ark")
+            self.assertEqual(image_result["usage"], 2)
+            image_file = image_result["file"]
+            image_body = json.loads(urlopen.call_args.args[0].data)
+            self.assertEqual(image_body["model"], app.ARK_IMAGE_MODEL)
+            self.assertNotIn("sequential_image_generation", image_body)
+
+            status, current = self.json_request(student, "/api/state")
+            self.assertEqual(status, 200)
+            conversation = current["state"]["freeAi"]["conversations"][-1]
+            self.assertEqual(conversation["id"], conversation_id)
+            self.assertEqual(conversation["messages"][-1]["kind"], "image")
+            self.assertEqual(conversation["messages"][-1]["file"]["url"], image_file["url"])
+
+            with student.open(self.base + image_file["url"], timeout=3) as response:
+                self.assertEqual(response.read(), b"fake-png")
 
             rate_limit_body = json.dumps({
                 "error": {"code": "SetLimitExceeded", "message": "model service paused"},
@@ -350,47 +390,16 @@ class PlatformTest(unittest.TestCase):
             rate_limit = urllib.error.HTTPError(
                 "https://ark.test/images", 429, "Too Many Requests", {}, io.BytesIO(rate_limit_body),
             )
-            before = app.free_ai_state(app.state_get("group:2"))["usage"]
             with mock.patch.object(app.urllib.request, "urlopen", side_effect=rate_limit):
                 with self.assertRaises(app.UpstreamServiceError) as context:
-                    app.Handler.free_ai_image(probe, {"groupId": 2}, {"prompt": "再次生成项目配图"})
+                    app.ark_generate_image(2, "再次生成项目配图")
             self.assertEqual(context.exception.status, 429)
             self.assertIn("Safe Experience Mode", str(context.exception))
-            after = app.free_ai_state(app.state_get("group:2"))["usage"]
-            self.assertEqual(after, before, "上游限流失败不应扣小组图片额度")
         finally:
             if original_key is None:
                 os.environ.pop("ARK_API_KEY", None)
             else:
                 os.environ["ARK_API_KEY"] = original_key
-
-        status, file_result = self.json_request(
-            student, "/api/ai/file", "POST", {"kind": "csv", "prompt": "保留单位列"},
-        )
-        self.assertEqual(status, 200)
-        self.assertEqual(file_result["source"], "platform")
-        with student.open(self.base + file_result["file"]["url"], timeout=3) as response:
-            self.assertIn("text/csv", response.headers["Content-Type"])
-            self.assertIn("迈谱 Maple", response.read().decode("utf-8-sig"))
-
-        teacher = self.client()
-        status, _ = self.json_request(
-            teacher, "/api/login", "POST",
-            {"role": "teacher", "username": "test_teacher", "password": "StrongTeacher#2026"},
-        )
-        self.assertEqual(status, 200)
-        status, teacher_state = self.json_request(teacher, "/api/state")
-        self.assertEqual(status, 200)
-        controlled_state = teacher_state["state"]
-        controlled_state["aiOpen"] = False
-        status, _ = self.json_request(teacher, "/api/state", "PUT", {"state": controlled_state})
-        self.assertEqual(status, 200)
-        with self.assertRaises(urllib.error.HTTPError) as context:
-            self.json_request(student, "/api/ai/file", "POST", {"kind": "json"})
-        self.assertEqual(context.exception.code, 409)
-        controlled_state["aiOpen"] = True
-        status, _ = self.json_request(teacher, "/api/state", "PUT", {"state": controlled_state})
-        self.assertEqual(status, 200)
 
         other_student = self.client()
         status, _ = self.json_request(
@@ -399,11 +408,36 @@ class PlatformTest(unittest.TestCase):
         )
         self.assertEqual(status, 200)
         with self.assertRaises(urllib.error.HTTPError) as context:
-            self.json_request(other_student, file_result["file"]["url"])
+            self.json_request(other_student, image_file["url"])
         self.assertEqual(context.exception.code, 404)
+
+        for removed_route in ("/api/ai/file", "/api/ai/image"):
+            with self.assertRaises(urllib.error.HTTPError) as context:
+                self.json_request(student, removed_route, "POST", {"prompt": "旧入口"})
+            self.assertEqual(context.exception.code, 404)
+
+        teacher = self.client()
+        status, _ = self.json_request(
+            teacher, "/api/login", "POST",
+            {"role": "teacher", "username": "test_teacher", "password": "StrongTeacher#2026"},
+        )
+        self.assertEqual(status, 200)
         with self.assertRaises(urllib.error.HTTPError) as context:
             self.json_request(teacher, "/api/ai/chat", "POST", {"prompt": "越权"})
         self.assertEqual(context.exception.code, 403)
+
+        status, teacher_state = self.json_request(teacher, "/api/state")
+        controlled_state = teacher_state["state"]
+        controlled_state["aiOpen"] = False
+        status, _ = self.json_request(teacher, "/api/state", "PUT", {"state": controlled_state})
+        self.assertEqual(status, 200)
+        with self.assertRaises(urllib.error.HTTPError) as context:
+            self.json_request(student, "/api/ai/chat", "POST", {"prompt": "继续讨论"})
+        self.assertEqual(context.exception.code, 409)
+        controlled_state["aiOpen"] = True
+        status, _ = self.json_request(teacher, "/api/state", "PUT", {"state": controlled_state})
+        self.assertEqual(status, 200)
+
 
     def test_railway_port_overrides_local_port(self):
         environment = os.environ.copy()
