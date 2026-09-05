@@ -312,7 +312,7 @@ class PlatformTest(unittest.TestCase):
         script = (ROOT / "assets" / "app.js").read_text(encoding="utf-8")
         styles = (ROOT / "assets" / "styles.css").read_text(encoding="utf-8")
         self.assertIn('class="help-recent-head"', script)
-        self.assertIn('help-new-conversation', script)
+        self.assertIn('recent-new-conversation', script)
         self.assertIn('class="help-actions"', script)
         self.assertIn('.help-actions{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));', styles)
         self.assertNotIn('<a class="btn sm mt12" href="help.html?new=1">新对话</a>', script)
@@ -367,7 +367,8 @@ class PlatformTest(unittest.TestCase):
         self.assertIn('id="aiImageMode"', script)
         self.assertIn("生成图片：${rawPrompt}", script)
         self.assertIn("input.value='';clearDraft();", script)
-        self.assertIn(".help-new-conversation{border-color:var(--blue);background:var(--blue);", styles)
+        self.assertIn(".recent-new-conversation{display:inline-flex;align-items:center;gap:5px;border-color:var(--blue);", styles)
+        self.assertIn(".brand-mark{background:var(--blue)}", styles)
 
     def test_setup_portal_uses_aligned_form_and_enter_submit(self):
         script = (ROOT / "assets" / "app.js").read_text(encoding="utf-8")
