@@ -72,7 +72,8 @@ DEEPSEEK_URL = DEEPSEEK_BASE_URL + "/chat/completions"
 DEEPSEEK_MODEL = os.environ.get("DEEPSEEK_MODEL", "deepseek-v4-flash")
 DEEPSEEK_REASONING_MODEL = os.environ.get("DEEPSEEK_REASONING_MODEL", "deepseek-v4-pro")
 ARK_TEXT_URL = os.environ.get("ARK_TEXT_URL", "https://ark.cn-beijing.volces.com/api/v3/chat/completions")
-ARK_TEXT_MODEL = os.environ.get("ARK_TEXT_MODEL", "doubao-seed-2-1-pro-260628")
+ARK_TEXT_MODEL = os.environ.get("ARK_TEXT_MODEL", "doubao-seed-2-0-lite-260428")
+ARK_TEXT_SPEED = os.environ.get("ARK_TEXT_SPEED", "fast").strip() or "fast"
 ARK_IMAGE_URL = os.environ.get("ARK_IMAGE_URL", "https://ark.cn-beijing.volces.com/api/v3/images/generations")
 ARK_IMAGE_MODEL = os.environ.get("ARK_IMAGE_MODEL", "doubao-seedream-5-0-260128")
 ARK_IMAGE_RESPONSE_FORMAT = os.environ.get("ARK_IMAGE_RESPONSE_FORMAT", "b64_json").strip().lower()
@@ -802,7 +803,7 @@ def ark_free_messages(state: dict, group: int, prompt: str, history: list[dict])
 
 def ark_text_request(messages: list[dict], stream: bool) -> urllib.request.Request:
     api_key = os.environ.get("ARK_API_KEY", "")
-    payload = json.dumps({"model": ARK_TEXT_MODEL, "messages": messages, "stream": stream}, ensure_ascii=False).encode()
+    payload = json.dumps({"model": ARK_TEXT_MODEL, "messages": messages, "stream": stream, "speed": ARK_TEXT_SPEED}, ensure_ascii=False).encode()
     return urllib.request.Request(
         ARK_TEXT_URL, data=payload,
         headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json", "User-Agent": "Maple-Platform/1"},

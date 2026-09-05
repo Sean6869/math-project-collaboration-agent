@@ -349,7 +349,9 @@ class PlatformTest(unittest.TestCase):
             self.assertEqual(status, "ok")
             self.assertEqual(model, app.ARK_TEXT_MODEL)
             request = urlopen.call_args.args[0]
-            self.assertTrue(json.loads(request.data)["stream"])
+            payload = json.loads(request.data)
+            self.assertTrue(payload["stream"])
+            self.assertEqual(payload["speed"], app.ARK_TEXT_SPEED)
             self.assertEqual(urlopen.call_args.kwargs["timeout"], app.ARK_TEXT_TIMEOUT_SECONDS)
         finally:
             if original_key is None:
@@ -358,11 +360,14 @@ class PlatformTest(unittest.TestCase):
                 os.environ["ARK_API_KEY"] = original_key
 
         script = (ROOT / "assets" / "app.js").read_text(encoding="utf-8")
+        styles = (ROOT / "assets" / "styles.css").read_text(encoding="utf-8")
         self.assertIn("/api/ai/chat/stream", script)
         self.assertIn("getReader()", script)
         self.assertIn("new TextDecoder()", script)
         self.assertIn('id="aiImageMode"', script)
         self.assertIn("生成图片：${rawPrompt}", script)
+        self.assertIn("input.value='';clearDraft();", script)
+        self.assertIn(".help-new-conversation{border-color:var(--blue);background:var(--blue);", styles)
 
     def test_setup_portal_uses_aligned_form_and_enter_submit(self):
         script = (ROOT / "assets" / "app.js").read_text(encoding="utf-8")
@@ -434,6 +439,7 @@ class PlatformTest(unittest.TestCase):
             self.assertEqual(text_request.full_url, app.ARK_TEXT_URL)
             text_body = json.loads(text_request.data)
             self.assertEqual(text_body["model"], app.ARK_TEXT_MODEL)
+            self.assertEqual(text_body["speed"], app.ARK_TEXT_SPEED)
             self.assertEqual(text_body["messages"][0]["role"], "system")
             self.assertEqual(text_body["messages"][-1]["content"], "请检查一元一次不等式")
             conversation_id = text_result["conversationId"]

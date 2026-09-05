@@ -39,7 +39,8 @@ python start_server.py
 DEEPSEEK_REASONING_MODEL=deepseek-v4-pro
 ARK_API_KEY=你的火山方舟密钥
 ARK_TEXT_URL=https://ark.cn-beijing.volces.com/api/v3/chat/completions
-ARK_TEXT_MODEL=doubao-seed-2-1-pro-260628
+ARK_TEXT_MODEL=doubao-seed-2-0-lite-260428
+ARK_TEXT_SPEED=fast
 ARK_IMAGE_URL=https://ark.cn-beijing.volces.com/api/v3/images/generations
 ARK_IMAGE_MODEL=doubao-seedream-5-0-260128
 ARK_IMAGE_RESPONSE_FORMAT=b64_json
