@@ -368,7 +368,13 @@ class PlatformTest(unittest.TestCase):
         self.assertIn("生成图片：${rawPrompt}", script)
         self.assertIn("input.value='';clearDraft();", script)
         self.assertIn(".recent-new-conversation{display:inline-flex;align-items:center;gap:5px;border-color:var(--blue);", styles)
-        self.assertIn(".brand-mark{background:var(--blue)}", styles)
+        self.assertIn("brandLockup(role)", script)
+        self.assertIn("role==='student'?'/student/dashboard.html':'/teacher/dashboard.html'", script)
+        self.assertNotIn("brand-mark", script)
+        self.assertIn('class="auth-brand-link" href="/?current" aria-label="返回首页"', script)
+        self.assertIn('class="brand-lockup-image"', script)
+        self.assertIn("brandAsset(BRAND.wideLogo)", script)
+        self.assertIn(".brand-lockup-image{display:block;width:auto;height:42px;", styles)
         self.assertIn(".auth-brand-lockup{filter:invert(1)}", styles)
 
     def test_setup_portal_uses_aligned_form_and_enter_submit(self):
