@@ -48,6 +48,16 @@ def load_env_file(path: Path) -> None:
 
 
 load_env_file(ROOT / ".env")
+
+
+def env_seconds(name: str, default: int, minimum: int = 5, maximum: int = 300) -> int:
+    try:
+        value = int(os.environ.get(name, str(default)))
+    except (TypeError, ValueError):
+        value = default
+    return max(minimum, min(maximum, value))
+
+
 DATA_DIR = Path(os.environ.get("MPT_DATA_DIR", ROOT / "data")).resolve()
 UPLOAD_DIR = DATA_DIR / "uploads"
 DB_PATH = DATA_DIR / "platform.db"
@@ -66,6 +76,8 @@ ARK_TEXT_MODEL = os.environ.get("ARK_TEXT_MODEL", "doubao-seed-2-1-pro-260628")
 ARK_IMAGE_URL = os.environ.get("ARK_IMAGE_URL", "https://ark.cn-beijing.volces.com/api/v3/images/generations")
 ARK_IMAGE_MODEL = os.environ.get("ARK_IMAGE_MODEL", "doubao-seedream-5-0-260128")
 ARK_IMAGE_RESPONSE_FORMAT = os.environ.get("ARK_IMAGE_RESPONSE_FORMAT", "b64_json").strip().lower()
+ARK_TEXT_TIMEOUT_SECONDS = env_seconds("ARK_TEXT_TIMEOUT_SECONDS", 120)
+ARK_IMAGE_TIMEOUT_SECONDS = env_seconds("ARK_IMAGE_TIMEOUT_SECONDS", 180)
 FREE_AI_QUOTA_DEFAULT = 30
 FREE_AI_HISTORY_LIMIT = 40
 FREE_AI_CONVERSATION_LIMIT = 20
@@ -769,12 +781,7 @@ def free_ai_context(state: dict, group: int) -> str:
     return json.dumps(context, ensure_ascii=False)
 
 
-def ark_free_chat(
-    state: dict, group: int, prompt: str, history: list[dict],
-) -> tuple[str | None, int, str, str]:
-    api_key = os.environ.get("ARK_API_KEY", "")
-    if not api_key:
-        return None, 0, "not_configured", ARK_TEXT_MODEL
+def ark_free_messages(state: dict, group: int, prompt: str, history: list[dict]) -> list[dict]:
     system = (
         "你是‘迈谱 Maple’学生小组自由工作区的数学与项目助手。"
         "你的任务是帮助学生减少机械性整理，把更多时间留给小组协作和高阶思考。"
@@ -790,17 +797,29 @@ def ark_free_chat(
         if content:
             messages.append({"role": item["role"], "content": content})
     messages.append({"role": "user", "content": prompt})
-    payload = json.dumps({
-        "model": ARK_TEXT_MODEL, "messages": messages, "stream": False,
-    }, ensure_ascii=False).encode()
-    request = urllib.request.Request(
+    return messages
+
+
+def ark_text_request(messages: list[dict], stream: bool) -> urllib.request.Request:
+    api_key = os.environ.get("ARK_API_KEY", "")
+    payload = json.dumps({"model": ARK_TEXT_MODEL, "messages": messages, "stream": stream}, ensure_ascii=False).encode()
+    return urllib.request.Request(
         ARK_TEXT_URL, data=payload,
         headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json", "User-Agent": "Maple-Platform/1"},
         method="POST",
     )
+
+
+def ark_free_chat(
+    state: dict, group: int, prompt: str, history: list[dict],
+) -> tuple[str | None, int, str, str]:
+    api_key = os.environ.get("ARK_API_KEY", "")
+    if not api_key:
+        return None, 0, "not_configured", ARK_TEXT_MODEL
+    request = ark_text_request(ark_free_messages(state, group, prompt, history), False)
     started = time.perf_counter()
     try:
-        with urllib.request.urlopen(request, timeout=30) as response:
+        with urllib.request.urlopen(request, timeout=ARK_TEXT_TIMEOUT_SECONDS) as response:
             body = json.loads(response.read())
         latency = round((time.perf_counter() - started) * 1000)
         answer = str(body["choices"][0]["message"]["content"]).strip()
@@ -815,6 +834,65 @@ def ark_free_chat(
         return None, latency, f"HTTP {exc.code}: {message}".rstrip(": "), ARK_TEXT_MODEL
     except (urllib.error.URLError, TimeoutError, KeyError, ValueError, json.JSONDecodeError) as exc:
         latency = round((time.perf_counter() - started) * 1000)
+        if isinstance(exc, TimeoutError) or isinstance(getattr(exc, "reason", None), TimeoutError):
+            return None, latency, f"timeout after {ARK_TEXT_TIMEOUT_SECONDS}s", ARK_TEXT_MODEL
+        return None, latency, type(exc).__name__, ARK_TEXT_MODEL
+
+
+def sse_payloads(response):
+    data_lines = []
+    for raw_line in response:
+        line = raw_line.decode("utf-8", "replace").rstrip("\r\n") if isinstance(raw_line, bytes) else str(raw_line).rstrip("\r\n")
+        if not line:
+            if data_lines:
+                yield "\n".join(data_lines)
+                data_lines = []
+            continue
+        if line.startswith("data:"):
+            data_lines.append(line[5:].lstrip())
+    if data_lines:
+        yield "\n".join(data_lines)
+
+
+def ark_free_chat_stream(
+    state: dict, group: int, prompt: str, history: list[dict], on_delta,
+) -> tuple[str | None, int, str, str]:
+    api_key = os.environ.get("ARK_API_KEY", "")
+    if not api_key:
+        return None, 0, "not_configured", ARK_TEXT_MODEL
+    request = ark_text_request(ark_free_messages(state, group, prompt, history), True)
+    started = time.perf_counter()
+    answer_parts = []
+    try:
+        with urllib.request.urlopen(request, timeout=ARK_TEXT_TIMEOUT_SECONDS) as response:
+            for raw_event in sse_payloads(response):
+                if raw_event == "[DONE]":
+                    break
+                body = json.loads(raw_event)
+                choice = (body.get("choices") or [{}])[0]
+                delta = choice.get("delta") or {}
+                content = delta.get("content")
+                if content is None:
+                    content = (choice.get("message") or {}).get("content")
+                if content:
+                    text = str(content)
+                    answer_parts.append(text)
+                    on_delta(text)
+        latency = round((time.perf_counter() - started) * 1000)
+        answer = "".join(answer_parts).strip()
+        return answer[:12000] if answer else None, latency, "ok", ARK_TEXT_MODEL
+    except urllib.error.HTTPError as exc:
+        latency = round((time.perf_counter() - started) * 1000)
+        try:
+            detail = json.loads(exc.read()).get("error", {})
+            message = re.sub(r"\s+", " ", str(detail.get("message", ""))).strip()[:300]
+        except (json.JSONDecodeError, AttributeError, ValueError):
+            message = ""
+        return None, latency, f"HTTP {exc.code}: {message}".rstrip(": "), ARK_TEXT_MODEL
+    except (AttributeError, urllib.error.URLError, TimeoutError, KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
+        latency = round((time.perf_counter() - started) * 1000)
+        if isinstance(exc, TimeoutError) or isinstance(getattr(exc, "reason", None), TimeoutError):
+            return None, latency, f"timeout after {ARK_TEXT_TIMEOUT_SECONDS}s", ARK_TEXT_MODEL
         return None, latency, type(exc).__name__, ARK_TEXT_MODEL
 
 
@@ -864,7 +942,7 @@ def ark_generate_image(group: int, prompt: str) -> tuple[dict, int]:
     )
     started = time.perf_counter()
     try:
-        with urllib.request.urlopen(request, timeout=60) as response:
+        with urllib.request.urlopen(request, timeout=ARK_IMAGE_TIMEOUT_SECONDS) as response:
             result = json.loads(response.read())
     except urllib.error.HTTPError as exc:
         detail = exc.read(2000).decode("utf-8", "replace").replace("\n", " ").strip()
@@ -919,7 +997,7 @@ def ark_generate_image(group: int, prompt: str) -> tuple[dict, int]:
                 raw = base64.b64decode(image_url.split(",", 1)[1], validate=True)
             elif image_url:
                 try:
-                    with urllib.request.urlopen(image_url, timeout=30) as image_response:
+                    with urllib.request.urlopen(image_url, timeout=ARK_IMAGE_TIMEOUT_SECONDS) as image_response:
                         raw = image_response.read(20 * 1024 * 1024 + 1)
                 except urllib.error.HTTPError as exc:
                     raise UpstreamServiceError(f"生成图片地址下载HTTP {exc.code}", HTTPStatus.BAD_GATEWAY) from exc
@@ -1210,6 +1288,10 @@ class Handler(SimpleHTTPRequestHandler):
                 session = self.require_session("student")
                 if session:
                     self.free_ai_chat(session, self.read_json())
+            elif route == "/api/ai/chat/stream":
+                session = self.require_session("student")
+                if session:
+                    self.free_ai_chat_stream(session, self.read_json())
             elif route == "/api/files":
                 session = self.require_session("teacher")
                 if session:
@@ -1647,21 +1729,19 @@ class Handler(SimpleHTTPRequestHandler):
                 db.execute("DELETE FROM sessions WHERE token_hash=?", (token_hash(cookie[COOKIE_NAME].value),))
         self.json_response({"ok": True}, cookie=f"{COOKIE_NAME}=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0")
 
-    def free_ai_chat(self, session: dict, body: dict) -> None:
+    def prepare_free_ai_chat(self, session: dict, body: dict) -> dict:
         group = int(session["groupId"])
         state = merged_state(group)
         enabled, quota = free_ai_settings(state)
         if not enabled or not state.get("aiOpen", True):
-            self.json_response({"error": "自由工作区已由教师暂停"}, HTTPStatus.CONFLICT)
-            return
+            raise UpstreamServiceError("自由工作区已由教师暂停", HTTPStatus.CONFLICT)
         prompt = str(body.get("prompt", "")).strip()[:2400]
         if not prompt:
             raise ValueError("请输入要讨论的内容")
         group_state = state_get(f"group:{group}")
         workspace = free_ai_state(group_state)
         if workspace["usage"] >= quota:
-            self.json_response({"error": "自由工作区本组额度已用完，请联系教师调整"}, HTTPStatus.CONFLICT)
-            return
+            raise UpstreamServiceError("自由工作区本组额度已用完，请联系教师调整", HTTPStatus.CONFLICT)
         requested_id = str(body.get("conversationId", "")).strip()
         create_new = bool(body.get("newConversation"))
         conversation = None if create_new else next(
@@ -1671,87 +1751,134 @@ class Handler(SimpleHTTPRequestHandler):
             conversation = next(
                 (item for item in workspace["conversations"] if item.get("id") == workspace["activeConversationId"]), None,
             )
-        timestamp = datetime.now().strftime("%H:%M")
         if conversation is None:
             conversation = {
                 "id": secrets.token_urlsafe(8), "title": prompt[:20],
                 "createdAt": utc_now(), "updatedAt": utc_now(), "messages": [],
             }
             workspace["conversations"].append(conversation)
-        intent = free_ai_intent(prompt)
-        history = conversation["messages"]
-        file_metadata = None
-        if intent == "image":
-            file_metadata, latency = ark_generate_image(group, prompt)
-            answer = "已根据你的描述生成图片。你可以继续在本对话中提出修改方向，或讨论图片如何用于项目。"
-            source = "ark"
-            model = ARK_IMAGE_MODEL
-            status = "ok"
-            returned = True
-            assistant_message = {
-                "role": "assistant", "kind": "image", "content": answer,
-                "file": file_metadata, "time": timestamp, "source": source,
-            }
-        else:
-            answer, latency, status, model = ark_free_chat(state, group, prompt, history)
-            if not answer:
-                with database() as db:
-                    db.execute(
-                        "INSERT INTO ai_calls(ts,group_no,level,model,latency_ms,status,detail) VALUES(?,?,?,?,?,?,?)",
-                        (utc_now(), group, "FREE_TEXT", model, latency, "failed", status[:1000]),
-                    )
-                if status == "not_configured":
-                    raise UpstreamServiceError(
-                        "豆包文本服务未配置 ARK_API_KEY", HTTPStatus.SERVICE_UNAVAILABLE,
-                    )
-                match = re.match(r"HTTP (\d+):?\s*(.*)", status)
-                if match:
-                    upstream_status = int(match.group(1))
-                    detail = match.group(2) or "方舟未返回错误详情"
-                    response_status = upstream_status if 400 <= upstream_status < 500 else HTTPStatus.BAD_GATEWAY
-                    raise UpstreamServiceError(
-                        f"豆包文本接口HTTP {upstream_status}: {detail}", int(response_status),
-                    )
-                raise UpstreamServiceError(
-                    f"豆包文本接口请求失败：{status}", HTTPStatus.BAD_GATEWAY,
-                )
-            returned = True
-            source = "ark"
-            assistant_message = {
-                "role": "assistant", "kind": "text", "content": answer,
-                "time": timestamp, "source": source,
-            }
-        history.extend([
-            {"role": "user", "kind": "text", "content": prompt, "time": timestamp},
+        return {
+            "group": group, "state": state, "group_state": group_state,
+            "workspace": workspace, "conversation": conversation,
+            "prompt": prompt, "intent": free_ai_intent(prompt),
+            "quota": quota, "timestamp": datetime.now().strftime("%H:%M"),
+        }
+
+    def free_ai_failure(self, context: dict, model: str, latency: int, status: str) -> UpstreamServiceError:
+        with database() as db:
+            db.execute(
+                "INSERT INTO ai_calls(ts,group_no,level,model,latency_ms,status,detail) VALUES(?,?,?,?,?,?,?)",
+                (utc_now(), context["group"], "FREE_IMAGE" if context["intent"] == "image" else "FREE_TEXT",
+                 model, latency, "failed", status[:1000]),
+            )
+        if status == "not_configured":
+            return UpstreamServiceError("豆包文本服务未配置 ARK_API_KEY", HTTPStatus.SERVICE_UNAVAILABLE)
+        match = re.match(r"HTTP (\d+):?\s*(.*)", status)
+        if match:
+            upstream_status = int(match.group(1))
+            detail = match.group(2) or "方舟未返回错误详情"
+            response_status = upstream_status if 400 <= upstream_status < 500 else HTTPStatus.BAD_GATEWAY
+            return UpstreamServiceError(
+                f"豆包文本接口HTTP {upstream_status}: {detail}", int(response_status),
+            )
+        return UpstreamServiceError(f"豆包文本接口请求失败：{status}", HTTPStatus.BAD_GATEWAY)
+
+    def commit_free_ai_chat(self, context: dict, answer: str, model: str, status: str,
+                            latency: int, file_metadata: dict | None = None) -> dict:
+        conversation = context["conversation"]
+        workspace = context["workspace"]
+        assistant_message = {
+            "role": "assistant", "kind": "image" if file_metadata else "text", "content": answer,
+            "time": context["timestamp"], "source": "ark",
+        }
+        if file_metadata:
+            assistant_message["file"] = file_metadata
+        conversation["messages"].extend([
+            {"role": "user", "kind": "text", "content": context["prompt"], "time": context["timestamp"]},
             assistant_message,
         ])
-        conversation["messages"] = history[-FREE_AI_HISTORY_LIMIT:]
+        conversation["messages"] = conversation["messages"][-FREE_AI_HISTORY_LIMIT:]
         conversation["updatedAt"] = utc_now()
         workspace["conversations"] = [
             item for item in workspace["conversations"] if item.get("id") != conversation["id"]
         ] + [conversation]
         workspace["conversations"] = workspace["conversations"][-FREE_AI_CONVERSATION_LIMIT:]
         workspace["activeConversationId"] = conversation["id"]
-        if returned:
-            workspace["usage"] += 1
-        group_state["freeAi"] = workspace
-        state_put(f"group:{group}", group_state)
-        result = "returned" if returned else "fallback"
+        workspace["usage"] += 1
+        context["group_state"]["freeAi"] = workspace
+        state_put(f"group:{context['group']}", context["group_state"])
+        intent = context["intent"]
         with database() as db:
             db.execute(
                 "INSERT INTO ai_calls(ts,group_no,level,model,latency_ms,status,detail) VALUES(?,?,?,?,?,?,?)",
-                (utc_now(), group, "FREE_IMAGE" if intent == "image" else "FREE_TEXT", model,
-                 latency, result, ("image_saved" if intent == "image" else status)[:1000]),
+                (utc_now(), context["group"], "FREE_IMAGE" if intent == "image" else "FREE_TEXT",
+                 model, latency, "returned", ("image_saved" if intent == "image" else status)[:1000]),
             )
-        record_event("student", group, "free_ai_chat", state.get("currentStage"), f"{intent}|{status}")
+        record_event("student", context["group"], "free_ai_chat", context["state"].get("currentStage"), f"{intent}|{status}")
         response = {
-            "ok": True, "answer": answer, "intent": intent, "source": source,
-            "model": model if returned else "platform", "conversationId": conversation["id"],
-            "usage": workspace["usage"], "quota": quota,
+            "ok": True, "answer": answer, "intent": intent, "source": "ark", "model": model,
+            "conversationId": conversation["id"], "usage": workspace["usage"], "quota": context["quota"],
         }
         if file_metadata:
             response["file"] = file_metadata
+        return response
+
+    def free_ai_chat(self, session: dict, body: dict) -> None:
+        context = self.prepare_free_ai_chat(session, body)
+        if context["intent"] == "image":
+            file_metadata, latency = ark_generate_image(context["group"], context["prompt"])
+            response = self.commit_free_ai_chat(
+                context, "已根据你的描述生成图片。你可以继续在本对话中提出修改方向，或讨论图片如何用于项目。",
+                ARK_IMAGE_MODEL, "ok", latency, file_metadata,
+            )
+        else:
+            answer, latency, status, model = ark_free_chat(
+                context["state"], context["group"], context["prompt"], context["conversation"]["messages"],
+            )
+            if not answer:
+                raise self.free_ai_failure(context, model, latency, status)
+            response = self.commit_free_ai_chat(context, answer, model, status, latency)
         self.json_response(response)
+
+    def sse_start(self) -> None:
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+        self.send_header("Cache-Control", "no-cache, no-store")
+        self.send_header("Connection", "close")
+        self.end_headers()
+        self.close_connection = True
+
+    def sse_event(self, payload: dict) -> None:
+        raw = f"data: {json.dumps(payload, ensure_ascii=False, separators=(',', ':'))}\n\n".encode()
+        self.wfile.write(raw)
+        self.wfile.flush()
+
+    def free_ai_chat_stream(self, session: dict, body: dict) -> None:
+        context = self.prepare_free_ai_chat(session, body)
+        self.sse_start()
+        self.sse_event({"type": "start", "conversationId": context["conversation"]["id"], "intent": context["intent"]})
+        try:
+            if context["intent"] == "image":
+                self.sse_event({"type": "status", "message": "正在生成图片…"})
+                file_metadata, latency = ark_generate_image(context["group"], context["prompt"])
+                answer = "已根据你的描述生成图片。你可以继续在本对话中提出修改方向，或讨论图片如何用于项目。"
+                response = self.commit_free_ai_chat(context, answer, ARK_IMAGE_MODEL, "ok", latency, file_metadata)
+            else:
+                answer, latency, status, model = ark_free_chat_stream(
+                    context["state"], context["group"], context["prompt"],
+                    context["conversation"]["messages"],
+                    lambda delta: self.sse_event({"type": "delta", "content": delta}),
+                )
+                if not answer:
+                    raise self.free_ai_failure(context, model, latency, status)
+                response = self.commit_free_ai_chat(context, answer, model, status, latency)
+            self.sse_event({"type": "done", **response})
+        except UpstreamServiceError as exc:
+            self.sse_event({"type": "error", "message": str(exc), "status": exc.status})
+        except (AttributeError, ValueError, TypeError, KeyError) as exc:
+            self.sse_event({"type": "error", "message": f"豆包文本接口响应解析失败：{exc}", "status": HTTPStatus.BAD_GATEWAY})
+        except (BrokenPipeError, ConnectionResetError):
+            return
 
 
     def hint(self, session: dict, body: dict) -> None:

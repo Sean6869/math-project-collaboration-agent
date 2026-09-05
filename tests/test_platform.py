@@ -308,6 +308,62 @@ class PlatformTest(unittest.TestCase):
         self.assertNotIn('class="auth-options"', script)
         self.assertIn('.auth-card:has(.auth-role-switch)', styles)
 
+    def test_help_actions_and_recent_button_have_stable_layout(self):
+        script = (ROOT / "assets" / "app.js").read_text(encoding="utf-8")
+        styles = (ROOT / "assets" / "styles.css").read_text(encoding="utf-8")
+        self.assertIn('class="help-recent-head"', script)
+        self.assertIn('help-new-conversation', script)
+        self.assertIn('class="help-actions"', script)
+        self.assertIn('.help-actions{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));', styles)
+        self.assertNotIn('<a class="btn sm mt12" href="help.html?new=1">新对话</a>', script)
+
+    def test_free_ai_stream_uses_ark_sse_and_configured_timeout(self):
+        class FakeStreamResponse:
+            def __init__(self, lines):
+                self.lines = lines
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc_value, traceback):
+                return False
+
+            def __iter__(self):
+                return iter(self.lines)
+
+        original_key = os.environ.get("ARK_API_KEY")
+        os.environ["ARK_API_KEY"] = "test-key"
+        received = []
+        response = FakeStreamResponse([
+            'data: {"choices":[{"delta":{"content":"第一段 "}}]}\n'.encode(), b'\n',
+            'data: {"choices":[{"delta":{"content":"第二段"}}]}\n'.encode(), b'\n',
+            b'data: [DONE]\n', b'\n',
+        ])
+        try:
+            with mock.patch.object(app.urllib.request, "urlopen", return_value=response) as urlopen:
+                answer, latency, status, model = app.ark_free_chat_stream(
+                    {}, 1, "测试流式", [], received.append,
+                )
+            self.assertEqual(answer, "第一段 第二段")
+            self.assertEqual(received, ["第一段 ", "第二段"])
+            self.assertEqual(status, "ok")
+            self.assertEqual(model, app.ARK_TEXT_MODEL)
+            request = urlopen.call_args.args[0]
+            self.assertTrue(json.loads(request.data)["stream"])
+            self.assertEqual(urlopen.call_args.kwargs["timeout"], app.ARK_TEXT_TIMEOUT_SECONDS)
+        finally:
+            if original_key is None:
+                os.environ.pop("ARK_API_KEY", None)
+            else:
+                os.environ["ARK_API_KEY"] = original_key
+
+        script = (ROOT / "assets" / "app.js").read_text(encoding="utf-8")
+        self.assertIn("/api/ai/chat/stream", script)
+        self.assertIn("getReader()", script)
+        self.assertIn("new TextDecoder()", script)
+        self.assertIn('id="aiImageMode"', script)
+        self.assertIn("生成图片：${rawPrompt}", script)
+
     def test_setup_portal_uses_aligned_form_and_enter_submit(self):
         script = (ROOT / "assets" / "app.js").read_text(encoding="utf-8")
         styles = (ROOT / "assets" / "styles.css").read_text(encoding="utf-8")
