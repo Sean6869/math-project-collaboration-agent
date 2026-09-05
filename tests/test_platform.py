@@ -369,6 +369,7 @@ class PlatformTest(unittest.TestCase):
         self.assertIn("input.value='';clearDraft();", script)
         self.assertIn(".recent-new-conversation{display:inline-flex;align-items:center;gap:5px;border-color:var(--blue);", styles)
         self.assertIn(".brand-mark{background:var(--blue)}", styles)
+        self.assertIn(".auth-brand-lockup{filter:invert(1)}", styles)
 
     def test_setup_portal_uses_aligned_form_and_enter_submit(self):
         script = (ROOT / "assets" / "app.js").read_text(encoding="utf-8")
