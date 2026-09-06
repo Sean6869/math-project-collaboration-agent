@@ -1673,27 +1673,43 @@ class Handler(SimpleHTTPRequestHandler):
             record_event("teacher", group, "members_unlocked", 1, str(session.get("username", "")))
             self.json_response({"ok": True, "members": group_state.get("members", []), "membersLocked": False})
             return
-        if action != "submit":
+        if action not in {"save", "submit"}:
             raise ValueError("不支持的成员操作")
         if session["role"] == "student" and group_state.get("membersLocked"):
             self.json_response({"error": "成员信息已提交锁定，请联系教师开放修改"}, HTTPStatus.CONFLICT)
             return
-        members = validated_members(body.get("members"))
-        old_members = group_state.get("members", [])
-        if members != old_members:
-            group_state["firstThoughts"] = {}
-        group_state["members"] = members
-        if len(members) != len(old_members):
-            group_state["roles"] = ROLE_NAMES[:len(members)]
-            group_state["roleRound"] = 1
+
+        student_lock = action == "submit" and session["role"] == "student"
+        if student_lock:
+            saved_members = group_state.get("members", [])
+            if not saved_members:
+                self.json_response({"error": "请先保存成员与角色，再确认锁定"}, HTTPStatus.CONFLICT)
+                return
+            members = validated_members(saved_members)
+            if "members" in body and validated_members(body.get("members")) != members:
+                self.json_response({"error": "成员信息已修改，请先重新保存"}, HTTPStatus.CONFLICT)
+                return
         else:
-            group_state["roles"] = roles_for_members(group_state.get("roles"), len(members))
-        group_state["membersLocked"] = True
+            members = validated_members(body.get("members"))
+            old_members = group_state.get("members", [])
+            if members != old_members:
+                group_state["firstThoughts"] = {}
+            group_state["members"] = members
+            if len(members) != len(old_members):
+                group_state["roles"] = ROLE_NAMES[:len(members)]
+                group_state["roleRound"] = 1
+            else:
+                group_state["roles"] = roles_for_members(group_state.get("roles"), len(members))
+
+        group_state["membersLocked"] = action == "submit"
         state_put(f"group:{group}", group_state)
         self.sync_group_summary(group, group_state)
-        event_type = "members_submitted" if session["role"] == "student" else "members_teacher_updated"
+        if action == "save":
+            event_type = "members_saved" if session["role"] == "student" else "members_teacher_saved"
+        else:
+            event_type = "members_submitted" if session["role"] == "student" else "members_teacher_updated"
         record_event(session["role"], group, event_type, 1, f"count={len(members)}")
-        self.json_response({"ok": True, "members": members, "roles": group_state["roles"], "membersLocked": True})
+        self.json_response({"ok": True, "members": members, "roles": group_state["roles"], "membersLocked": group_state["membersLocked"]})
 
     def register_teacher(self, body: dict) -> None:
         if not is_initialized():
@@ -1891,16 +1907,22 @@ class Handler(SimpleHTTPRequestHandler):
         threads = group_state.get("helpThreads", [])
         if not isinstance(threads, list):
             threads = []
-        thread = active_help_thread(group_state)
         action = str(body.get("action", "ask")).strip().lower()
         done = str(body.get("done", "")).strip()[:1600]
+        new_thread = body.get("newThread") is True
         requested_thread_id = str(body.get("threadId", "")).strip()
+        if new_thread and requested_thread_id:
+            raise ValueError("新建主题不能同时指定已有主题")
+        thread = None if new_thread else active_help_thread(group_state)
         if requested_thread_id:
             thread = next(
                 (item for item in threads if isinstance(item, dict) and item.get("id") == requested_thread_id
                  and item.get("status") in {"active", "resolved", "teacher"}),
                 None,
             )
+            if not thread:
+                raise ValueError("求助主题不存在或已被清理")
+            group_state["activeHelpThreadId"] = thread["id"]
         raw_issue_type = str(body.get("type", "")).strip()
         if thread:
             issue_type = raw_issue_type[:80] or str(thread.get("type", "其他"))[:80]
@@ -2011,12 +2033,13 @@ class Handler(SimpleHTTPRequestHandler):
             thread["status"] = "teacher"
             thread["currentLevel"] = 4
             thread["updatedAt"] = utc_now()
+            group_state["activeHelpThreadId"] = thread["id"]
             group_state["hintUsage"] = usage
             group_state["hintUsed"] = sum(usage.values())
             group_state["helpThreads"] = threads[-30:]
             state_put(f"group:{group}", group_state)
             self.sync_group_summary(group, group_state, issue_type)
-            self.json_response({"ok": True, "created": created, "message": "已提交教师介入", "hintUsage": usage, "hintPolicy": policy})
+            self.json_response({"ok": True, "created": created, "message": "已提交教师介入", "threadId": thread["id"], "hintUsage": usage, "hintPolicy": policy})
             return
 
         if action != "ask":
@@ -2039,8 +2062,9 @@ class Handler(SimpleHTTPRequestHandler):
             thread.pop("resolvedAt", None)
             group_state["activeHelpThreadId"] = thread["id"]
         if thread.get("status") != "active":
-            self.json_response({"error": "当前主题已转教师，请关闭后再新建问题"}, HTTPStatus.CONFLICT)
+            self.json_response({"error": "当前主题已转教师，请点击“新对话”建立其他问题"}, HTTPStatus.CONFLICT)
             return
+        group_state["activeHelpThreadId"] = thread["id"]
         level_no = max(1, min(3, int(thread.get("currentLevel", 1))))
         try:
             requested_level_no = int(body.get("level", level_no))

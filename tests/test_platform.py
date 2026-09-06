@@ -282,6 +282,46 @@ class PlatformTest(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(state["state"]["activeHelpThread"]["currentLevel"], 4)
 
+    def test_hint_new_conversation_isolated_from_active_and_teacher_threads(self):
+        original_group = app.state_get("group:2")
+        original_class = app.state_get("class")
+        self.addCleanup(app.state_put, "group:2", original_group)
+        self.addCleanup(app.state_put, "class", original_class)
+        student = self.client()
+        status, _ = self.json_request(
+            student, "/api/login", "POST",
+            {"role": "student", "classCode": "CLASS2026", "groupId": 2, "groupCode": "TEAM02"},
+        )
+        self.assertEqual(status, 200)
+        reply = ("诊断：当前问题需要先区分对象。\n支架：请只核对这个主题中的条件。\n下一步：记录一次独立尝试。", 20, "ok")
+        thread_ids = []
+        with mock.patch.object(app, "deepseek_hint", return_value=reply):
+            for topic, issue in (("数据处理", "XY"), ("计算核验", "12"), ("表达与解释", "AAA")):
+                status, result = self.json_request(
+                    student, "/api/hints", "POST",
+                    {"action": "ask", "newThread": True, "done": f"已尝试{issue}", "type": topic, "issue": issue},
+                )
+                self.assertEqual(status, 200)
+                thread_ids.append(result["threadId"])
+                if issue == "XY":
+                    status, escalated = self.json_request(
+                        student, "/api/hints", "POST",
+                        {"action": "teacher", "threadId": result["threadId"], "issue": issue, "type": topic},
+                    )
+                    self.assertEqual(status, 200)
+                    self.assertEqual(escalated["threadId"], result["threadId"])
+
+        self.assertEqual(len(set(thread_ids)), 3)
+        status, state = self.json_request(student, "/api/state")
+        self.assertEqual(status, 200)
+        threads = {item["id"]: item for item in state["state"]["helpThreads"]}
+        self.assertEqual(len(threads), 3)
+        self.assertEqual(threads[thread_ids[0]]["status"], "teacher")
+        self.assertEqual(threads[thread_ids[1]]["messages"][0]["question"], "12")
+        self.assertEqual(threads[thread_ids[2]]["messages"][0]["question"], "AAA")
+        self.assertEqual(state["state"]["activeHelpThread"]["id"], thread_ids[2])
+        self.assertTrue(all(len(threads[thread_id]["messages"]) == 1 for thread_id in thread_ids))
+
     def test_password_and_hint_output_guards(self):
         encoded = app.password_hash("secret")
         self.assertTrue(app.password_ok("secret", encoded))
@@ -314,8 +354,20 @@ class PlatformTest(unittest.TestCase):
         self.assertIn('class="help-recent-head"', script)
         self.assertIn('recent-new-conversation', script)
         self.assertIn('class="help-actions"', script)
+        self.assertIn("newThread:newConversation", script)
+        self.assertIn("history.replaceState(null,'',`help.html?thread=${encodeURIComponent(result.threadId)}`)", script)
         self.assertIn('.help-actions{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));', styles)
         self.assertNotIn('<a class="btn sm mt12" href="help.html?new=1">新对话</a>', script)
+
+    def test_member_roles_require_save_before_lock(self):
+        script = (ROOT / "assets" / "app.js").read_text(encoding="utf-8")
+        self.assertIn("btn('保存成员与角色','primary','saveMembers')", script)
+        self.assertIn("btn('确认锁定','green','lockMembers'", script)
+        self.assertIn("JSON.stringify({action:'save',members:members()})", script)
+        self.assertIn("JSON.stringify({action:'submit'})", script)
+        self.assertIn("锁定后需要由教师重新开放才能修改", script)
+        self.assertIn("lock.disabled=true", script)
+        self.assertNotIn("btn('提交并锁定成员'", script)
 
     def test_free_ai_stream_uses_ark_sse_and_configured_timeout(self):
         class FakeStreamResponse:
@@ -592,9 +644,24 @@ class PlatformTest(unittest.TestCase):
         self.assertEqual(status, 200)
 
         first_members = ["甲", "乙", "丙", "丁", "戊"]
+        with self.assertRaises(urllib.error.HTTPError) as unsaved_lock:
+            self.json_request(
+                student, "/api/group/members", "POST",
+                {"action": "submit"},
+            )
+        self.assertEqual(unsaved_lock.exception.code, 409)
+
         status, result = self.json_request(
             student, "/api/group/members", "POST",
-            {"action": "submit", "members": first_members},
+            {"action": "save", "members": first_members},
+        )
+        self.assertEqual(status, 200)
+        self.assertFalse(result["membersLocked"])
+        self.assertEqual(result["members"], first_members)
+        self.assertEqual(len(result["roles"]), 5)
+        status, result = self.json_request(
+            student, "/api/group/members", "POST",
+            {"action": "submit"},
         )
         self.assertEqual(status, 200)
         self.assertTrue(result["membersLocked"])
@@ -626,10 +693,23 @@ class PlatformTest(unittest.TestCase):
         second_members = first_members + ["己"]
         status, result = self.json_request(
             student, "/api/group/members", "POST",
-            {"action": "submit", "members": second_members},
+            {"action": "save", "members": second_members},
         )
         self.assertEqual(status, 200)
+        self.assertFalse(result["membersLocked"])
         self.assertEqual(result["members"], second_members)
+        with self.assertRaises(urllib.error.HTTPError) as changed_after_save:
+            self.json_request(
+                student, "/api/group/members", "POST",
+                {"action": "submit", "members": second_members + ["庚"]},
+            )
+        self.assertEqual(changed_after_save.exception.code, 409)
+        status, result = self.json_request(
+            student, "/api/group/members", "POST",
+            {"action": "submit"},
+        )
+        self.assertEqual(status, 200)
+        self.assertTrue(result["membersLocked"])
         status, result = self.json_request(
             teacher, "/api/group/members", "POST",
             {"action": "submit", "groupId": 3, "members": ["甲", "乙", "丙", "丁"]},
