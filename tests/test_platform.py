@@ -401,6 +401,7 @@ class PlatformTest(unittest.TestCase):
         self.assertIn("event.preventDefault()", script)
         self.assertNotIn('class="auth-options"', script)
         self.assertIn('.auth-card:has(.auth-role-switch)', styles)
+        self.assertIn('.auth-card .toolbar{justify-content:flex-end}', styles)
 
     def test_help_actions_and_recent_button_have_stable_layout(self):
         script = (ROOT / "assets" / "app.js").read_text(encoding="utf-8")
@@ -502,6 +503,7 @@ class PlatformTest(unittest.TestCase):
         self.assertNotIn("document.querySelector('#setupGroupPrefix')", script)
         self.assertNotIn('class="field span-2"', script)
         self.assertIn('.copy-field:focus-within', styles)
+        self.assertIn('.auth-card .toolbar{justify-content:flex-end}', styles)
         self.assertEqual(app.group_prefix_from_code("TEAM01"), "TEAM")
         self.assertEqual(app.group_prefix_from_code("TEAM"), "TEAM")
 
