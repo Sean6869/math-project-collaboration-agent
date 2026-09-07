@@ -483,6 +483,14 @@ class PlatformTest(unittest.TestCase):
         self.assertIn(".brand-lockup-image{display:block;width:auto;height:42px;", styles)
         self.assertIn(".auth-brand-lockup{filter:invert(1)}", styles)
 
+    def test_free_ai_math_renderer_handles_bold_latex_and_prompt_requires_delimiters(self):
+        script = (ROOT / "assets" / "app.js").read_text(encoding="utf-8")
+        self.assertIn(r"\\(?:boldsymbol|mathbf)\s*\{([^{}]*)\}", script)
+        self.assertIn(r"\\(?:d|t)?frac", script)
+        self.assertIn(r"\\(?:sin|cos|tan|cot|sec|csc|log|ln|lim|max|min|mod", script)
+        self.assertIn("<strong>$1</strong>", script)
+        self.assertGreaterEqual((ROOT / "platform_server.py").read_text(encoding="utf-8").count("MATH_FORMAT_RULE"), 3)
+
     def test_setup_portal_uses_aligned_form_and_enter_submit(self):
         script = (ROOT / "assets" / "app.js").read_text(encoding="utf-8")
         styles = (ROOT / "assets" / "styles.css").read_text(encoding="utf-8")

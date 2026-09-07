@@ -79,6 +79,7 @@ ARK_IMAGE_MODEL = os.environ.get("ARK_IMAGE_MODEL", "doubao-seedream-5-0-260128"
 ARK_IMAGE_RESPONSE_FORMAT = os.environ.get("ARK_IMAGE_RESPONSE_FORMAT", "b64_json").strip().lower()
 ARK_TEXT_TIMEOUT_SECONDS = env_seconds("ARK_TEXT_TIMEOUT_SECONDS", 120)
 ARK_IMAGE_TIMEOUT_SECONDS = env_seconds("ARK_IMAGE_TIMEOUT_SECONDS", 180)
+MATH_FORMAT_RULE = "所有数学表达式必须用 $...$、$$...$$、\\(...\\) 或 \\[...\\] 包裹；不得裸露输出LaTex命令。"
 FREE_AI_QUOTA_DEFAULT = 30
 FREE_AI_HISTORY_LIMIT = 40
 FREE_AI_CONVERSATION_LIMIT = 20
@@ -803,6 +804,7 @@ def deepseek_hint(
     system = (
         "你是服务于中国初中数学项目式学习小组的教学支架。必须依据学生当前尝试和历史提示生成有推进作用、但保留学生思考责任的反馈。"
         + student_math_scope(state)
+        + MATH_FORMAT_RULE
         + f"当前严格执行{level}：{contracts[level]}"
         "不得重复历史提示；信息不足时先澄清，不得猜测。材料冲突、数学结论不可靠或需要教师判断时，在nextAction中写明请教师核验。"
         "回答必须体现苏格拉底式引导：诊断开头先具体肯定学生已经完成的有效工作，再指出一个可改进点；支架至少提出一个能让学生自己判断的追问；下一步给出一个可在当前材料上执行的动作，并保留学生作出数学判断的责任。"
@@ -911,7 +913,9 @@ def ark_free_messages(state: dict, group: int, prompt: str, history: list[dict])
         + student_math_scope(state)
         + "你的任务是帮助学生减少机械性整理，把更多时间留给小组协作和高阶思考。"
         "你可以解释概念、检查思路和书写数学表达，但不要替学生完成未经讨论的整个项目，"
-        "不要伪造数据；缺少信息时明确列出需要补充的内容。数学表达式使用LaTeX，回答使用清晰的Markdown。"
+        "不要伪造数据；缺少信息时明确列出需要补充的内容。"
+        + MATH_FORMAT_RULE
+        + "回答使用清晰的Markdown。"
         f"当前项目上下文：{free_ai_context(state, group)}"
     )
     messages = [{"role": "system", "content": system}]
