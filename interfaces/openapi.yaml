@@ -31,7 +31,7 @@ paths:
                 username: {type: string, minLength: 3, maxLength: 40}
                 password: {type: string, minLength: 12}
                 recoveryCode: {type: string, minLength: 16}
-                classCode: {type: string, minLength: 6}
+                classCode: {type: string, minLength: 6, description: 可包含“七年级/八年级/九年级”等年级标识；服务端仅持久化其哈希及识别出的年级}
                 groupCodePrefix: {type: string, minLength: 4}
                 groupCount: {type: integer, minimum: 1, maximum: 20}
       responses:
@@ -154,7 +154,7 @@ paths:
         '403': {description: 权限不足}
   /api/hints:
     post:
-      summary: 在当前求助主题内提问、主动升级、结束主题或请求教师
+      summary: 在当前求助主题内处理初中数学问题、主动升级、结束主题或请求教师
       requestBody:
         required: true
         content:
@@ -174,11 +174,12 @@ paths:
                 checkedWork: {type: boolean}
       responses:
         '200': {description: 当前层 DeepSeek 支架、无扣额静态支架、层级转换或教师升级结果}
+        '422': {description: 非初中数学问题；不会调用模型或消耗提示额度}
         '409': {description: 当前层额度已用完、AI暂停或主题状态不允许该操作}
         '403': {description: 仅学生小组可调用}
   /api/ai/chat:
     post:
-      summary: 学生自由AI工作区多轮对话
+      summary: 学生自由AI工作区的初中数学多轮对话
       requestBody:
         required: true
         content:
@@ -195,6 +196,7 @@ paths:
         '429': {description: 方舟账户或模型达到推理限额}
         '503': {description: 生图请求缺少ARK_API_KEY}
         '409': {description: AI暂停或自由工作区额度已用完}
+        '422': {description: 非初中数学问题；不会调用模型、写入对话或消耗额度}
         '403': {description: 仅学生小组可调用}
   /api/ai/files/{fileId}:
     get:

@@ -161,6 +161,119 @@ def group_prefix_from_code(value: str) -> str:
     return re.sub(r"\d+$", "", code) or code
 
 
+def grade_from_text(*values: object) -> int | None:
+    """Extract a junior-high grade without retaining the access code itself."""
+    text = " ".join(str(value or "") for value in values).upper()
+    patterns = {
+        7: (r"七年级", r"初一", r"(?:^|\D)7年级", r"(?:^|[^A-Z0-9])G(?:RADE)?[-_ ]?7(?:\D|$)"),
+        8: (r"八年级", r"初二", r"(?:^|\D)8年级", r"(?:^|[^A-Z0-9])G(?:RADE)?[-_ ]?8(?:\D|$)"),
+        9: (r"九年级", r"初三", r"(?:^|\D)9年级", r"(?:^|[^A-Z0-9])G(?:RADE)?[-_ ]?9(?:\D|$)"),
+    }
+    return next((grade for grade, choices in patterns.items() if any(re.search(pattern, text) for pattern in choices)), None)
+
+
+def class_code_grade() -> int | None:
+    with database() as db:
+        row = db.execute("SELECT value FROM settings WHERE key='class_grade'").fetchone()
+    try:
+        grade = int(row["value"]) if row else 0
+    except (TypeError, ValueError):
+        grade = 0
+    return grade if grade in {7, 8, 9} else None
+
+
+def persist_class_grade(code: str) -> int | None:
+    """Persist only the grade inferred from a valid class code, never the code."""
+    grade = grade_from_text(code)
+    with database() as db:
+        if grade:
+            db.execute(
+                "INSERT INTO settings(key,value) VALUES('class_grade',?) "
+                "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                (str(grade),),
+            )
+        else:
+            db.execute("DELETE FROM settings WHERE key='class_grade'")
+    class_state = state_get("class")
+    resolved = grade or grade_from_text(class_state.get("className", ""))
+    if resolved:
+        class_state["classGrade"] = resolved
+    else:
+        class_state.pop("classGrade", None)
+    state_put("class", class_state)
+    return resolved
+
+
+def student_grade(state: dict) -> int | None:
+    try:
+        stored = int(state.get("classGrade", 0))
+    except (TypeError, ValueError):
+        stored = 0
+    return stored if stored in {7, 8, 9} else grade_from_text(state.get("className", ""))
+
+
+def student_math_scope(state: dict) -> str:
+    grade = student_grade(state)
+    audience = {7: "七年级", 8: "八年级", 9: "九年级"}.get(grade, "初中阶段")
+    return (
+        f"服务对象为中国{audience}学生。只处理与初中数学直接相关的概念、计算、推理、图形、统计、"
+        "数学表达或数学建模任务。生活、科学、项目或游戏只能作为数学问题的情境，不能回答其非数学内容。"
+        "表达、术语和步骤应以该年级或更早所学内容为主；确需扩展时，要先用学生已有知识解释，并明确标为拓展。"
+        "对于与数学无直接关系的请求，不提供实质答案，只回复：这里只支持初中数学相关问题，请把问题改写为包含"
+        "数量关系、计算、图形、统计或数学建模的提问。"
+    )
+
+
+# ponytail: lexical gate blocks obvious off-topic traffic before model calls; upgrade to a reviewed classifier only if real classroom prompts show recurring false decisions.
+MATH_TERMS = (
+    "数学", "数值", "数量关系", "算式", "公式", "方程", "不等式", "函数", "变量", "代数", "因式",
+    "分数", "小数", "整数", "实数", "平方", "根式", "比例", "比值", "百分", "几何", "图形", "三角形",
+    "四边形", "多边形", "圆周", "圆心", "半径", "直径", "角度", "内角", "外角", "边长", "边的关系",
+    "面积", "周长", "体积", "坐标", "斜率", "证明", "统计", "概率", "平均数", "中位数", "众数", "频率",
+    "测量", "误差", "建模", "勾股", "全等", "轴对称", "一次函数", "二次函数", "双曲线",
+)
+MATH_CONTEXT_TERMS = (
+    "数量", "计算", "关系", "图像", "数据", "单位", "距离", "速度", "时间", "价格", "成本", "性价比",
+    "长度", "宽度", "最大值", "最小值", "最优", "模型", "相似", "平移", "旋转",
+)
+MATH_SYMBOL_RE = re.compile(
+    r"(?:\d+(?:\.\d+)?\s*[+\-×÷*/=<>≤≥]\s*[A-Za-z\d(]|[A-Za-z]\s*=\s*[-+]?\d|"
+    r"\b(?:sin|cos|tan|sqrt)\b|\\(?:frac|sqrt|times|div)|[π√∠△])",
+    re.IGNORECASE,
+)
+MATH_CONTINUATION_RE = re.compile(
+    r"^(?:为什么|怎么算|如何算|继续|请继续|继续检查|再解释一下|这一步|上一步|上一题|这个呢|然后呢|哪里错了|"
+    r"请检查|帮我检查|明白了|谢谢)[？?！!。 ]*$"
+)
+
+
+def has_math_signal(text: str) -> bool:
+    compact = re.sub(r"\s+", "", text or "")
+    contextual = sum(term in compact for term in MATH_CONTEXT_TERMS)
+    return any(term in compact for term in MATH_TERMS) or contextual >= 2 or bool(MATH_SYMBOL_RE.search(text or ""))
+
+
+def is_math_question(text: str, history: list[dict] | None = None) -> bool:
+    if has_math_signal(text):
+        return True
+    clean = re.sub(r"\s+", "", text or "")
+    if not MATH_CONTINUATION_RE.fullmatch(clean):
+        return False
+    recent = " ".join(
+        str(item.get("content", item.get("question", item.get("reply", ""))))
+        for item in (history or [])[-6:] if isinstance(item, dict)
+    )
+    return has_math_signal(recent)
+
+
+def ensure_math_question(text: str, history: list[dict] | None = None) -> None:
+    if not is_math_question(text, history):
+        raise UpstreamServiceError(
+            "这里只支持初中数学相关问题，请把问题改写为包含数量关系、计算、图形、统计或数学建模的提问。",
+            HTTPStatus.UNPROCESSABLE_ENTITY,
+        )
+
+
 def validated_members(value: object) -> list[str]:
     if not isinstance(value, list) or not 1 <= len(value) <= len(ROLE_NAMES):
         raise ValueError(f"成员数量应为1—{len(ROLE_NAMES)}人")
@@ -255,7 +368,14 @@ def initialize_platform(username: str, teacher_password: str, recovery_code: str
          "teacher": False, "latest": "尚未保存", "issue": "", "progress": 0}
         for number in range(1, count + 1)
     ]
-    state_put("class", {"groupCount": count, "groups": summaries})
+    grade = grade_from_text(class_code)
+    if grade:
+        with database() as db:
+            db.execute("INSERT INTO settings(key,value) VALUES('class_grade',?)", (str(grade),))
+    class_state = {"groupCount": count, "groups": summaries}
+    if grade:
+        class_state["classGrade"] = grade
+    state_put("class", class_state)
     if SETUP_TOKEN_FILE.exists():
         SETUP_TOKEN_FILE.unlink()
 
@@ -682,7 +802,8 @@ def deepseek_hint(
     }
     system = (
         "你是服务于中国初中数学项目式学习小组的教学支架。必须依据学生当前尝试和历史提示生成有推进作用、但保留学生思考责任的反馈。"
-        f"当前严格执行{level}：{contracts[level]}"
+        + student_math_scope(state)
+        + f"当前严格执行{level}：{contracts[level]}"
         "不得重复历史提示；信息不足时先澄清，不得猜测。材料冲突、数学结论不可靠或需要教师判断时，在nextAction中写明请教师核验。"
         "回答必须体现苏格拉底式引导：诊断开头先具体肯定学生已经完成的有效工作，再指出一个可改进点；支架至少提出一个能让学生自己判断的追问；下一步给出一个可在当前材料上执行的动作，并保留学生作出数学判断的责任。"
         "diagnosis、guidance、nextAction三个字段都不少于80个中文字符，目标各100字左右，不能用空话凑字数。"
@@ -697,6 +818,7 @@ def deepseek_hint(
                 "学生尝试": item.get("done", ""), "支架": item.get("reply", ""),
             })
     user = {
+        "适用年级": student_grade(state) or "初中阶段",
         "项目": state.get("project", ""), "数学主题": config.get("mathTopic", ""),
         "课程目标": config.get("standard", ""), "当前阶段": state.get("currentStage", 1),
         "提示层级": level, "已完成": done, "卡点类型": issue_type, "具体卡点": issue,
@@ -775,6 +897,7 @@ def free_ai_context(state: dict, group: int) -> str:
     config = state.get("teacherConfig", {}) if isinstance(state.get("teacherConfig"), dict) else {}
     workspace = state.get("workspace", {}) if isinstance(state.get("workspace"), dict) else {}
     context = {
+        "班级": state.get("className", ""), "适用年级": student_grade(state) or "初中阶段",
         "项目": state.get("project", ""), "数学主题": config.get("mathTopic", ""),
         "课程目标": config.get("standard", ""), "最终成果": config.get("finalProduct", ""),
         "当前阶段": state.get("currentStage", 1), "小组": group, "共享工作区": workspace,
@@ -784,8 +907,9 @@ def free_ai_context(state: dict, group: int) -> str:
 
 def ark_free_messages(state: dict, group: int, prompt: str, history: list[dict]) -> list[dict]:
     system = (
-        "你是‘迈谱 Maple’学生小组自由工作区的数学与项目助手。"
-        "你的任务是帮助学生减少机械性整理，把更多时间留给小组协作和高阶思考。"
+        "你是‘迈谱 Maple’学生小组自由工作区的初中数学助手。"
+        + student_math_scope(state)
+        + "你的任务是帮助学生减少机械性整理，把更多时间留给小组协作和高阶思考。"
         "你可以解释概念、检查思路和书写数学表达，但不要替学生完成未经讨论的整个项目，"
         "不要伪造数据；缺少信息时明确列出需要补充的内容。数学表达式使用LaTeX，回答使用清晰的Markdown。"
         f"当前项目上下文：{free_ai_context(state, group)}"
@@ -1383,6 +1507,11 @@ class Handler(SimpleHTTPRequestHandler):
         if session["role"] == "teacher":
             class_state = state_get("class")
             class_state.update({key: incoming[key] for key in CLASS_KEYS - {"groups", "queue", "common"} if key in incoming})
+            resolved_grade = class_code_grade() or grade_from_text(class_state.get("className", ""))
+            if resolved_grade:
+                class_state["classGrade"] = resolved_grade
+            else:
+                class_state.pop("classGrade", None)
             incoming_groups = incoming.get("groups")
             if not class_state.get("groups") and isinstance(incoming_groups, list):
                 class_state["groups"] = incoming_groups
@@ -1444,6 +1573,7 @@ class Handler(SimpleHTTPRequestHandler):
         role = body.get("role")
         group_no = None
         teacher_id = None
+        login_grade = None
         with database() as db:
             if role == "teacher":
                 row = db.execute("SELECT id,username,password_hash FROM teachers WHERE username=?", (str(body.get("username", "")).strip(),)).fetchone()
@@ -1456,7 +1586,9 @@ class Handler(SimpleHTTPRequestHandler):
                     group_no = 0
                 class_hash = db.execute("SELECT value FROM settings WHERE key='class_code_hash'").fetchone()
                 group_row = db.execute("SELECT access_hash FROM groups WHERE group_no=?", (group_no,)).fetchone()
-                valid = bool(class_hash and group_row and password_ok(clean_code(str(body.get("classCode", ""))), class_hash["value"]) and password_ok(clean_code(str(body.get("groupCode", ""))), group_row["access_hash"]))
+                supplied_class_code = clean_code(str(body.get("classCode", "")))
+                valid = bool(class_hash and group_row and password_ok(supplied_class_code, class_hash["value"]) and password_ok(clean_code(str(body.get("groupCode", ""))), group_row["access_hash"]))
+                login_grade = grade_from_text(supplied_class_code) if valid else None
             else:
                 valid = False
             if not valid:
@@ -1468,6 +1600,8 @@ class Handler(SimpleHTTPRequestHandler):
             token = secrets.token_urlsafe(32)
             expires = int(time.time()) + SESSION_SECONDS
             db.execute("INSERT INTO sessions(token_hash,role,teacher_id,group_no,expires_at,created_at) VALUES(?,?,?,?,?,?)", (token_hash(token), role, teacher_id, group_no, expires, utc_now()))
+        if role == "student" and login_grade:
+            persist_class_grade(f"{login_grade}年级")
         with LOGIN_LOCK:
             LOGIN_FAILURES.pop(client, None)
         secure = "; Secure" if self.secure_cookie_enabled() else ""
@@ -1511,6 +1645,7 @@ class Handler(SimpleHTTPRequestHandler):
     def update_access(self, body: dict, session: dict) -> None:
         action = str(body.get("action", ""))
         current_password = str(body.get("currentPassword", ""))
+        updated_class_code = None
         with database() as db:
             teacher = db.execute(
                 "SELECT username,password_hash FROM teachers WHERE id=?",
@@ -1545,6 +1680,7 @@ class Handler(SimpleHTTPRequestHandler):
                 db.execute("UPDATE settings SET value=? WHERE key='class_code_hash'", (password_hash(code),))
                 db.execute("DELETE FROM sessions WHERE role='student'")
                 logout_role = "student"
+                updated_class_code = code
             elif action == "group_code":
                 try:
                     group = int(body.get("groupNo"))
@@ -1586,6 +1722,8 @@ class Handler(SimpleHTTPRequestHandler):
                 detail = "teacher_invite"
             else:
                 raise ValueError("不支持的管理员操作")
+        if updated_class_code is not None:
+            persist_class_grade(updated_class_code)
         record_event("teacher", None, f"admin_{action}", None, detail)
         self.json_response({"ok": True, "logoutRole": logout_role, **({"inviteCode": invite_code} if action == "teacher_invite" else {})})
 
@@ -1768,6 +1906,7 @@ class Handler(SimpleHTTPRequestHandler):
             conversation = next(
                 (item for item in workspace["conversations"] if item.get("id") == workspace["activeConversationId"]), None,
             )
+        ensure_math_question(prompt, conversation.get("messages", []) if conversation else [])
         if conversation is None:
             conversation = {
                 "id": secrets.token_urlsafe(8), "title": prompt[:20],
@@ -1967,6 +2106,7 @@ class Handler(SimpleHTTPRequestHandler):
             if usage[next_level] >= policy[next_level]:
                 raise ValueError(f"{next_level}额度已用完，请先联系教师调整")
             attempt = done
+            ensure_math_question(f"{attempt}\n{issue}", messages)
             thread["type"] = issue_type
             thread["currentLevel"] = next_level_no
             thread.setdefault("transitions", []).append({"time": utc_now(), "from": f"L{level_no}", "to": next_level, "attempt": attempt})
@@ -2049,6 +2189,8 @@ class Handler(SimpleHTTPRequestHandler):
             return
         if not done or (not issue and not thread):
             raise ValueError("请先填写已有进展和具体卡点")
+        existing_messages = thread.get("messages", []) if thread and isinstance(thread.get("messages"), list) else []
+        ensure_math_question(f"{done}\n{issue}", existing_messages)
         if not thread:
             thread = {
                 "id": secrets.token_hex(8), "status": "active", "currentLevel": 1,

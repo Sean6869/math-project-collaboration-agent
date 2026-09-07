@@ -50,6 +50,38 @@ class LegacyMigrationTest(unittest.TestCase):
         app.DATA_DIR, app.UPLOAD_DIR, app.DB_PATH, app.SETUP_TOKEN_FILE = original
 
 
+class GradeRecognitionTest(unittest.TestCase):
+    def test_platform_initialization_persists_only_grade_from_class_code(self):
+        original = (app.DATA_DIR, app.UPLOAD_DIR, app.DB_PATH, app.SETUP_TOKEN_FILE)
+        with tempfile.TemporaryDirectory() as directory:
+            try:
+                app.DATA_DIR = Path(directory)
+                app.UPLOAD_DIR = app.DATA_DIR / "uploads"
+                app.DB_PATH = app.DATA_DIR / "grade.db"
+                app.SETUP_TOKEN_FILE = app.DATA_DIR / "setup-token.txt"
+                with app.database() as db:
+                    db.executescript("""
+                        CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+                        CREATE TABLE teachers (
+                          id INTEGER PRIMARY KEY AUTOINCREMENT, username TEXT UNIQUE NOT NULL,
+                          password_hash TEXT NOT NULL, created_at TEXT NOT NULL, is_admin INTEGER NOT NULL DEFAULT 0
+                        );
+                        CREATE TABLE groups (group_no INTEGER PRIMARY KEY, access_hash TEXT NOT NULL);
+                        CREATE TABLE states (scope TEXT PRIMARY KEY, data TEXT NOT NULL, updated_at TEXT NOT NULL);
+                    """)
+                app.initialize_platform(
+                    "grade_teacher", "GradeTeacher#2026", "GRADE-RECOVERY-CODE-2026",
+                    "2026八年级A班", "GRADE01", 1,
+                )
+                self.assertEqual(app.class_code_grade(), 8)
+                self.assertEqual(app.state_get("class")["classGrade"], 8)
+                with app.database() as db:
+                    settings = {row["key"]: row["value"] for row in db.execute("SELECT key,value FROM settings")}
+                self.assertNotIn("2026八年级A班", settings.values())
+            finally:
+                app.DATA_DIR, app.UPLOAD_DIR, app.DB_PATH, app.SETUP_TOKEN_FILE = original
+
+
 class PlatformTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -131,7 +163,7 @@ class PlatformTest(unittest.TestCase):
         self.assertNotIn("project", blank["state"])
         self.assertEqual(blank["state"]["groupCount"], 3)
         state = {
-            "project": "集成测试项目", "className": "测试班级", "currentStage": 2,
+            "project": "集成测试项目", "className": "八年级测试班", "currentStage": 2,
             "aiOpen": True, "hintQuota": 3, "maxHintLevel": 3,
             "teacherConfig": {"mathTopic": "几何测量", "standard": "建立并检验模型", "staticHints": ["先画出已知关系。"]},
             "workspace": {"problem": ""}, "groupId": 1,
@@ -158,6 +190,16 @@ class PlatformTest(unittest.TestCase):
         status, data = self.json_request(student, "/api/state")
         self.assertEqual(data["state"]["currentStage"], 2, "小组刷新不能被默认阶段1覆盖")
         self.assertEqual(data["state"]["project"], "集成测试项目")
+        self.assertEqual(data["state"]["classGrade"], 8)
+        with mock.patch.object(app, "deepseek_hint") as upstream:
+            with self.assertRaises(urllib.error.HTTPError) as off_topic:
+                self.json_request(
+                    student, "/api/hints", "POST",
+                    {"action": "ask", "newThread": True, "done": "我在玩游戏", "type": "其他", "issue": "英雄联盟怎么出装"},
+                )
+        self.assertEqual(off_topic.exception.code, 422)
+        self.assertIn("只支持初中数学", off_topic.exception.read().decode())
+        upstream.assert_not_called()
         status, hint = self.json_request(
             student, "/api/hints", "POST",
             {"done": "已经画出草图", "type": "变量关系", "issue": "不知道如何表示两条边的关系"},
@@ -296,14 +338,18 @@ class PlatformTest(unittest.TestCase):
         reply = ("诊断：当前问题需要先区分对象。\n支架：请只核对这个主题中的条件。\n下一步：记录一次独立尝试。", 20, "ok")
         thread_ids = []
         with mock.patch.object(app, "deepseek_hint", return_value=reply):
-            for topic, issue in (("数据处理", "XY"), ("计算核验", "12"), ("表达与解释", "AAA")):
+            for topic, issue in (
+                ("数据处理", "如何用平均数比较XY两组数据"),
+                ("计算核验", "12÷3的计算结果是否正确"),
+                ("表达与解释", "如何解释一次函数图像的斜率"),
+            ):
                 status, result = self.json_request(
                     student, "/api/hints", "POST",
                     {"action": "ask", "newThread": True, "done": f"已尝试{issue}", "type": topic, "issue": issue},
                 )
                 self.assertEqual(status, 200)
                 thread_ids.append(result["threadId"])
-                if issue == "XY":
+                if issue.startswith("如何用平均数"):
                     status, escalated = self.json_request(
                         student, "/api/hints", "POST",
                         {"action": "teacher", "threadId": result["threadId"], "issue": issue, "type": topic},
@@ -317,8 +363,8 @@ class PlatformTest(unittest.TestCase):
         threads = {item["id"]: item for item in state["state"]["helpThreads"]}
         self.assertEqual(len(threads), 3)
         self.assertEqual(threads[thread_ids[0]]["status"], "teacher")
-        self.assertEqual(threads[thread_ids[1]]["messages"][0]["question"], "12")
-        self.assertEqual(threads[thread_ids[2]]["messages"][0]["question"], "AAA")
+        self.assertEqual(threads[thread_ids[1]]["messages"][0]["question"], "12÷3的计算结果是否正确")
+        self.assertEqual(threads[thread_ids[2]]["messages"][0]["question"], "如何解释一次函数图像的斜率")
         self.assertEqual(state["state"]["activeHelpThread"]["id"], thread_ids[2])
         self.assertTrue(all(len(threads[thread_id]["messages"]) == 1 for thread_id in thread_ids))
 
@@ -336,6 +382,14 @@ class PlatformTest(unittest.TestCase):
         }), "L2")
         self.assertIsNotNone(structured)
         self.assertIsNone(app.parse_model_hint('{"diagnosis":"太短","guidance":"太短","nextAction":"太短"}', "L2"))
+        self.assertEqual(app.grade_from_text("2026八年级A班"), 8)
+        self.assertEqual(app.grade_from_text("G9-MATH"), 9)
+        self.assertIsNone(app.grade_from_text("CLASS2026"))
+        self.assertIn("八年级学生", app.student_math_scope({"classGrade": 8}))
+        self.assertIn("八年级学生", app.ark_free_messages({"classGrade": 8}, 1, "一次函数", [])[0]["content"])
+        self.assertFalse(app.is_math_question("英雄联盟怎么出装"))
+        self.assertTrue(app.is_math_question("比较两件装备的价格和性价比"))
+        self.assertTrue(app.is_math_question("为什么？", [{"content": "先解一元一次方程"}]))
 
     def test_login_portal_uses_one_selected_role_and_form_submit(self):
         script = (ROOT / "assets" / "app.js").read_text(encoding="utf-8")
@@ -454,6 +508,23 @@ class PlatformTest(unittest.TestCase):
             {"role": "student", "classCode": "CLASS2026", "groupId": 2, "groupCode": "TEAM02"},
         )
         self.assertEqual(status, 200)
+        with mock.patch.object(app.urllib.request, "urlopen") as upstream:
+            with self.assertRaises(urllib.error.HTTPError) as off_topic:
+                self.json_request(
+                    student, "/api/ai/chat", "POST",
+                    {"prompt": "英雄联盟怎么出装", "newConversation": True},
+                )
+        self.assertEqual(off_topic.exception.code, 422)
+        self.assertIn("只支持初中数学", off_topic.exception.read().decode())
+        upstream.assert_not_called()
+        with mock.patch.object(app.urllib.request, "urlopen") as upstream:
+            with self.assertRaises(urllib.error.HTTPError) as stream_off_topic:
+                self.json_request(
+                    student, "/api/ai/chat/stream", "POST",
+                    {"prompt": "英雄联盟怎么出装", "newConversation": True},
+                )
+        self.assertEqual(stream_off_topic.exception.code, 422)
+        upstream.assert_not_called()
         with self.assertRaises(urllib.error.HTTPError) as context:
             self.json_request(
                 student, "/api/ai/chat", "POST",
@@ -501,6 +572,7 @@ class PlatformTest(unittest.TestCase):
             self.assertEqual(text_body["model"], app.ARK_TEXT_MODEL)
             self.assertEqual(text_body["speed"], app.ARK_TEXT_SPEED)
             self.assertEqual(text_body["messages"][0]["role"], "system")
+            self.assertIn("只处理与初中数学直接相关", text_body["messages"][0]["content"])
             self.assertEqual(text_body["messages"][-1]["content"], "请检查一元一次不等式")
             conversation_id = text_result["conversationId"]
 
