@@ -14,6 +14,18 @@ function installFavicon(){
  let icon=document.querySelector('link[rel="icon"]');
  if(!icon){icon=document.createElement('link');icon.rel='icon';document.head.appendChild(icon)}
  icon.type='image/png';icon.href=brandAsset(BRAND.mark);
+ const theme=window.matchMedia('(prefers-color-scheme: dark)');
+ const logo=new Image();
+ logo.onload=()=>{
+  const canvas=document.createElement('canvas');canvas.width=64;canvas.height=64;
+  const context=canvas.getContext('2d');if(!context)return;
+  context.drawImage(logo,0,0,64,64);
+  context.globalCompositeOperation='source-in';context.fillStyle='#ffffff';context.fillRect(0,0,64,64);
+  const whiteLogo=canvas.toDataURL('image/png');
+  const update=()=>{icon.href=theme.matches?whiteLogo:brandAsset(BRAND.mark)};
+  update();theme.addEventListener('change',update);
+ };
+ logo.src=brandAsset(BRAND.mark);
 }
 const rolesFor=(roles,count)=>[...(Array.isArray(roles)?roles:[]).filter((x,i,a)=>ROLE_NAMES.includes(x)&&a.indexOf(x)===i),...ROLE_NAMES].filter((x,i,a)=>a.indexOf(x)===i).slice(0,count);
 const memberRows=(members,roles,key,readonly=false)=>members.map((m,i)=>`<tr><td><div class="field"><input data-${key}="${i}" value="${esc(m)}" placeholder="成员${i+1}" ${readonly?'readonly':''}></div></td><td><b>${roles[i]}</b></td><td>${ROLE_DUTIES[ROLE_NAMES.indexOf(roles[i])]||'共同完成数学任务'}</td></tr>`).join('');
