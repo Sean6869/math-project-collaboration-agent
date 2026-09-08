@@ -490,9 +490,17 @@ def state_get(scope: str) -> dict:
         return {}
 
 
-def state_put(scope: str, value: dict) -> None:
-    payload = json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+def state_put(scope: str, value: dict, preserve_roles: bool = False) -> None:
     with database() as db:
+        if preserve_roles:
+            db.execute("BEGIN IMMEDIATE")
+            row = db.execute("SELECT data FROM states WHERE scope=?", (scope,)).fetchone()
+            saved = json.loads(row[0]) if row else {}
+            for key in ("roles", "roleRound", "roleHistory"):
+                value.pop(key, None)
+                if key in saved:
+                    value[key] = saved[key]
+        payload = json.dumps(value, ensure_ascii=False, separators=(",", ":"))
         db.execute(
             "INSERT INTO states(scope,data,updated_at) VALUES(?,?,?) "
             "ON CONFLICT(scope) DO UPDATE SET data=excluded.data,updated_at=excluded.updated_at",
@@ -579,6 +587,19 @@ def group_completion(group_state: dict) -> tuple[int, int]:
     return min(100, max(partial, submitted_count * 20)), submitted_count
 
 
+def remember_roles(state: dict) -> None:
+    members = state.get("members", [])
+    roles = roles_for_members(state.get("roles"), len(members))
+    history = state.setdefault("roleHistory", {})
+    for i, name in enumerate(members):
+        if name not in history:
+            # Older versions rotated the whole list right once per round.
+            rounds = min(int(state.get("roleRound", 1)), len(roles))
+            history[name] = [roles[(i + offset) % len(roles)] for offset in range(rounds)]
+        if roles[i] not in history[name]:
+            history[name].append(roles[i])
+
+
 def dynamic_group_summaries(class_state: dict) -> list[dict]:
     stored = class_state.get("groups", [])
     stored = stored if isinstance(stored, list) else []
@@ -596,6 +617,8 @@ def dynamic_group_summaries(class_state: dict) -> list[dict]:
         status = "等待教师" if waiting else "已完成" if submitted_count == 5 else "持续推进" if active else "准备中"
         summaries.append({
             "id": number,
+            "roleRound": int(group_state.get("roleRound", 1)),
+            "membersLocked": bool(group_state.get("membersLocked")),
             "stage": int(group_state.get("currentStage", class_state.get("currentStage", 1))),
             "submitted": submitted_count,
             "currentSubmitted": bool(
@@ -1407,6 +1430,10 @@ class Handler(SimpleHTTPRequestHandler):
                 session = self.require_session()
                 if session:
                     self.update_group_members(self.read_json(), session)
+            elif route == "/api/roles/rotate":
+                session = self.require_session("teacher")
+                if session:
+                    self.rotate_roles(self.read_json(), session)
             elif route == "/api/logout":
                 self.logout()
             elif route == "/api/hints":
@@ -1480,13 +1507,8 @@ class Handler(SimpleHTTPRequestHandler):
             except (TypeError, ValueError):
                 self.json_response({"error": "角色轮次必须是整数"}, HTTPStatus.BAD_REQUEST)
                 return
-            if incoming_roles != current_roles:
-                rotated = current_roles[-1:] + current_roles[:-1]
-                if not group_state.get("membersLocked") or incoming_roles != rotated or incoming_round != current_round + 1:
-                    self.json_response({"error": "成员角色只能按轮次整体轮换"}, HTTPStatus.CONFLICT)
-                    return
-            elif incoming_round != current_round:
-                self.json_response({"error": "角色轮次与当前分工不一致"}, HTTPStatus.CONFLICT)
+            if incoming_roles != current_roles or incoming_round != current_round:
+                self.json_response({"error": "角色由教师统一轮换，请刷新获取最新分工"}, HTTPStatus.CONFLICT)
                 return
         if session["role"] == "teacher" and "hintPolicy" in incoming:
             raw_policy = incoming["hintPolicy"]
@@ -1507,7 +1529,7 @@ class Handler(SimpleHTTPRequestHandler):
             incoming["hintPolicy"] = checked_policy
         group_state.update({key: incoming[key] for key in GROUP_KEYS if key in incoming})
         group_state["groupId"] = group
-        state_put(f"group:{group}", group_state)
+        state_put(f"group:{group}", group_state, preserve_roles=True)
         if session["role"] == "teacher":
             class_state = state_get("class")
             class_state.update({key: incoming[key] for key in CLASS_KEYS - {"groups", "queue", "common"} if key in incoming})
@@ -1795,6 +1817,52 @@ class Handler(SimpleHTTPRequestHandler):
         record_event("teacher", None, "group_count_changed", None, f"{old_count}->{count};teacher={session.get('username', '')}")
         self.json_response({"ok": True, "groupCount": count, "addedCodes": added_codes})
 
+    def rotate_roles(self, body: dict, session: dict) -> None:
+        expected = body.get("rounds")
+        if not isinstance(expected, dict) or not expected:
+            raise ValueError("请刷新课堂页面后发起轮换")
+        results = []
+        with database() as db:
+            db.execute("BEGIN IMMEDIATE")
+            groups = [row[0] for row in db.execute("SELECT group_no FROM groups")]
+            for group in groups:
+                row = db.execute("SELECT data FROM states WHERE scope=?", (f"group:{group}",)).fetchone()
+                state = json.loads(row[0]) if row else {}
+                if not state.get("membersLocked"):
+                    continue
+                current = int(state.get("roleRound", 1))
+                if expected.get(str(group)) != current:
+                    self.json_response({"error": "分工已变化，请刷新后核对；本次未重复轮换"}, 409)
+                    return
+                results.append((group, state))
+            if not results:
+                raise ValueError("尚无已锁定成员的小组")
+            for group, state in results:
+                remember_roles(state)
+                roles = roles_for_members(state.get("roles"), len(state["members"]))
+                choices = [[role for role in roles if role not in state["roleHistory"][name]] for name in state["members"]]
+                for options in choices:
+                    secrets.SystemRandom().shuffle(options)
+                assigned = {}
+                def match(member, seen):
+                    for role in choices[member]:
+                        if role in seen:
+                            continue
+                        seen.add(role)
+                        if role not in assigned or match(assigned[role], seen):
+                            assigned[role] = member
+                            return True
+                    return False
+                if not all(match(i, set()) for i in range(len(roles))):
+                    raise ValueError(f"第{group}组已无全员不重复的角色分配，本次所有小组均未轮换")
+                state["roles"] = [next(role for role, member in assigned.items() if member == i) for i in range(len(roles))]
+                state["roleRound"] = int(state.get("roleRound", 1)) + 1
+                remember_roles(state)
+            for group, state in results:
+                db.execute("UPDATE states SET data=?,updated_at=? WHERE scope=?", (json.dumps(state, ensure_ascii=False), utc_now(), f"group:{group}"))
+        record_event("teacher", None, "role_rotate", None, f"groups={[group for group, _ in results]}")
+        self.json_response({"ok": True, "groups": [group for group, _ in results]})
+
     def update_group_members(self, body: dict, session: dict) -> None:
         action = str(body.get("action", "submit"))
         count = group_count()
@@ -1834,6 +1902,7 @@ class Handler(SimpleHTTPRequestHandler):
         else:
             members = validated_members(body.get("members"))
             old_members = group_state.get("members", [])
+            remember_roles(group_state)
             if members != old_members:
                 group_state["firstThoughts"] = {}
             group_state["members"] = members
@@ -1843,6 +1912,7 @@ class Handler(SimpleHTTPRequestHandler):
             else:
                 group_state["roles"] = roles_for_members(group_state.get("roles"), len(members))
 
+        remember_roles(group_state)
         group_state["membersLocked"] = action == "submit"
         state_put(f"group:{group}", group_state)
         self.sync_group_summary(group, group_state)

@@ -757,9 +757,29 @@ class PlatformTest(unittest.TestCase):
         locked_state["members"] = first_members
         locked_state["roles"] = locked_state["roles"][-1:] + locked_state["roles"][:-1]
         locked_state["roleRound"] = locked_state.get("roleRound", 1) + 1
-        status, rotated = self.json_request(student, "/api/state", "PUT", {"state": locked_state})
-        self.assertEqual(status, 200)
-        self.assertTrue(rotated["ok"])
+        with self.assertRaises(urllib.error.HTTPError) as rotation:
+            self.json_request(student, "/api/state", "PUT", {"state": locked_state})
+        self.assertEqual(rotation.exception.code, 409)
+        with self.assertRaises(urllib.error.HTTPError) as forbidden:
+            self.json_request(student, "/api/roles/rotate", "POST", {"rounds": {"3": 1}})
+        self.assertEqual(forbidden.exception.code, 403)
+        seen = [{role} for role in result["roles"]]
+        for round_no in range(1, 5):
+            status, rotated = self.json_request(teacher, "/api/roles/rotate", "POST", {"rounds": {"3": round_no}})
+            self.assertEqual(status, 200)
+            with self.assertRaises(urllib.error.HTTPError) as duplicate:
+                self.json_request(teacher, "/api/roles/rotate", "POST", {"rounds": {"3": round_no}})
+            self.assertEqual(duplicate.exception.code, 409)
+            state = self.json_request(student, "/api/state")[1]["state"]
+            self.assertEqual(state["roleRound"], round_no + 1)
+            self.assertEqual(len(set(state["roles"])), 5)
+            for i, role in enumerate(state["roles"]):
+                self.assertNotIn(role, seen[i])
+                seen[i].add(role)
+        with self.assertRaises(urllib.error.HTTPError) as exhausted:
+            self.json_request(teacher, "/api/roles/rotate", "POST", {"rounds": {"3": 5}})
+        self.assertEqual(exhausted.exception.code, 400)
+        self.assertEqual(self.json_request(student, "/api/state")[1]["state"]["roleRound"], 5)
         with self.assertRaises(urllib.error.HTTPError) as locked:
             self.json_request(
                 student, "/api/group/members", "POST",
