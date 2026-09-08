@@ -639,10 +639,18 @@ def dynamic_group_summaries(class_state: dict) -> list[dict]:
     return summaries
 
 
+def current_broadcast() -> dict:
+    saved = state_get("broadcast")
+    if saved:
+        return saved
+    return {"broadcast": state_get("class").get("broadcast", ""), "broadcastType": "教师广播"}
+
+
 def merged_state(group_no: int) -> dict:
     value = state_get("class")
     group_state = state_get(f"group:{group_no}")
     value.update(group_state)
+    value.update(current_broadcast())
     # 课堂阶段、暂停状态和 AI 开关由教师端统一控制；小组初始状态中的
     # currentStage=1 不能覆盖教师已经开放的阶段，否则学生刷新后会被误判回阶段1。
     class_state = state_get("class")
@@ -1270,6 +1278,10 @@ class Handler(SimpleHTTPRequestHandler):
             session = self.current_session()
             self.json_response({"initialized": is_initialized(), "groupCount": group_count(), "authenticated": bool(session), **(session or {})})
             return
+        if route.path == "/api/broadcast":
+            if self.require_session():
+                self.json_response(current_broadcast())
+            return
         if route.path == "/api/runtime":
             if not self.require_session("teacher"):
                 return
@@ -1426,6 +1438,20 @@ class Handler(SimpleHTTPRequestHandler):
                 session = self.require_session("teacher")
                 if session:
                     self.configure_groups(self.read_json(), session)
+            elif route == "/api/broadcast":
+                session = self.require_session("teacher")
+                if session:
+                    body = self.read_json()
+                    content = body.get("broadcast")
+                    kind = body.get("broadcastType", "教师广播")
+                    if not isinstance(content, str) or len(content) > 2000:
+                        raise ValueError("广播内容须为文本，最多2000字")
+                    if kind not in ("教师广播", "共性数学澄清", "阶段提醒", "时间提醒", "成果要求"):
+                        raise ValueError("广播类型无效")
+                    message = {"broadcast": content.strip(), "broadcastType": kind, "broadcastId": secrets.token_hex(12)}
+                    state_put("broadcast", message)
+                    record_event("teacher", None, "broadcast" if message["broadcast"] else "broadcast_clear", None, message["broadcast"])
+                    self.json_response(message)
             elif route == "/api/group/members":
                 session = self.require_session()
                 if session:

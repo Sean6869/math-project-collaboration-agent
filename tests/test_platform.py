@@ -403,6 +403,30 @@ class PlatformTest(unittest.TestCase):
         self.assertIn('.auth-card:has(.auth-role-switch)', styles)
         self.assertIn('.auth-card .toolbar{justify-content:flex-end}', styles)
 
+    def test_broadcast_publish_permissions_and_stale_state(self):
+        teacher, student = self.client(), self.client()
+        self.json_request(teacher, "/api/login", "POST", {"role": "teacher", "username": "test_teacher", "password": "StrongTeacher#2026"})
+        self.json_request(student, "/api/login", "POST", {"role": "student", "classCode": "CLASS2026", "groupId": 1, "groupCode": "TEAM01"})
+        for client, method, expected in [(self.client(), "GET", 401), (student, "POST", 403)]:
+            with self.assertRaises(urllib.error.HTTPError) as denied:
+                self.json_request(client, "/api/broadcast", method, {"broadcast": "越权"} if method == "POST" else None)
+            self.assertEqual(denied.exception.code, expected)
+        message = {"broadcast": "请核对数学条件\n<x>不要执行HTML</x>", "broadcastType": "阶段提醒"}
+        _, published = self.json_request(teacher, "/api/broadcast", "POST", message)
+        self.assertEqual(self.json_request(student, "/api/broadcast")[1], published)
+        self.json_request(teacher, "/api/state", "PUT", {"state": {"broadcast": "旧页面内容"}})
+        self.assertEqual(self.json_request(student, "/api/state")[1]["state"]["broadcast"], message["broadcast"])
+        with self.assertRaises(urllib.error.HTTPError) as invalid:
+            self.json_request(teacher, "/api/broadcast", "POST", {"broadcast": "x" * 2001})
+        self.assertEqual(invalid.exception.code, 400)
+        self.assertEqual(self.json_request(student, "/api/broadcast")[1], published)
+        self.json_request(teacher, "/api/broadcast", "POST", {"broadcast": ""})
+        self.assertEqual(self.json_request(student, "/api/broadcast")[1]["broadcast"], "")
+        self.assertEqual(self.json_request(student, "/api/state")[1]["state"]["broadcast"], "")
+
+    def test_broadcast_frontend_sync_and_send_failure(self):
+        subprocess.run(["node", str(ROOT / "tests" / "broadcast_ui.cjs")], cwd=ROOT, check=True)
+
     def test_help_actions_and_recent_button_have_stable_layout(self):
         script = (ROOT / "assets" / "app.js").read_text(encoding="utf-8")
         styles = (ROOT / "assets" / "styles.css").read_text(encoding="utf-8")

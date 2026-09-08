@@ -1,4 +1,8 @@
 @charset "UTF-8";
+.broadcast-banner{padding:16px 20px;margin-bottom:20px;border:1px solid #91caff;border-left:4px solid #1677ff;border-radius:8px;background:#eaf3ff;color:#0d2842;overflow-wrap:anywhere}
+.broadcast-banner[hidden]{display:none}
+.broadcast-banner strong{display:block;margin-bottom:6px}
+.broadcast-banner [data-broadcast-text]{white-space:pre-wrap}
 :root{--ink:#0d2842;--ink2:#163a59;--muted:#63758a;--line:#e5e7eb;--bg:#f5f7fa;--card:#fff;--blue:#1677ff;--blue2:#4096ff;--teal:#168f79;--green:#2c876b;--orange:#c2761c;--red:#b54d4d;--purple:#6b63a8;--soft-blue:#eaf3ff;--soft-green:#eaf7f2;--soft-orange:#fff5e6;--soft-red:#fceded;--shadow:0 1px 2px rgba(16,24,40,.04),0 4px 14px rgba(16,24,40,.035);--radius:8px;--sidebar:224px}
 *{box-sizing:border-box}html,body{margin:0;min-height:100%;font:14px/1.5 "Microsoft YaHei","PingFang SC","Noto Sans SC",Arial,sans-serif;background:var(--bg);color:var(--ink)}a{color:inherit;text-decoration:none}button,input,textarea,select{color:inherit;font:inherit}button{cursor:pointer}
 .topbar{position:sticky;top:0;z-index:60;display:flex;align-items:center;justify-content:space-between;height:64px;padding:0 24px;background:#fff;border-bottom:1px solid var(--line);box-shadow:0 1px 0 rgba(5,22,38,.04)}
