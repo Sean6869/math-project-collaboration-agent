@@ -19,7 +19,7 @@ const context = {
   setRoot() {}, shell() {}, head() {}, btn() {}, toast: message => notices.push(message)
 };
 vm.createContext(context);
-vm.runInContext(source.slice(source.indexOf('function broadcastActions('), source.indexOf('function renderReport(')), context);
+vm.runInContext(source.slice(source.indexOf('function commonIssues('), source.indexOf('function renderReport(')), context);
 (async () => {
   response = {broadcast: '<img onerror=bad>', broadcastType: '阶段提醒'};
   await context.syncBroadcast();

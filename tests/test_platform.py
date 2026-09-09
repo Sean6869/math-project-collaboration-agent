@@ -437,6 +437,12 @@ class PlatformTest(unittest.TestCase):
 
         app.state_put("broadcast", {"broadcast": "旧广播", "broadcastType": "共性数学澄清"})
         self.assertEqual(self.json_request(student, "/api/broadcast")[1]["broadcastType"], "统一答疑")
+        script = (ROOT / "assets" / "app.js").read_text(encoding="utf-8")
+        self.assertIn('href="broadcast.html">统一答疑</a>', script)
+        self.assertNotIn("准备共性澄清", script)
+        self.assertIn("function commonIssues(s)", script)
+        self.assertIn("</div>`+commonIssues(s)", script)
+        self.assertNotIn('href="common.html">查看共性问题</a>', script)
 
     def test_broadcast_frontend_sync_and_send_failure(self):
         subprocess.run(["node", str(ROOT / "tests" / "broadcast_ui.cjs")], cwd=ROOT, check=True)
