@@ -1,5 +1,5 @@
 @charset "UTF-8";
-.broadcast-banner{padding:16px 20px;margin-bottom:20px;border:1px solid #91caff;border-left:4px solid #1677ff;border-radius:8px;background:#eaf3ff;color:#0d2842;overflow-wrap:anywhere}
+.broadcast-banner{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:16px 20px;margin-bottom:20px;border:1px solid #91caff;border-left:4px solid #1677ff;border-radius:8px;background:#eaf3ff;color:#0d2842;overflow-wrap:anywhere}
 .broadcast-banner[hidden]{display:none}
 .broadcast-banner strong{display:block;margin-bottom:6px}
 .broadcast-banner [data-broadcast-text]{white-space:pre-wrap}

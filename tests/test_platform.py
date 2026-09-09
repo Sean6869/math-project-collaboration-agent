@@ -413,13 +413,24 @@ class PlatformTest(unittest.TestCase):
             self.assertEqual(denied.exception.code, expected)
         message = {"broadcast": "请核对数学条件\n<x>不要执行HTML</x>", "broadcastType": "阶段提醒"}
         _, published = self.json_request(teacher, "/api/broadcast", "POST", message)
-        self.assertEqual(self.json_request(student, "/api/broadcast")[1], published)
+        student_message = self.json_request(student, "/api/broadcast")[1]
+        self.assertEqual(student_message["broadcast"], message["broadcast"])
+        self.assertFalse(student_message["broadcastViewed"])
+        self.assertEqual(published["seenGroups"], [])
+        self.assertEqual(published["unseenGroups"], [1, 2, 3])
+        _, viewed = self.json_request(student, "/api/broadcast/ack", "POST", {"broadcastId": published["broadcastId"]})
+        self.assertTrue(viewed["broadcastViewed"])
+        self.assertEqual(viewed["seenGroups"], [1])
+        teacher_message = self.json_request(teacher, "/api/broadcast")[1]
+        self.assertEqual(teacher_message["seenGroups"], [1])
+        self.assertEqual(teacher_message["unseenGroups"], [2, 3])
+        self.json_request(student, "/api/broadcast/ack", "POST", {"broadcastId": published["broadcastId"]})
         self.json_request(teacher, "/api/state", "PUT", {"state": {"broadcast": "旧页面内容"}})
         self.assertEqual(self.json_request(student, "/api/state")[1]["state"]["broadcast"], message["broadcast"])
         with self.assertRaises(urllib.error.HTTPError) as invalid:
             self.json_request(teacher, "/api/broadcast", "POST", {"broadcast": "x" * 2001})
         self.assertEqual(invalid.exception.code, 400)
-        self.assertEqual(self.json_request(student, "/api/broadcast")[1], published)
+        self.assertEqual(self.json_request(student, "/api/broadcast")[1]["broadcast"], message["broadcast"])
         self.json_request(teacher, "/api/broadcast", "POST", {"broadcast": ""})
         self.assertEqual(self.json_request(student, "/api/broadcast")[1]["broadcast"], "")
         self.assertEqual(self.json_request(student, "/api/state")[1]["state"]["broadcast"], "")
@@ -468,13 +479,43 @@ class PlatformTest(unittest.TestCase):
         script = (ROOT / "assets" / "app.js").read_text(encoding="utf-8")
         for label in ("课堂首页", "项目准备", "任务理解", "方案建模", "协作探究", "成果反思"):
             self.assertEqual(len(label), 4)
-            self.assertIn(label, script if label in ("课堂首页", "方案建模") else (ROOT / "assets" / "data.js").read_text(encoding="utf-8"))
+            self.assertIn(label, script if label == "课堂首页" else (ROOT / "assets" / "data.js").read_text(encoding="utf-8"))
+        self.assertNotIn("方案与建模", (ROOT / "assets" / "data.js").read_text(encoding="utf-8"))
         for label in ("共享工作区", "自由工作区", "成员与角色", "提示与求助", "过程与回看"):
             self.assertEqual(len(label), 5)
             self.assertIn(label, script)
         self.assertIn("数据使用说明", script)
         self.assertIn("返回登录入口", script)
         self.assertIn("head('小组协作与角色'", script)
+
+    def test_teacher_navigation_uses_consistent_titles(self):
+        script = (ROOT / "assets" / "app.js").read_text(encoding="utf-8")
+        for label in ("课堂教学总览", "项目支架配置", "课堂阶段控制", "小组动态监测", "教师升级队列", "平台消息广播", "学习成果评价", "课后教学总结"):
+            self.assertEqual(len(label), 6)
+            self.assertIn(label, script)
+        self.assertIn("课堂数据导出", script)
+        self.assertIn("运行与数据治理", script)
+        self.assertIn("开始轮换", script)
+        self.assertNotIn("全班随机轮换一次", script)
+        self.assertNotIn("固定产品边界", script)
+
+    def test_stage_completion_requires_real_student_outputs(self):
+        state = {"project": "测试项目", "teacherConfig": {"standard": "目标", "finalProduct": "成果"}}
+        self.assertEqual(app.stage_task_status(state)[0], [False, False, False, False])
+        self.assertFalse(any(app.validated_stage_submissions(state).values()))
+        state["members"] = ["甲", "乙"]
+        state["membersLocked"] = True
+        state["preparationChecks"] = {"goal": True, "materials": True, "rules": True}
+        state["stageSubmitted"] = {1: True}
+        self.assertTrue(app.validated_stage_submissions(state)[1])
+
+        student = self.client()
+        self.json_request(student, "/api/login", "POST", {"role": "student", "classCode": "CLASS2026", "groupId": 1, "groupCode": "TEAM01"})
+        current = self.json_request(student, "/api/state")[1]["state"]
+        current["stageSubmitted"]["1"] = True
+        with self.assertRaises(urllib.error.HTTPError) as incomplete:
+            self.json_request(student, "/api/state", "PUT", {"state": current})
+        self.assertEqual(incomplete.exception.code, 409)
 
     def test_stage_pages_use_compact_strip_but_dashboard_keeps_details(self):
         script = (ROOT / "assets" / "app.js").read_text(encoding="utf-8")

@@ -152,6 +152,24 @@ paths:
       responses:
         '200': {description: 已保存}
         '403': {description: 权限不足}
+  /api/broadcast:
+    get:
+      summary: 获取当前广播及本组查看状态或全班查看进度
+      responses:
+        '200': {description: 当前广播、广播标识及查看小组列表}
+        '401': {description: 未登录}
+    post:
+      summary: 教师发布或撤下平台广播
+      responses:
+        '200': {description: 广播已保存并重置查看状态}
+        '403': {description: 仅教师可发布}
+  /api/broadcast/ack:
+    post:
+      summary: 学生小组确认已查看当前广播
+      responses:
+        '200': {description: 已记录本组查看状态}
+        '400': {description: 广播已更新、撤下或标识无效}
+        '403': {description: 仅学生小组可确认}
   /api/hints:
     post:
       summary: 在当前求助主题内处理初中数学问题、主动升级、结束主题或请求教师

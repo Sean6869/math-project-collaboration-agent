@@ -98,7 +98,7 @@ CLASS_KEYS = {
 GROUP_KEYS = {
     "groupId", "roles", "roleRound", "stageSubmitted", "stageTimes",
     "workspace", "versions", "evidence", "viewpoints", "firstThoughts",
-    "debate", "product", "events", "questionTree", "graphConfig", "checklist", "freeAi",
+    "debate", "product", "events", "questionTree", "graphConfig", "checklist", "preparationChecks", "freeAi",
 }
 HINT_POLICY_DEFAULT = {"L1": 20, "L2": 10, "L3": 5, "L4": 3}
 HINT_LEVEL_NAMES = {1: "定位", 2: "拆解", 3: "局部示范", 4: "教师介入"}
@@ -516,6 +516,50 @@ def _has_value(value: object) -> bool:
     return value is not None and value is not False
 
 
+def stage_task_status(group_state: dict) -> list[list[bool]]:
+    workspace = group_state.get("workspace", {}) if isinstance(group_state.get("workspace"), dict) else {}
+    members = [name for name in group_state.get("members", []) if isinstance(name, str) and name.strip()]
+    thoughts = group_state.get("firstThoughts", {}) if isinstance(group_state.get("firstThoughts"), dict) else {}
+    questions = group_state.get("questionTree", []) if isinstance(group_state.get("questionTree"), list) else []
+    graph = group_state.get("graphConfig", {}) if isinstance(group_state.get("graphConfig"), dict) else {}
+    checklist = group_state.get("checklist", {}) if isinstance(group_state.get("checklist"), dict) else {}
+    preparation = group_state.get("preparationChecks", {}) if isinstance(group_state.get("preparationChecks"), dict) else {}
+    evidence = group_state.get("evidence", []) if isinstance(group_state.get("evidence"), list) else []
+    viewpoints = group_state.get("viewpoints", []) if isinstance(group_state.get("viewpoints"), list) else []
+    versions = group_state.get("versions", []) if isinstance(group_state.get("versions"), list) else []
+    product = group_state.get("product", {}) if isinstance(group_state.get("product"), dict) else {}
+    rehearsal_checks = product.get("rehearsalChecks", []) if isinstance(product.get("rehearsalChecks"), list) else []
+    reflection = [line.strip() for line in str(product.get("reflection", "")).splitlines()]
+    graph_complete = all(_has_value(graph.get(key)) for key in ("a", "b", "c", "min", "max", "note"))
+    checklist_complete = len(checklist) >= 6 and all(value is True for value in checklist.values())
+    return [
+        [preparation.get("goal") is True, preparation.get("materials") is True,
+         bool(group_state.get("membersLocked")) and bool(members), preparation.get("rules") is True],
+        [bool(members) and all(_has_value(thoughts.get(str(i), thoughts.get(i))) for i in range(len(members))),
+         _has_value(workspace.get("problem")),
+         all(_has_value(workspace.get(key)) for key in ("known", "unknown", "constraints")),
+         len([item for item in questions if _has_value(item)]) >= 3 and _has_value(questions[0] if questions else "")],
+        [all(_has_value(workspace.get(key)) for key in ("variables", "constraints")),
+         _has_value(workspace.get("relation")),
+         _has_value(workspace.get("model")) and len(versions) >= 1,
+         graph_complete or checklist_complete],
+        [len(evidence) >= 1, any(isinstance(item, dict) and item.get("verified") is True for item in evidence),
+         len(viewpoints) >= 2 and all(isinstance(item, dict) and all(_has_value(item.get(key)) for key in ("claim", "basis", "risk")) for item in viewpoints[:2]),
+         len(versions) >= 2],
+        [all(_has_value(value) for value in (workspace.get("problem"), workspace.get("model"), product.get("claim"), product.get("limitations")))
+         and any(isinstance(item, dict) and item.get("verified") is True for item in evidence),
+         _has_value(product.get("rehearsal")) and len(rehearsal_checks) >= 4 and all(value is True for value in rehearsal_checks[:4]),
+         all(_has_value(product.get(key)) for key in ("audience", "claim", "limitations")),
+         len(reflection) >= 3 and all(reflection[:3])],
+    ]
+
+
+def validated_stage_submissions(group_state: dict) -> dict:
+    raw = group_state.get("stageSubmitted", {}) if isinstance(group_state.get("stageSubmitted"), dict) else {}
+    status = stage_task_status(group_state)
+    return {number: bool(raw.get(str(number), raw.get(number, False))) and all(status[number - 1]) for number in range(1, 6)}
+
+
 def hint_policy(state: dict) -> dict[str, int]:
     raw = state.get("hintPolicy") if isinstance(state.get("hintPolicy"), dict) else {}
     result = {}
@@ -565,25 +609,9 @@ def highest_hint_level(group_state: dict) -> int:
 
 
 def group_completion(group_state: dict) -> tuple[int, int]:
-    submitted = group_state.get("stageSubmitted", {})
-    submitted_count = sum(1 for number in range(1, 6) if isinstance(submitted, dict) and submitted.get(str(number), submitted.get(number, False)))
-    workspace = group_state.get("workspace", {})
-    first_thoughts = group_state.get("firstThoughts", {})
-    question_tree = group_state.get("questionTree", [])
-    graph = group_state.get("graphConfig", {})
-    checklist = group_state.get("checklist", {})
-    viewpoints = group_state.get("viewpoints", [])
-    evidence = group_state.get("evidence", [])
-    versions = group_state.get("versions", [])
-    product = group_state.get("product", {})
-    signals = [
-        [bool(group_state.get("membersLocked")) and _has_value(group_state.get("members")), int(group_state.get("roleRound", 1)) > 1],
-        [_has_value(first_thoughts), _has_value(workspace.get("problem")), _has_value(workspace.get("known")), _has_value(workspace.get("unknown")), _has_value(workspace.get("constraints")), _has_value(question_tree)],
-        [_has_value(workspace.get("variables")), _has_value(workspace.get("relation")), _has_value(workspace.get("model")), _has_value(graph), _has_value(checklist)],
-        [_has_value(evidence), _has_value(viewpoints), _has_value(versions), _has_value(group_state.get("debate"))],
-        [_has_value(product.get("title")), _has_value(product.get("claim")), _has_value(product.get("rehearsal")), _has_value(product.get("reflection"))],
-    ]
-    partial = sum(min(20, round(sum(1 for item in stage if item) / len(stage) * 20)) for stage in signals)
+    signals = stage_task_status(group_state)
+    submitted_count = sum(validated_stage_submissions(group_state).values())
+    partial = sum(round(sum(stage) / len(stage) * 20) for stage in signals)
     return min(100, max(partial, submitted_count * 20)), submitted_count
 
 
@@ -621,13 +649,7 @@ def dynamic_group_summaries(class_state: dict) -> list[dict]:
             "membersLocked": bool(group_state.get("membersLocked")),
             "stage": int(group_state.get("currentStage", class_state.get("currentStage", 1))),
             "submitted": submitted_count,
-            "currentSubmitted": bool(
-                isinstance(group_state.get("stageSubmitted"), dict)
-                and group_state["stageSubmitted"].get(
-                    str(class_state.get("currentStage", 1)),
-                    group_state["stageSubmitted"].get(class_state.get("currentStage", 1), False),
-                )
-            ),
+            "currentSubmitted": validated_stage_submissions(group_state).get(int(class_state.get("currentStage", 1)), False),
             "status": status,
             "help": help_total(group_state),
             "maxHint": highest_hint_level(group_state),
@@ -644,8 +666,43 @@ def current_broadcast() -> dict:
     if saved:
         if saved.get("broadcastType") == "共性数学澄清":
             saved["broadcastType"] = "统一答疑"
+        saved["seenGroups"] = sorted({int(group) for group in saved.get("seenGroups", []) if str(group).isdigit() and 1 <= int(group) <= group_count()})
         return saved
-    return {"broadcast": state_get("class").get("broadcast", ""), "broadcastType": "教师广播"}
+    return {"broadcast": state_get("class").get("broadcast", ""), "broadcastType": "教师广播", "broadcastId": "", "seenGroups": []}
+
+
+def broadcast_for_session(session: dict) -> dict:
+    message = current_broadcast()
+    seen = message.get("seenGroups", [])
+    if session.get("role") == "student":
+        message["broadcastViewed"] = int(session.get("groupId") or 0) in seen
+    else:
+        message["unseenGroups"] = [number for number in range(1, group_count() + 1) if number not in seen]
+    return message
+
+
+def acknowledge_broadcast(group_no: int, broadcast_id: str) -> dict:
+    if not broadcast_id:
+        raise ValueError("广播标识无效，请刷新页面后重试")
+    with database() as db:
+        db.execute("BEGIN IMMEDIATE")
+        row = db.execute("SELECT data FROM states WHERE scope='broadcast'").fetchone()
+        message = json.loads(row[0]) if row else {}
+        if not message.get("broadcast") or message.get("broadcastId") != broadcast_id:
+            raise ValueError("广播已更新或撤下，请刷新后查看最新内容")
+        seen = {int(group) for group in message.get("seenGroups", []) if str(group).isdigit()}
+        first_view = group_no not in seen
+        seen.add(group_no)
+        message["seenGroups"] = sorted(seen)
+        db.execute(
+            "INSERT INTO states(scope,data,updated_at) VALUES('broadcast',?,?) "
+            "ON CONFLICT(scope) DO UPDATE SET data=excluded.data,updated_at=excluded.updated_at",
+            (json.dumps(message, ensure_ascii=False, separators=(",", ":")), utc_now()),
+        )
+    if first_view:
+        record_event("student", group_no, "broadcast_view", None, broadcast_id)
+    message["broadcastViewed"] = True
+    return message
 
 
 def merged_state(group_no: int) -> dict:
@@ -653,6 +710,8 @@ def merged_state(group_no: int) -> dict:
     group_state = state_get(f"group:{group_no}")
     value.update(group_state)
     value.update(current_broadcast())
+    value["stageSubmitted"] = validated_stage_submissions(group_state)
+    value["broadcastViewed"] = group_no in value.get("seenGroups", [])
     # 课堂阶段、暂停状态和 AI 开关由教师端统一控制；小组初始状态中的
     # currentStage=1 不能覆盖教师已经开放的阶段，否则学生刷新后会被误判回阶段1。
     class_state = state_get("class")
@@ -1281,8 +1340,9 @@ class Handler(SimpleHTTPRequestHandler):
             self.json_response({"initialized": is_initialized(), "groupCount": group_count(), "authenticated": bool(session), **(session or {})})
             return
         if route.path == "/api/broadcast":
-            if self.require_session():
-                self.json_response(current_broadcast())
+            session = self.require_session()
+            if session:
+                self.json_response(broadcast_for_session(session))
             return
         if route.path == "/api/runtime":
             if not self.require_session("teacher"):
@@ -1450,10 +1510,15 @@ class Handler(SimpleHTTPRequestHandler):
                         raise ValueError("广播内容须为文本，最多2000字")
                     if kind not in ("教师广播", "统一答疑", "阶段提醒", "时间提醒", "成果要求"):
                         raise ValueError("广播类型无效")
-                    message = {"broadcast": content.strip(), "broadcastType": kind, "broadcastId": secrets.token_hex(12)}
+                    message = {"broadcast": content.strip(), "broadcastType": kind, "broadcastId": secrets.token_hex(12), "seenGroups": []}
                     state_put("broadcast", message)
                     record_event("teacher", None, "broadcast" if message["broadcast"] else "broadcast_clear", None, message["broadcast"])
-                    self.json_response(message)
+                    self.json_response(broadcast_for_session(session))
+            elif route == "/api/broadcast/ack":
+                session = self.require_session("student")
+                if session:
+                    body = self.read_json()
+                    self.json_response(acknowledge_broadcast(int(session["groupId"]), str(body.get("broadcastId", ""))))
             elif route == "/api/group/members":
                 session = self.require_session()
                 if session:
@@ -1538,6 +1603,18 @@ class Handler(SimpleHTTPRequestHandler):
             if incoming_roles != current_roles or incoming_round != current_round:
                 self.json_response({"error": "角色由教师统一轮换，请刷新获取最新分工"}, HTTPStatus.CONFLICT)
                 return
+        candidate = dict(group_state)
+        candidate.update({key: incoming[key] for key in GROUP_KEYS if key in incoming})
+        requested = incoming.get("stageSubmitted", {}) if isinstance(incoming.get("stageSubmitted"), dict) else {}
+        saved_submissions = group_state.get("stageSubmitted", {}) if isinstance(group_state.get("stageSubmitted"), dict) else {}
+        valid_submissions = validated_stage_submissions(candidate)
+        for number in range(1, 6):
+            wants_submit = bool(requested.get(str(number), requested.get(number, False)))
+            was_submitted = bool(saved_submissions.get(str(number), saved_submissions.get(number, False)))
+            if wants_submit and not was_submitted and not valid_submissions[number]:
+                self.json_response({"error": f"阶段{number}任务尚未全部完成，不能提交"}, HTTPStatus.CONFLICT)
+                return
+        incoming["stageSubmitted"] = valid_submissions
         if session["role"] == "teacher" and "hintPolicy" in incoming:
             raw_policy = incoming["hintPolicy"]
             if not isinstance(raw_policy, dict):
@@ -2384,13 +2461,13 @@ class Handler(SimpleHTTPRequestHandler):
             groups.append({"id": number, "stage": 1, "status": "准备中", "help": 0, "maxHint": 0, "teacher": False, "latest": "尚未保存", "issue": "", "progress": 0})
         item = groups[group - 1]
         versions = group_state.get("versions")
-        latest = versions[-1].get("note", "工作区已保存") if isinstance(versions, list) and versions else "工作区已保存"
-        submitted = group_state.get("stageSubmitted", {})
-        progress = round(sum(1 for value in submitted.values() if value) / 5 * 100) if isinstance(submitted, dict) else 0
+        latest = versions[-1].get("note", "模型版本已保存") if isinstance(versions, list) and versions and isinstance(versions[-1], dict) else "工作区已保存" if _has_value(group_state.get("workspace")) else "尚未保存"
+        progress, submitted_count = group_completion(group_state)
+        active = progress > 0 or bool(help_total(group_state)) or bool(group_state.get("helpHistory"))
         item.update({
             "id": group, "stage": int(group_state.get("currentStage", class_state.get("currentStage", 1))),
             "help": help_total(group_state), "maxHint": highest_hint_level(group_state),
-            "latest": latest, "status": "等待教师" if item.get("teacher") else "持续推进", "progress": progress,
+            "latest": latest, "status": "等待教师" if item.get("teacher") else "已完成" if submitted_count == 5 else "持续推进" if active else "准备中", "progress": progress,
         })
         if issue:
             item["issue"] = issue[:120]

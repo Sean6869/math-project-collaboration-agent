@@ -2,8 +2,8 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
 const source = fs.readFileSync('assets/app.js', 'utf8');
-const text = {textContent: ''}, kind = {textContent: ''};
-const banner = {hidden: true, querySelector: selector => selector.includes('text') ? text : kind};
+const text = {textContent: ''}, kind = {textContent: ''}, actions = {innerHTML: ''};
+const banner = {hidden: true, querySelector: selector => selector.includes('text') ? text : selector.includes('actions') ? actions : kind};
 const input = {value: '正在输入的作业内容'};
 const elements = {
   '#studentBroadcast': banner, '#bcText': input, '#bcType': {value: '阶段提醒'},
@@ -19,7 +19,7 @@ const context = {
   setRoot() {}, shell() {}, head() {}, btn() {}, toast: message => notices.push(message)
 };
 vm.createContext(context);
-vm.runInContext(source.slice(source.indexOf('function broadcastBanner('), source.indexOf('function renderReport(')), context);
+vm.runInContext(source.slice(source.indexOf('function broadcastActions('), source.indexOf('function renderReport(')), context);
 (async () => {
   response = {broadcast: '<img onerror=bad>', broadcastType: '阶段提醒'};
   await context.syncBroadcast();
