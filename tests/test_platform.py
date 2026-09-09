@@ -451,7 +451,7 @@ class PlatformTest(unittest.TestCase):
         self.assertIn("lock.disabled=true", script)
         self.assertNotIn("btn('提交并锁定成员'", script)
 
-    def test_peer_explanation_is_removed_and_empty_thoughts_hide_member_names(self):
+    def test_peer_explanation_is_removed_and_thoughts_keep_member_labels(self):
         script = (ROOT / "assets" / "app.js").read_text(encoding="utf-8")
         server = (ROOT / "platform_server.py").read_text(encoding="utf-8")
         contract = (ROOT / "interfaces" / "openapi.yaml").read_text(encoding="utf-8")
@@ -460,20 +460,31 @@ class PlatformTest(unittest.TestCase):
             self.assertNotIn("peer_tried", source)
             self.assertNotIn("同伴解释", source)
             self.assertNotIn("组员解释", source)
-        self.assertIn("thought?`<b>${esc(m)}</b><small>${esc(thought)}</small>`", script)
-        self.assertIn("'<small aria-label=\"尚未填写\"></small>'", script)
+        self.assertIn('<label>${esc(m)}</label><div class="task">', script)
+        self.assertIn("thought?'个人先想内容':'尚未填写'", script)
+        self.assertIn("${esc(thought)}</small>", script)
 
     def test_student_navigation_uses_consistent_label_lengths(self):
         script = (ROOT / "assets" / "app.js").read_text(encoding="utf-8")
         for label in ("课堂首页", "项目准备", "任务理解", "方案建模", "协作探究", "成果反思"):
             self.assertEqual(len(label), 4)
             self.assertIn(label, script if label in ("课堂首页", "方案建模") else (ROOT / "assets" / "data.js").read_text(encoding="utf-8"))
-        for label in ("共享工作区", "自由工作区", "小组与角色", "提示与求助", "过程与回看"):
+        for label in ("共享工作区", "自由工作区", "成员与角色", "提示与求助", "过程与回看"):
             self.assertEqual(len(label), 5)
             self.assertIn(label, script)
         self.assertIn("数据使用说明", script)
         self.assertIn("返回登录入口", script)
         self.assertIn("head('小组协作与角色'", script)
+
+    def test_stage_pages_use_compact_strip_but_dashboard_keeps_details(self):
+        script = (ROOT / "assets" / "app.js").read_text(encoding="utf-8")
+        styles = (ROOT / "assets" / "styles.css").read_text(encoding="utf-8")
+        self.assertIn("function stageStrip(compact=false)", script)
+        self.assertIn("${compact?'':`<div class=\"stage-state\">", script)
+        self.assertIn("head(title,description", script)
+        self.assertIn("+stageStrip(s.currentStage)+", script)
+        self.assertIn("+stageStrip(true)+", script)
+        self.assertIn(".stage-strip.compact .stage-card", styles)
 
     def test_free_ai_stream_uses_ark_sse_and_configured_timeout(self):
         class FakeStreamResponse:
