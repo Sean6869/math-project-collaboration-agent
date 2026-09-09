@@ -170,7 +170,6 @@ paths:
                 issue: {type: string, maxLength: 1200}
                 type: {type: string, maxLength: 80}
                 attempt: {type: string, maxLength: 1600}
-                peerTried: {type: boolean}
                 checkedWork: {type: boolean}
       responses:
         '200': {description: 当前层 DeepSeek 支架、无扣额静态支架、层级转换或教师升级结果}

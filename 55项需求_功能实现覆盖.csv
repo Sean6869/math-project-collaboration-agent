@@ -25,7 +25,7 @@ TR-G03,小组协作,学生小组,共同问题空间,P0,student/workspace.html,�
 TR-G04,小组协作,学生小组,方案证据比较卡,P0,student/stage3-compare.html; student/stage4-discussion.html,已实现
 TR-G05,小组协作,学生小组,质疑与回应模板,P1,student/stage4-discussion.html,已实现
 TR-G06,小组协作,学生小组,非标签化参与提醒,P0,student/group.html; student/stage4.html,已实现
-TR-G07,小组协作,学生小组,同伴解释优先,P1,student/help.html; student/group.html,已实现
+TR-G07,小组协作,学生小组,求助前工作区检查,P1,student/help.html,已实现
 TR-G08,小组协作,教师,复杂冲突教师转接,P0,student/stage4-discussion.html; teacher/queue.html,已实现
 TR-G09,小组协作,学生小组,角色与协作反思,P1,student/stage5-reflection.html,已实现
 TR-T01,教师总控,教师,多组阶段与状态总览,P0,teacher/dashboard.html; teacher/groups.html,已实现

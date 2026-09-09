@@ -77,7 +77,7 @@ def main() -> int:
     results = []
     for level, done, issue_type, issue in cases:
         reply, latency, status = app.deepseek_hint(
-            state, level, done, issue_type, issue, history, peer_tried=True, checked_work=True,
+            state, level, done, issue_type, issue, history, checked_work=True,
         )
         failures = [f"接口状态：{status}"] if status != "ok" else []
         if reply:

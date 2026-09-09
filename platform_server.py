@@ -642,6 +642,8 @@ def dynamic_group_summaries(class_state: dict) -> list[dict]:
 def current_broadcast() -> dict:
     saved = state_get("broadcast")
     if saved:
+        if saved.get("broadcastType") == "共性数学澄清":
+            saved["broadcastType"] = "统一答疑"
         return saved
     return {"broadcast": state_get("class").get("broadcast", ""), "broadcastType": "教师广播"}
 
@@ -817,7 +819,7 @@ def parse_model_hint(text: str, level: str) -> str | None:
 
 def deepseek_hint(
     state: dict, level: str, done: str, issue_type: str, issue: str,
-    history: list[dict] | None = None, peer_tried: bool = False, checked_work: bool = False,
+    history: list[dict] | None = None, checked_work: bool = False,
 ) -> tuple[str | None, int, str]:
     api_key = os.environ.get("DEEPSEEK_API_KEY", "")
     if not api_key:
@@ -855,7 +857,7 @@ def deepseek_hint(
         "项目": state.get("project", ""), "数学主题": config.get("mathTopic", ""),
         "课程目标": config.get("standard", ""), "当前阶段": state.get("currentStage", 1),
         "提示层级": level, "已完成": done, "卡点类型": issue_type, "具体卡点": issue,
-        "共享工作区": state.get("workspace", {}), "已请组员解释": peer_tried, "已检查工作区": checked_work,
+        "共享工作区": state.get("workspace", {}), "已检查工作区": checked_work,
         "同一求助主题的最近对话": recent, "已审核材料": knowledge_names, "材料摘录": knowledge,
     }
     payload = json.dumps({
@@ -1446,7 +1448,7 @@ class Handler(SimpleHTTPRequestHandler):
                     kind = body.get("broadcastType", "教师广播")
                     if not isinstance(content, str) or len(content) > 2000:
                         raise ValueError("广播内容须为文本，最多2000字")
-                    if kind not in ("教师广播", "共性数学澄清", "阶段提醒", "时间提醒", "成果要求"):
+                    if kind not in ("教师广播", "统一答疑", "阶段提醒", "时间提醒", "成果要求"):
                         raise ValueError("广播类型无效")
                     message = {"broadcast": content.strip(), "broadcastType": kind, "broadcastId": secrets.token_hex(12)}
                     state_put("broadcast", message)
@@ -2212,7 +2214,7 @@ class Handler(SimpleHTTPRequestHandler):
             thread.setdefault("transitions", []).append({"time": utc_now(), "from": f"L{level_no}", "to": next_level, "attempt": attempt})
             reply, latency, status = deepseek_hint(
                 state, next_level, attempt, issue_type, issue, messages,
-                bool(body.get("peerTried")), bool(body.get("checkedWork")),
+                bool(body.get("checkedWork")),
             )
             result = "returned" if reply else "fallback"
             if not reply:
@@ -2323,7 +2325,7 @@ class Handler(SimpleHTTPRequestHandler):
         messages = thread.get("messages", []) if isinstance(thread.get("messages"), list) else []
         reply, latency, status = deepseek_hint(
             state, level, done, issue_type, issue, messages,
-            bool(body.get("peerTried")), bool(body.get("checkedWork")),
+            bool(body.get("checkedWork")),
         )
         if not reply:
             reply = static_hint(state.get("teacherConfig", {}), level_no)
