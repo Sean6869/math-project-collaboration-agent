@@ -18,6 +18,17 @@ sys.path.insert(0, str(ROOT))
 import platform_server as app
 
 
+class DeepSeekConfigurationTest(unittest.TestCase):
+    def test_current_model_and_deprecated_aliases(self):
+        self.assertEqual(app.normalize_deepseek_model(None), "deepseek-flash")
+        self.assertEqual(app.normalize_deepseek_model("deepseek-flash"), "deepseek-flash")
+        self.assertEqual(app.normalize_deepseek_model("deepseek-chat"), "deepseek-flash")
+        self.assertEqual(app.normalize_deepseek_model("deepseek-reasoner"), "deepseek-flash")
+        self.assertEqual(app.normalize_deepseek_model("deepseek-v4-flash"), "deepseek-flash")
+        self.assertEqual(app.normalize_deepseek_model("deepseek-v4-flash-vision-exp"), "deepseek-flash")
+        self.assertEqual(app.normalize_deepseek_model("deepseek-v4-pro"), "deepseek-v4-pro")
+
+
 class LegacyMigrationTest(unittest.TestCase):
     def test_single_teacher_schema_is_upgraded_for_multiple_teachers(self):
         original = (app.DATA_DIR, app.UPLOAD_DIR, app.DB_PATH, app.SETUP_TOKEN_FILE)

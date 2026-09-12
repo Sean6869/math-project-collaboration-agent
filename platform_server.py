@@ -58,6 +58,17 @@ def env_seconds(name: str, default: int, minimum: int = 5, maximum: int = 300) -
     return max(minimum, min(maximum, value))
 
 
+def normalize_deepseek_model(model: str | None) -> str:
+    configured = (model or "").strip() or "deepseek-flash"
+    aliases = {
+        "deepseek-chat": "deepseek-flash",
+        "deepseek-reasoner": "deepseek-flash",
+        "deepseek-v4-flash": "deepseek-flash",
+        "deepseek-v4-flash-vision-exp": "deepseek-flash",
+    }
+    return aliases.get(configured, configured)
+
+
 DATA_DIR = Path(os.environ.get("MPT_DATA_DIR", ROOT / "data")).resolve()
 UPLOAD_DIR = DATA_DIR / "uploads"
 DB_PATH = DATA_DIR / "platform.db"
@@ -69,7 +80,7 @@ MAX_JSON_BYTES = 2 * 1024 * 1024
 MAX_UPLOAD_BYTES = int(os.environ.get("MPT_MAX_UPLOAD_BYTES", str(10 * 1024 * 1024)))
 DEEPSEEK_BASE_URL = os.environ.get("DEEPSEEK_BASE_URL", "https://api.deepseek.com").rstrip("/")
 DEEPSEEK_URL = DEEPSEEK_BASE_URL + "/chat/completions"
-DEEPSEEK_MODEL = os.environ.get("DEEPSEEK_MODEL", "deepseek-v4-flash")
+DEEPSEEK_MODEL = normalize_deepseek_model(os.environ.get("DEEPSEEK_MODEL"))
 DEEPSEEK_REASONING_MODEL = os.environ.get("DEEPSEEK_REASONING_MODEL", "deepseek-v4-pro")
 ARK_TEXT_URL = os.environ.get("ARK_TEXT_URL", "https://ark.cn-beijing.volces.com/api/v3/chat/completions")
 ARK_TEXT_MODEL = os.environ.get("ARK_TEXT_MODEL", "doubao-seed-2-0-lite-260428")

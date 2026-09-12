@@ -27,7 +27,7 @@ $env:DEEPSEEK_API_KEY="你的密钥"
 python start_server.py
 ```
 
-默认调用 `https://api.deepseek.com/chat/completions`，模型为 `deepseek-v4-flash`，可通过 `DEEPSEEK_BASE_URL` 和 `DEEPSEEK_MODEL` 调整。平台关闭模型思考输出并要求结构化 JSON；L1、L2、L3 分别执行“定位—拆解—局部示范”契约，学生可在同一级连续提问并主动升级，L4 为独立教师求助额度。超时、错误或越界回答会使用教师支架且不扣除 AI 额度。
+默认调用 `https://api.deepseek.com/chat/completions`，模型为 `deepseek-flash`（V4.1 Flash），可通过 `DEEPSEEK_BASE_URL` 和 `DEEPSEEK_MODEL` 调整。旧配置中的 `deepseek-chat`、`deepseek-reasoner`、`deepseek-v4-flash` 和 `deepseek-v4-flash-vision-exp` 会自动迁移到当前 Flash 模型。由于当前模型默认开启思考，平台会显式关闭思考输出并要求结构化 JSON，以继续支持稳定的分层提示；L1、L2、L3 分别执行“定位—拆解—局部示范”契约，学生可在同一级连续提问并主动升级，L4 为独立教师求助额度。超时、错误或越界回答会使用教师支架且不扣除 AI 额度。
 
 ## 学生自由AI工作区
 
