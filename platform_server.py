@@ -1,4 +1,4 @@
-"""迈谱 Maple：无第三方运行依赖的数学项目式学习服务。"""
+"""迈谱 Maple：数学项目式学习服务。"""
 
 from __future__ import annotations
 
@@ -19,12 +19,13 @@ import time
 import urllib.error
 import urllib.request
 import zipfile
+import lesson_plans
 from datetime import datetime, timezone
 from http import HTTPStatus
 from http.cookies import SimpleCookie
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import parse_qs, quote, urlparse
+from urllib.parse import parse_qs, quote, unquote, urlparse
 from xml.etree import ElementTree
 
 ROOT = Path(__file__).resolve().parent
@@ -459,6 +460,7 @@ def init_database() -> None:
         if "group_no" not in file_columns:
             db.execute("ALTER TABLE files ADD COLUMN group_no INTEGER")
         db.execute("DELETE FROM sessions WHERE expires_at < ?", (int(time.time()),))
+    lesson_plans.initialize(sys.modules[__name__])
     env = os.environ.get("MPT_ENV", "development").lower()
     supplied = {
         "username": os.environ.get("MPT_TEACHER_USERNAME", ""),
@@ -503,6 +505,9 @@ def state_get(scope: str) -> dict:
 
 def state_put(scope: str, value: dict, preserve_roles: bool = False) -> None:
     with database() as db:
+        if scope == 'class':
+            db.execute('BEGIN IMMEDIATE')
+            lesson_plans.preserve_published_project(db, value)
         if preserve_roles:
             db.execute("BEGIN IMMEDIATE")
             row = db.execute("SELECT data FROM states WHERE scope=?", (scope,)).fetchone()
@@ -758,6 +763,7 @@ def merged_state(group_no: int) -> dict:
             "SELECT ts,group_no,level,model,latency_ms,status FROM ai_calls ORDER BY id DESC LIMIT 50"
         ).fetchall()
     value["aiCalls"] = [dict(row) for row in calls]
+    value["currentLesson"] = lesson_plans.current(sys.modules[__name__])
     return value
 
 
@@ -926,6 +932,7 @@ def deepseek_hint(
         "适用年级": student_grade(state) or "初中阶段",
         "项目": state.get("project", ""), "数学主题": config.get("mathTopic", ""),
         "课程目标": config.get("standard", ""), "当前阶段": state.get("currentStage", 1),
+        "当前课时任务（不得替学生完成）": state.get("currentLesson"),
         "提示层级": level, "已完成": done, "卡点类型": issue_type, "具体卡点": issue,
         "共享工作区": state.get("workspace", {}), "已检查工作区": checked_work,
         "同一求助主题的最近对话": recent, "已审核材料": knowledge_names, "材料摘录": knowledge,
@@ -1006,6 +1013,7 @@ def free_ai_context(state: dict, group: int) -> str:
         "项目": state.get("project", ""), "数学主题": config.get("mathTopic", ""),
         "课程目标": config.get("standard", ""), "最终成果": config.get("finalProduct", ""),
         "当前阶段": state.get("currentStage", 1), "小组": group, "共享工作区": workspace,
+        "当前课时任务（不得替学生完成）": state.get("currentLesson"),
     }
     return json.dumps(context, ensure_ascii=False)
 
@@ -1249,11 +1257,20 @@ class Handler(SimpleHTTPRequestHandler):
     server_version = "Maple"
 
     def translate_path(self, path: str) -> str:
-        clean = urlparse(path).path.lstrip("/")
+        clean = unquote(urlparse(path).path).lstrip("/")
         target = (ROOT / clean).resolve()
         if target != ROOT and ROOT not in target.parents:
             return str(ROOT / "__not_found__")
+        relative = target.relative_to(ROOT)
+        public_page = len(relative.parts) == 2 and relative.parts[0] in {'student', 'teacher'} and target.suffix == '.html'
+        public_asset = len(relative.parts) >= 2 and relative.parts[0] == 'assets' and target.suffix.lower() in {'.js', '.css', '.png', '.jpg', '.jpeg', '.webp', '.svg', '.ico', '.woff', '.woff2'}
+        if target not in (ROOT, ROOT / 'index.html') and not public_page and not public_asset:
+            return str(ROOT / '__not_found__')
         return str(target)
+
+    def list_directory(self, path):
+        self.send_error(HTTPStatus.NOT_FOUND)
+        return None
 
     def end_headers(self) -> None:
         path = urlparse(self.path).path
@@ -1324,6 +1341,8 @@ class Handler(SimpleHTTPRequestHandler):
 
     def do_GET(self) -> None:
         route = urlparse(self.path)
+        if lesson_plans.handle(sys.modules[__name__], self, 'GET', route.path):
+            return
         if route.path == "/index.html":
             self.send_response(HTTPStatus.FOUND)
             self.send_header("Location", "/?current")
@@ -1486,6 +1505,8 @@ class Handler(SimpleHTTPRequestHandler):
         if not self.check_origin():
             return
         route = urlparse(self.path).path
+        if lesson_plans.handle(sys.modules[__name__], self, 'POST', route):
+            return
         try:
             if route == "/api/setup":
                 self.initialize_from_request(self.read_json())
@@ -1883,6 +1904,7 @@ class Handler(SimpleHTTPRequestHandler):
             db.execute("DELETE FROM events")
             db.execute("DELETE FROM ai_calls")
             db.execute("DELETE FROM files")
+            db.execute("DELETE FROM lesson_jobs")
             db.execute("DELETE FROM teachers WHERE is_admin=0")
             db.execute("DELETE FROM sessions")
             db.execute("DELETE FROM settings WHERE key='teacher_invite_hash'")

@@ -52,3 +52,17 @@ html:has(.auth-shell),body:has(.auth-shell){height:100%;overflow:hidden}.auth-sh
 .help-actions .btn{min-height:38px}
 @media(max-width:800px){.help-actions{grid-template-columns:1fr}}
 .recent-new-conversation{display:inline-flex;align-items:center;gap:5px;border-color:var(--blue);background:var(--blue);color:#fff}.recent-new-conversation:hover{border-color:var(--blue);background:var(--blue);color:#fff;box-shadow:0 3px 10px rgba(23,109,150,.18)}.recent-new-conversation svg{width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}.app-brand{height:46px;display:inline-flex;align-items:center;flex:0 0 auto}.brand-lockup-image{display:block;width:auto;height:42px;max-width:150px;object-fit:contain}.auth-brand-lockup{filter:invert(1)}
+/* Lesson preparation and the published student task are distinct surfaces. */
+.lesson-stack{display:flex;flex-direction:column;gap:16px;min-width:0;align-self:start}
+.lesson-stack input[type=file]{display:block;width:100%;margin-top:10px}
+.lesson-editor{min-width:0;border:1px solid var(--line,#dce3eb);border-radius:12px;padding:16px;margin:20px 0 12px}
+.lesson-editor legend{padding:0 6px;font-weight:700;font-size:18px}
+.lesson-editor textarea{min-height:90px;resize:vertical}
+.lesson-timing{margin:12px 0;padding:12px;border:1px solid #dce3eb;border-radius:8px}.lesson-timing summary{cursor:pointer;font-weight:700}
+.lesson-warning{white-space:pre-wrap;overflow-wrap:anywhere;padding:10px 12px;border:1px solid #eed9b2;border-radius:8px;background:#fff8ed;color:#865818;font-size:13px;line-height:1.7}
+.lesson-review{display:flex;gap:8px;align-items:flex-start;margin-top:16px;line-height:1.6}
+.lesson-review input{width:auto;flex-shrink:0;margin-top:6px}
+.lesson-banner{padding:16px 20px;margin-bottom:20px;border:1px solid #c7dcef;background:#f2f8ff;border-radius:10px;overflow-wrap:anywhere}
+.lesson-banner details{margin-top:8px}.lesson-banner summary{cursor:pointer;color:#1763ad}.lesson-banner p{white-space:pre-wrap}
+#planPreview li{margin:8px 0}#planPreview,#planStatus,#planSaveStatus{overflow-wrap:anywhere}
+@media(max-width:600px){.lesson-editor{padding:12px}.lesson-editor .form-grid{grid-template-columns:1fr}}
