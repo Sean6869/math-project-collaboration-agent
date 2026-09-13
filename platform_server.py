@@ -932,7 +932,7 @@ def deepseek_hint(
         "适用年级": student_grade(state) or "初中阶段",
         "项目": state.get("project", ""), "数学主题": config.get("mathTopic", ""),
         "课程目标": config.get("standard", ""), "当前阶段": state.get("currentStage", 1),
-        "当前课时任务（不得替学生完成）": state.get("currentLesson"),
+        "当前课时项目信息": state.get("currentLesson"),
         "提示层级": level, "已完成": done, "卡点类型": issue_type, "具体卡点": issue,
         "共享工作区": state.get("workspace", {}), "已检查工作区": checked_work,
         "同一求助主题的最近对话": recent, "已审核材料": knowledge_names, "材料摘录": knowledge,
@@ -1013,7 +1013,7 @@ def free_ai_context(state: dict, group: int) -> str:
         "项目": state.get("project", ""), "数学主题": config.get("mathTopic", ""),
         "课程目标": config.get("standard", ""), "最终成果": config.get("finalProduct", ""),
         "当前阶段": state.get("currentStage", 1), "小组": group, "共享工作区": workspace,
-        "当前课时任务（不得替学生完成）": state.get("currentLesson"),
+        "当前课时项目信息": state.get("currentLesson"),
     }
     return json.dumps(context, ensure_ascii=False)
 
@@ -1277,7 +1277,8 @@ class Handler(SimpleHTTPRequestHandler):
         if not path.startswith("/api/") and (path in ("/", "/index.html") or Path(path).suffix in {".html", ".js", ".css"}):
             self.send_header("Cache-Control", "no-store")
         self.send_header("X-Content-Type-Options", "nosniff")
-        self.send_header("X-Frame-Options", "DENY")
+        document_preview = path in ('/api/lesson-plan/source', '/api/lesson-plan/material')
+        self.send_header("X-Frame-Options", "SAMEORIGIN" if document_preview else "DENY")
         self.send_header("Referrer-Policy", "same-origin")
         self.send_header("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
         self.send_header("Content-Security-Policy", "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'")
@@ -1287,6 +1288,20 @@ class Handler(SimpleHTTPRequestHandler):
         sys.stdout.write(f"[{utc_now()}] {self.address_string()} {fmt % args}\n")
 
     def json_response(self, payload: object, status: int = 200, cookie: str | None = None) -> None:
+        # Drain small rejected request bodies: closing with unread bytes can reset
+        # the TCP connection before Windows clients receive the 401/403 response.
+        if status >= 400 and not getattr(self, '_body_read', False):
+            previous_timeout = self.connection.gettimeout()
+            try:
+                length = int(self.headers.get('Content-Length', '0'))
+                if 0 < length <= MAX_JSON_BYTES:
+                    self.connection.settimeout(1)
+                    self.rfile.read(length)
+            except (ValueError, OSError):
+                pass
+            finally:
+                self.connection.settimeout(previous_timeout)
+                self._body_read = True
         raw = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode()
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
@@ -1305,6 +1320,7 @@ class Handler(SimpleHTTPRequestHandler):
         if length <= 0 or length > limit:
             raise ValueError("请求为空或超过大小限制")
         try:
+            self._body_read = True
             value = json.loads(self.rfile.read(length))
         except json.JSONDecodeError as exc:
             raise ValueError("JSON格式无效") from exc
@@ -1905,6 +1921,7 @@ class Handler(SimpleHTTPRequestHandler):
             db.execute("DELETE FROM ai_calls")
             db.execute("DELETE FROM files")
             db.execute("DELETE FROM lesson_jobs")
+            db.execute("DELETE FROM course_material")
             db.execute("DELETE FROM teachers WHERE is_admin=0")
             db.execute("DELETE FROM sessions")
             db.execute("DELETE FROM settings WHERE key='teacher_invite_hash'")

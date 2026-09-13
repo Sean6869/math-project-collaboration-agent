@@ -37,6 +37,7 @@ def main():
                 "/assets/styles.css",
                 "/assets/data.js",
                 "/assets/app.js",
+                "/assets/lesson-plan.js",
                 "/assets/images/starry-night-login.jpg",
                 "/assets/images/maple-brand.png",
                 "/assets/images/maple-horizontal.png",

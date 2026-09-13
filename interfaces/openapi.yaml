@@ -241,6 +241,44 @@ paths:
       responses:
         '200': {description: 上传成功}
         '403': {description: 仅教师可上传}
+  /api/lesson-plan:
+    get:
+      summary: 教师读取12项字段定义、已发布配置及本人最新解析任务
+      responses:
+        '200': {description: fields、published、job；不包含原文件字节}
+        '403': {description: 仅教师可访问}
+  /api/lesson-plan/analyze:
+    post:
+      summary: 教师上传PDF或DOCX并按指定总课时数解析，或以retryId重试
+      responses:
+        '202': {description: 任务已创建，返回id}
+        '400': {description: 文件、课时数或模型配置无效}
+  /api/lesson-plan/source:
+    get:
+      summary: 上传教师预览或下载私有原文件（id；preview=1正文预览；download=1下载）
+      responses:
+        '200': {description: PDF原格式或DOCX安全正文预览、原文件下载}
+        '404': {description: 文件不存在或不属于当前教师}
+  /api/lesson-plan/publish:
+    post:
+      summary: 教师审核保存课时项目信息及课程支持材料
+      description: plan含lessons[].projectInfo的12项字段；selectedLesson选择课时；revision用于乐观锁；reviewed为true；sourceJobId只能引用本人上传；shareSource为false时撤回材料，true时发布材料。
+      responses:
+        '200': {description: 发布后的配置、revision及supportMaterial}
+        '400': {description: 配置或版本无效，事务不保存}
+  /api/lesson-plan/current:
+    get:
+      summary: 已登录师生读取当前课时项目信息和已发布材料元数据
+      responses:
+        '200': {description: currentLesson包含projectInfo、supportMaterial和revision，无私有解析记录}
+        '401': {description: 未登录}
+  /api/lesson-plan/material:
+    get:
+      summary: 已登录师生预览或下载已发布课程材料（id、preview或download参数）
+      responses:
+        '200': {description: 文件或安全预览，仅允许同站嵌入}
+        '401': {description: 未登录}
+        '404': {description: 已撤回或不存在}
   /api/export:
     get:
       summary: 教师导出去标识化课堂事件

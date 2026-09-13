@@ -621,7 +621,8 @@ class PlatformTest(unittest.TestCase):
         self.assertIn('class="icon-btn" id="copyRecovery"', script)
         self.assertNotIn("document.querySelector('#setupGroupCount')", script)
         self.assertNotIn("document.querySelector('#setupGroupPrefix')", script)
-        self.assertNotIn('class="field span-2"', script)
+        portal = script[script.index('function renderAccessPortal'):script.index('const pages=')]
+        self.assertNotIn('class="field span-2"', portal)
         self.assertIn('.copy-field:focus-within', styles)
         self.assertIn('.auth-card .toolbar{justify-content:flex-end}', styles)
         self.assertEqual(app.group_prefix_from_code("TEAM01"), "TEAM")
