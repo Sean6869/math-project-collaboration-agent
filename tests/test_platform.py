@@ -539,7 +539,8 @@ class PlatformTest(unittest.TestCase):
         styles = (ROOT / "assets" / "styles.css").read_text(encoding="utf-8")
         self.assertIn("function stageStrip(compact=false)", script)
         self.assertIn("${compact?'':`<div class=\"stage-state\">", script)
-        self.assertIn("head(title,description", script)
+        self.assertIn("const title=esc(s.project)", script)
+        self.assertIn("${projectOverview(s.currentLesson)}", script)
         self.assertIn("+stageStrip(s.currentStage)+", script)
         self.assertIn("+stageStrip(true)+", script)
         self.assertIn(".stage-strip.compact .stage-card", styles)
@@ -656,11 +657,12 @@ class PlatformTest(unittest.TestCase):
                 )
         self.assertEqual(stream_off_topic.exception.code, 422)
         upstream.assert_not_called()
-        with self.assertRaises(urllib.error.HTTPError) as context:
-            self.json_request(
-                student, "/api/ai/chat", "POST",
-                {"prompt": "请解释如何生成函数图像", "newConversation": True},
-            )
+        with mock.patch.dict(os.environ, {"ARK_API_KEY": ""}):
+            with self.assertRaises(urllib.error.HTTPError) as context:
+                self.json_request(
+                    student, "/api/ai/chat", "POST",
+                    {"prompt": "请解释如何生成函数图像", "newConversation": True},
+                )
         self.assertEqual(context.exception.code, 503)
         self.assertIn("ARK_API_KEY", context.exception.read().decode())
 

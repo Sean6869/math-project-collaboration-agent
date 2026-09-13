@@ -8,6 +8,7 @@ import base64
 import io
 import html
 import json
+import mimetypes
 import os
 import re
 import secrets
@@ -54,6 +55,10 @@ def initialize(app):
             );
             CREATE TABLE IF NOT EXISTS course_material (
                 id TEXT PRIMARY KEY, name TEXT NOT NULL, source BLOB NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS course_resources (
+                id TEXT PRIMARY KEY, owner INTEGER NOT NULL, name TEXT NOT NULL,
+                mime TEXT NOT NULL, source BLOB NOT NULL, created_at TEXT NOT NULL
             );
         ''')
         db.execute("UPDATE lesson_jobs SET status='failed', detail='服务重启中断了解析，请重试' WHERE status IN ('extracting','analyzing')")
@@ -309,8 +314,10 @@ def current(app):
         return None
     lesson = lessons[number - 1]
     info = project_info(lesson.get('projectInfo', plan))
+    materials = ([saved['supportMaterial']] if saved.get('supportMaterial') else []) + list(saved.get('supportResources') or [])
     return {'revision': saved.get('revision', 0), 'totalLessons': len(lessons),
             'projectInfo': {key: info[key] for key in INFO_FIELDS}, 'supportMaterial': saved.get('supportMaterial'),
+            'supportMaterials': materials,
             **{k: lesson[k] for k in (*LESSON_FIELDS, 'lessonNo', 'durationMinutes', 'stageMappings')}}
 
 
@@ -359,6 +366,18 @@ def publish(app, body, owner=None):
             db.execute('INSERT INTO course_material(id,name,source) VALUES(?,?,?)', (material['id'], row['name'], row['source']))
         saved['supportMaterial'] = material
         db.execute('DELETE FROM course_material WHERE id != ?', (material['id'] if material else '',))
+        resource_ids = body.get('resourceIds', [])
+        if not isinstance(resource_ids, list) or len(resource_ids) > 30 or any(not isinstance(item, str) for item in resource_ids):
+            raise ValueError('课程支持材料选择无效')
+        resources = []
+        if resource_ids:
+            marks = ','.join('?' for _ in resource_ids)
+            rows = db.execute(f'SELECT id,name,mime FROM course_resources WHERE owner=? AND id IN ({marks})', (owner, *resource_ids)).fetchall()
+            found = {row['id']: row for row in rows}
+            if len(found) != len(set(resource_ids)):
+                raise ValueError('部分课程支持材料不存在，请刷新后重试')
+            resources = [{'id': item, 'name': found[item]['name'], 'mime': found[item]['mime']} for item in resource_ids]
+        saved['supportResources'] = resources
         for scope, value in (('class', state), ('project-plan', saved)):
             db.execute('INSERT INTO states(scope,data,updated_at) VALUES(?,?,?) ON CONFLICT(scope) DO UPDATE SET data=excluded.data,updated_at=excluded.updated_at',
                        (scope, json.dumps(value, ensure_ascii=False), app.utc_now()))
@@ -383,13 +402,17 @@ def preserve_published_project(db, value):
 
 def send_document(handler, row, query):
     """Same-origin preview and explicit download; never execute uploaded markup."""
-    pdf = Path(row['name']).suffix.lower() == '.pdf'
+    suffix = Path(row['name']).suffix.lower()
+    pdf = suffix == '.pdf'
     preview = query.get('preview') == ['1']
     download = query.get('download') == ['1']
     content = row['source']
-    kind = 'application/pdf' if pdf else 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
-    if preview and not pdf:
-        text, _, _, _ = extract_source(row['name'], content)
+    kind = (row['mime'] if 'mime' in row.keys() else None) or ('application/pdf' if pdf else 'application/vnd.openxmlformats-officedocument.wordprocessingml.document')
+    if preview and suffix in ('.docx', '.txt', '.md', '.csv'):
+        if suffix == '.docx':
+            text, _, _, _ = extract_source(row['name'], content)
+        else:
+            text = content.decode('utf-8', errors='replace')
         content = ('<!doctype html><html lang="zh"><meta charset="utf-8"><title>' + html.escape(row['name']) +
                    '</title><body><h1>' + html.escape(row['name']) + '</h1><pre style="white-space:pre-wrap;font:16px/1.8 sans-serif">' +
                    html.escape(text) + '</pre></body></html>').encode()
@@ -420,7 +443,14 @@ def handle(app, handler, method, route):
             query = parse_qs(urlparse(handler.path).query)
             material_id = query.get('id', [''])[0]
             with app.database() as db:
-                row = db.execute('SELECT name,source FROM course_material WHERE id=?', (material_id,)).fetchone()
+                published = app.state_get('project-plan')
+                allowed = {item.get('id') for item in ([published.get('supportMaterial')] if published.get('supportMaterial') else []) + list(published.get('supportResources') or [])}
+                if session['role'] == 'student' and material_id not in allowed:
+                    row = None
+                else:
+                    row = db.execute('SELECT name,source,NULL AS mime FROM course_material WHERE id=?', (material_id,)).fetchone()
+                    if not row:
+                        row = db.execute('SELECT name,source,mime FROM course_resources WHERE id=? AND (? OR owner=?)', (material_id, session['role'] == 'student', owner)).fetchone()
             if not row:
                 handler.json_response({'error': '课程材料已撤回或不存在'}, 404)
             else:
@@ -436,10 +466,30 @@ def handle(app, handler, method, route):
         elif method == 'GET' and route == '/api/lesson-plan':
             with app.database() as db:
                 job = db.execute('SELECT id,name,status,detail,result,pages FROM lesson_jobs WHERE owner=? ORDER BY created_at DESC,rowid DESC LIMIT 1', (owner,)).fetchone()
+                resources = db.execute('SELECT id,name,mime,created_at FROM course_resources WHERE owner=? ORDER BY created_at DESC', (owner,)).fetchall()
             data = dict(job) if job else None
             if data:
                 data['result'] = json.loads(data['result']) if data['result'] else None
-            handler.json_response({'published': app.state_get('project-plan'), 'job': data, 'fields': INFO_FIELDS})
+            handler.json_response({'published': app.state_get('project-plan'), 'job': data, 'fields': INFO_FIELDS,
+                                   'resources': [dict(row) for row in resources]})
+        elif method == 'POST' and route == '/api/lesson-plan/resources':
+            body = handler.read_json(15 * 1024 * 1024)
+            name = str(body.get('name', '')).replace('\\', '/').split('/')[-1][:180]
+            suffix = Path(name).suffix.lower()
+            if suffix not in ('.pdf', '.docx', '.txt', '.md', '.csv', '.png', '.jpg', '.jpeg', '.webp'):
+                raise ValueError('支持PDF、DOCX、文本、表格和常用图片材料')
+            try:
+                raw = base64.b64decode(body.get('content', ''), validate=True)
+            except (ValueError, TypeError) as exc:
+                raise ValueError('文件编码无效') from exc
+            if not raw or len(raw) > MAX_FILE:
+                raise ValueError('课程材料必须为10MB以内的非空文件')
+            resource_id = secrets.token_hex(16)
+            mime = mimetypes.guess_type(name)[0] or 'application/octet-stream'
+            with app.database() as db:
+                db.execute('INSERT INTO course_resources(id,owner,name,mime,source,created_at) VALUES(?,?,?,?,?,?)',
+                           (resource_id, owner, name, mime, raw, app.utc_now()))
+            handler.json_response({'id': resource_id, 'name': name, 'mime': mime}, 201)
         elif method == 'POST' and route == '/api/lesson-plan/publish':
             handler.json_response(publish(app, handler.read_json(), owner))
         elif method == 'POST' and route == '/api/lesson-plan/analyze':

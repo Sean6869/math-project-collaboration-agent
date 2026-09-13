@@ -11,20 +11,22 @@ const state={className:'七年级测试班',project:'原项目',groupCount:3,gro
  try{
   browser=await chromium.launch({headless:true,...(fs.existsSync(chromium.executablePath())?{}:{channel:'msedge'})});
   const page=await browser.newPage({viewport:{width:1440,height:1000}}),errors=[];page.on('pageerror',e=>errors.push(e.message));page.on('dialog',d=>d.accept());
-  let published={},job={id:'test',name:'采购.docx',status:'ready',detail:'解析完成',result:plan},publishCalls=0,analyzeCalls=0;
+  let published={},resources=[],job={id:'test',name:'采购.docx',status:'ready',detail:'解析完成',result:plan},publishCalls=0,analyzeCalls=0;
   await page.route('**/api/**',async route=>{
    const req=route.request(),url=new URL(req.url());let result={};
    if(url.pathname==='/api/session')result={authenticated:true,role:'teacher',teacherId:1,groupCount:3};
    else if(url.pathname==='/api/state')result={state};
-   else if(url.pathname==='/api/lesson-plan')result={published,job,fields};
-   else if(url.pathname==='/api/lesson-plan/source')return route.fulfill({contentType:'text/html',body:'<p>课程支持材料预览正文</p>'});
+   else if(url.pathname==='/api/lesson-plan')result={published,job,fields,resources};
+   else if(url.pathname==='/api/lesson-plan/resources'){
+    const body=req.postDataJSON();assert.equal(body.name,'采购清单.txt');const item={id:'resource-1',name:body.name,mime:'text/plain'};resources.unshift(item);result=item;
+   }else if(url.pathname==='/api/lesson-plan/source')return route.fulfill({contentType:'text/html',body:'<p>课程支持材料预览正文</p>'});
    else if(url.pathname==='/api/lesson-plan/analyze'){
     analyzeCalls++;assert.equal(req.postDataJSON().lessonCount,4);
     job=analyzeCalls===1?{id:'failed',name:'新教案.docx',status:'failed',detail:'解析超时',result:null}:{id:'retried',name:'新教案.docx',status:'ready',detail:'解析完成',result:plan};result={id:job.id};
    }else if(url.pathname==='/api/lesson-plan/publish'){
-    const body=req.postDataJSON();assert.equal(body.reviewed,true);assert.equal(body.shareSource,true);publishCalls++;
-    published={plan:body.plan,selectedLesson:body.selectedLesson,revision:publishCalls,sourceJobId:body.sourceJobId,supportMaterial:{id:'shared',name:'采购.docx'}};
-    state.currentLesson={lessonNo:body.selectedLesson,title:project.title,projectInfo:body.plan.lessons[body.selectedLesson-1].projectInfo,totalLessons:4,revision:publishCalls,supportMaterial:published.supportMaterial};result=published;
+    const body=req.postDataJSON();assert.equal(body.reviewed,true);assert.equal(body.shareSource,true);assert.deepEqual(body.resourceIds,['resource-1']);publishCalls++;
+    published={plan:body.plan,selectedLesson:body.selectedLesson,revision:publishCalls,sourceJobId:body.sourceJobId,supportMaterial:{id:'shared',name:'采购.docx'},supportResources:resources};
+    state.currentLesson={lessonNo:body.selectedLesson,title:project.title,projectInfo:body.plan.lessons[body.selectedLesson-1].projectInfo,totalLessons:4,revision:publishCalls,supportMaterial:published.supportMaterial,supportMaterials:[published.supportMaterial,...resources]};result=published;
    }
    await route.fulfill({contentType:'application/json',body:JSON.stringify(result)});
   });
@@ -38,11 +40,12 @@ const state={className:'七年级测试班',project:'原项目',groupCount:3,gro
   await page.locator('#pcLesson').selectOption('2');await page.getByLabel('学习目标',{exact:true}).fill('第二课时人工审核目标');
   await page.locator('#pcLesson').selectOption('1');await page.locator('#pcLesson').selectOption('2');assert.equal(await page.getByLabel('学习目标',{exact:true}).inputValue(),'第二课时人工审核目标');
   await page.reload();await page.locator('#pcProject').waitFor();assert.equal(await page.getByLabel('学习目标',{exact:true}).inputValue(),'第二课时人工审核目标');
+  await page.locator('#resourceFile').setInputFiles({name:'采购清单.txt',mimeType:'text/plain',buffer:Buffer.from('预算材料')});await page.locator('#resourceUpload').click();await page.getByText('采购清单.txt',{exact:true}).waitFor();
   await page.locator('#saveProject').click();await page.waitForFunction(()=>document.querySelector('#planSaveStatus').textContent.includes('已发布'));
   assert.equal(publishCalls,1);assert.equal(published.selectedLesson,2);assert.equal(published.plan.lessons[1].projectInfo.learningObjectives,'第二课时人工审核目标');
   await page.locator('#planFile').setInputFiles({name:'新教案.docx',mimeType:'application/vnd.openxmlformats-officedocument.wordprocessingml.document',buffer:Buffer.from('mock document')});
   await page.locator('#planAnalyze').click();await page.waitForFunction(()=>document.querySelector('#planStatus').textContent.includes('超时'));
-  assert.equal(await page.getByLabel('学习目标',{exact:true}).inputValue(),'第二课时人工审核目标');assert.equal(await page.locator('[data-material-preview]').count(),1);
+  assert.equal(await page.getByLabel('学习目标',{exact:true}).inputValue(),'第二课时人工审核目标');assert.equal(await page.locator('[data-material-preview]').count(),2);
   await page.locator('#planRetry').click();await page.waitForFunction(()=>document.querySelector('#planSaveStatus').textContent==='已填入，待保存');assert.equal(publishCalls,1);assert.equal(analyzeCalls,2);
   await page.evaluate(()=>scrollTo(0,0));await page.screenshot({path:path.join(os.tmpdir(),'maple-project-metadata-desktop.png'),fullPage:true});
   await page.setViewportSize({width:390,height:844});assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),'mobile must not overflow');
@@ -56,16 +59,21 @@ const state={className:'七年级测试班',project:'原项目',groupCount:3,gro
    else if(url.pathname==='/api/lesson-plan/material')return route.fulfill({contentType:'text/html',body:'<p>学生材料正文</p>'});
    await route.fulfill({contentType:'application/json',body:JSON.stringify(result)});
   });
-  await page.goto(base+'/student/workspace.html');await page.locator('#currentLessonBanner').waitFor();await page.locator('[data-work="problem"]').fill('尚未保存的学生思路');
-  await page.locator('[data-material-preview]').click();await page.frameLocator('.material-preview').getByText('学生材料正文').waitFor();
+  await page.goto(base+'/student/workspace.html');await page.locator('.material-dock-trigger').waitFor();await page.locator('[data-work="problem"]').fill('尚未保存的学生思路');
+  await page.locator('.material-dock-trigger').click();
+  await page.locator('[data-material-preview]').first().click();await page.frameLocator('.material-preview').getByText('学生材料正文').waitFor();
   assert(page.url().endsWith('/student/workspace.html'));await page.locator('[data-close]').click();
   state.currentLesson={...state.currentLesson,lessonNo:3,revision:2};
-  await page.waitForFunction(()=>document.querySelector('#currentLessonBanner').innerText.includes('第3课时'),{timeout:8000});
+  await page.waitForFunction(()=>document.querySelector('.material-dock-panel')?.textContent.includes('第3课时'),{timeout:8000});
   assert.equal(await page.locator('[data-work="problem"]').inputValue(),'尚未保存的学生思路');
   assert.equal(await page.getByText('查看本课时任务',{exact:true}).count(),0);
   assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),'student material must not overflow');
-  state.currentLesson={...state.currentLesson,supportMaterial:null,revision:3};
+  state.currentLesson={...state.currentLesson,supportMaterial:null,supportMaterials:[],revision:3};
   await page.waitForFunction(()=>!document.querySelector('[data-material-preview]'),{timeout:8000});
+  const completeTeacherConfig=state.teacherConfig;state.teacherConfig={mathTopic:'旧版线上状态'};
+  await page.goto(base+'/student/stage1-materials.html');await page.locator('#savePreparation').waitFor();
+  assert.equal(await page.getByText('平台暂时不可用',{exact:true}).count(),0,'partial legacy state must be normalized');
+  state.teacherConfig=completeTeacherConfig;
   // Render every teacher/student entry after the shared UI cleanup.
   await page.unroute('**/api/**');
   let auditRole='student';state.currentStage=5;
@@ -73,17 +81,28 @@ const state={className:'七年级测试班',project:'原项目',groupCount:3,gro
    const url=new URL(route.request().url());let result={};
    if(url.pathname==='/api/session')result={authenticated:true,role:auditRole,teacherId:1,groupId:1,groupCount:3,isAdmin:true};
    else if(url.pathname==='/api/state')result={state};
-   else if(url.pathname==='/api/lesson-plan')result={published,job,fields};
+   else if(url.pathname==='/api/lesson-plan')result={published,job,fields,resources};
    else if(url.pathname==='/api/lesson-plan/current')result={currentLesson:state.currentLesson};
    else if(url.pathname==='/api/runtime')result={database:{healthy:true,sizeBytes:1024},data:{events:0,states:1,sessions:1,groups:3,files:0},ai:{configured:false,freeAiConfigured:false,calls:0,failedCalls:0},security:{sessionSeconds:3600},environment:'test'};
    await route.fulfill({contentType:'application/json',body:JSON.stringify(result)});
   });
   let audited=0;
-  for(const role of ['student','teacher']){auditRole=role;for(const file of fs.readdirSync(path.join(root,role)).filter(x=>x.endsWith('.html'))){
-   await page.goto(base+'/'+role+'/'+file);await page.locator('#root').waitFor();
-   await page.waitForFunction(()=>document.querySelector('#root').innerHTML.length>0);
-   assert(!await page.getByText('平台暂时不可用',{exact:true}).count(),role+'/'+file+' must render');audited++;
-  }}
+  for(const viewport of [{width:1440,height:1000},{width:900,height:1100},{width:390,height:844}]){
+   await page.setViewportSize(viewport);
+   for(const role of ['student','teacher']){auditRole=role;for(const file of fs.readdirSync(path.join(root,role)).filter(x=>x.endsWith('.html'))){
+    await page.goto(base+'/'+role+'/'+file);await page.locator('#root').waitFor();
+    await page.waitForFunction(()=>document.querySelector('#root').innerHTML.length>0);
+    assert(!await page.getByText('平台暂时不可用',{exact:true}).count(),role+'/'+file+' must render');
+    if(role==='student'&&file==='dashboard.html'){
+     assert.equal(await page.locator('.page-head h1').textContent(),state.project);
+     assert.equal(await page.locator('#projectOverview .project-info-grid article').count(),3);
+     const name='maple-student-dashboard-'+viewport.width+'.png';await page.screenshot({path:path.join(os.tmpdir(),name),fullPage:true});
+    }
+    const typeOutliers=await page.evaluate(()=>[...document.querySelectorAll('body *')].filter(el=>el.offsetParent!==null&&[...el.childNodes].some(node=>node.nodeType===3&&node.textContent.trim())).map(el=>({tag:el.tagName,className:el.className,size:parseFloat(getComputedStyle(el).fontSize)})).filter(item=>item.size<12||item.size>30));
+    assert.deepEqual(typeOutliers,[],role+'/'+file+' typography must stay on the readable scale at '+viewport.width);
+    assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),role+'/'+file+' must not overflow at '+viewport.width);audited++;
+   }}
+  }
   assert.deepEqual(errors,[]);
   console.log('Rendered teacher/student pages:',audited);
   console.log('PASS: 12 metadata fields, autosaved drafts, period switching, publication, failure/retry, teacher/student inline preview, live withdrawal, responsive layout');

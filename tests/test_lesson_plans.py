@@ -232,16 +232,27 @@ class LessonPlanTest(unittest.TestCase):
         self.assertIsNone(request(student, '/api/lesson-plan/current')[1]['currentLesson'])
         with app.database() as db:
             self.assertEqual(db.execute('SELECT COUNT(*) FROM files').fetchone()[0], 0)
+        status, resource = request(teacher, '/api/lesson-plan/resources', {
+            'name': '采购清单.txt', 'content': base64.b64encode('铅笔、尺子、预算表'.encode()).decode(),
+        })
+        self.assertEqual(status, 201)
+        resource_url = '/api/lesson-plan/material?id=' + resource['id']
+        self.assertEqual(request(student, resource_url)[0], 404)
         result = request(teacher, '/api/lesson-plan/publish', {'plan': snapshot['job']['result'], 'selectedLesson': 2, 'revision': 0, 'className': '七年级测试班', 'reviewed': True})
         self.assertEqual(result[0], 200)
         self.assertEqual(request(student, '/api/lesson-plan/current')[1]['currentLesson']['lessonNo'], 2)
         body = {'plan': snapshot['job']['result'], 'selectedLesson': 2, 'revision': 1,
-                'className': '七年级测试班', 'reviewed': True, 'sourceJobId': job['id'], 'shareSource': True}
+                'className': '七年级测试班', 'reviewed': True, 'sourceJobId': job['id'], 'shareSource': True,
+                'resourceIds': [resource['id']]}
         # A teacher cannot publish another teacher's private upload.
         with self.assertRaises(ValueError):
             plans.publish(app, body, owner=999)
         status, saved = request(teacher, '/api/lesson-plan/publish', body)
         self.assertEqual(status, 200)
+        current = request(student, '/api/lesson-plan/current')[1]['currentLesson']
+        self.assertEqual([item['name'] for item in current['supportMaterials']], ['采购.docx', '采购清单.txt'])
+        with student.open(base + resource_url + '&preview=1') as response:
+            self.assertIn('铅笔、尺子、预算表', response.read().decode())
         material_url = '/api/lesson-plan/material?id=' + saved['supportMaterial']['id']
         self.assertEqual(request(anonymous, material_url)[0], 401)
         self.assertEqual(request(student, '/api/lesson-plan/material?id=guess')[0], 404)

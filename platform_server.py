@@ -1922,6 +1922,7 @@ class Handler(SimpleHTTPRequestHandler):
             db.execute("DELETE FROM files")
             db.execute("DELETE FROM lesson_jobs")
             db.execute("DELETE FROM course_material")
+            db.execute("DELETE FROM course_resources")
             db.execute("DELETE FROM teachers WHERE is_admin=0")
             db.execute("DELETE FROM sessions")
             db.execute("DELETE FROM settings WHERE key='teacher_invite_hash'")
