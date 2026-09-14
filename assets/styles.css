@@ -76,7 +76,7 @@ html:has(.auth-shell),body:has(.auth-shell){height:100%;overflow:hidden}.auth-sh
 .project-overview{margin-top:18px}.project-overview>h2{margin-bottom:12px}
 .material-dock{position:fixed;right:22px;bottom:22px;z-index:75;display:grid;justify-items:end;gap:10px}.material-dock-trigger span{display:inline-grid;place-items:center;min-width:20px;height:20px;margin-left:5px;border-radius:99px;background:rgba(255,255,255,.22);font-size:var(--text-xs)}.material-dock-panel{width:min(430px,calc(100vw - 32px));max-height:min(66vh,620px);overflow:auto;box-shadow:0 16px 44px rgba(13,40,66,.2)}.material-dock-panel[hidden]{display:none}.material-dock-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:12px}.material-dock-head small{display:block;margin-top:3px;color:var(--muted)}.material-dock-panel .material-file{display:block}.material-dock-panel .toolbar{padding-bottom:0}
 @media(max-width:1100px){.project-material-grid{grid-template-columns:1fr 1fr}}
-@media(max-width:800px){.sidebar{overflow-x:auto;padding:8px}.nav{display:flex;width:max-content}.nav-label,.nav .sep{display:none}.nav a,.nav a.sub{min-height:38px;padding:8px 11px;white-space:nowrap}.project-material-grid,.project-info-grid{grid-template-columns:1fr}.resource-item{grid-template-columns:auto minmax(0,1fr)}.resource-actions{grid-column:2}.material-dock{right:12px;bottom:12px}.material-dock-panel{position:fixed;right:8px;bottom:64px;left:8px;width:auto;max-height:64vh}.material-dialog{width:calc(100vw - 16px);max-width:none}.material-preview{height:72vh}}
+@media(max-width:800px){.sidebar{overflow-x:auto;padding:8px}.nav{display:flex;width:max-content}.nav-label,.nav .sep{display:none}.nav a,.nav a.sub,.nav-stage-locked{min-height:38px;padding:8px 11px;white-space:nowrap}.project-material-grid,.project-info-grid{grid-template-columns:1fr}.resource-item{grid-template-columns:auto minmax(0,1fr)}.resource-actions{grid-column:2}.material-dock{right:12px;bottom:12px}.material-dock-panel{position:fixed;right:8px;bottom:64px;left:8px;width:auto;max-height:64vh}.material-dialog{width:calc(100vw - 16px);max-width:none}.material-preview{height:72vh}}
 /* Student dashboard: one live status band, then the primary reading surface. */
 .dashboard-status{display:grid;grid-template-columns:minmax(0,1.4fr) minmax(0,1fr);align-items:center;gap:24px;padding:16px 22px;border:1px solid #dce6ef;border-radius:12px;background:linear-gradient(110deg,#f9fcff,#fff 64%);box-shadow:var(--shadow)}
 .dashboard-journey,.dashboard-readings{min-width:0}.journey-heading{display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:12px;color:var(--muted);font-size:12px}.journey-heading b{color:var(--ink);font-size:13px}
@@ -88,3 +88,57 @@ html:has(.auth-shell),body:has(.auth-shell){height:100%;overflow:hidden}.auth-sh
 @media(max-width:1180px){.dashboard-status{grid-template-columns:1fr;gap:15px;padding:16px 20px}.dashboard-readings{border-left:0;border-top:1px solid #e1e8f0;padding:13px 0 0;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}.dashboard-reading{display:flex;align-items:center;justify-content:center;gap:10px}.dashboard-reading .reading-label{margin:0}.task-reading .reading-label{margin-bottom:3px}.dashboard-readings>.dashboard-reading+.dashboard-reading{border-left:1px solid #e1e8f0}.task-gauge{width:38px;height:38px}.learning-focus{padding:24px}.learning-focus .project-info-grid{grid-template-columns:1fr;gap:22px}.learning-focus .project-goals{padding-left:0;border-left:0;padding-top:20px;border-top:1px solid #e3ebf3}}
 @media(max-width:600px){.dashboard-status{padding:14px 12px}.journey-name{font-size:12px}.journey-heading{margin-bottom:13px}.journey-step{padding:0;gap:8px}.journey-step:not(:last-child)::after{left:calc(50% + 17px);width:calc(100% - 34px)}.dashboard-readings{gap:6px}.dashboard-reading{display:block;text-align:center}.dashboard-reading strong{justify-content:center;font-size:21px}.dashboard-reading .reading-label{margin-bottom:6px;font-size:12px}.classroom-reading strong{font-size:15px;min-height:27px}.task-reading{display:flex;gap:6px}.task-gauge{width:30px;height:30px}.task-reading strong{font-size:21px}.reading-total{font-size:12px}.learning-focus{margin-top:18px;padding:20px 18px 24px}.learning-focus-head{align-items:flex-start;flex-direction:column;gap:10px;margin-bottom:18px}.learning-focus-head h2{font-size:22px}.learning-focus .project-info-grid p{font-size:17px;line-height:1.9}.learning-focus .project-unit{display:block;padding:12px 14px}.learning-focus .project-unit h3{margin-bottom:6px}.learning-focus .project-unit p{font-size:15px}.learning-focus .project-info-grid h3{font-size:16px}}
 @media(prefers-reduced-motion:reduce){.is-running .live-indicator{animation:none}.gauge-value{transition:none}}
+
+/* Dashboard type scale: keep labels, values, and the learning focus readable as one system. */
+.dashboard-status{gap:28px;padding:20px 26px}
+.journey-heading{margin-bottom:14px;font-size:14px}
+.journey-heading b{font-size:16px}
+.journey-step{gap:9px}
+.journey-step:not(:last-child)::after{top:17px;left:calc(50% + 23px);width:calc(100% - 46px)}
+.journey-node{width:36px;height:36px;font-size:15px}
+.journey-name{font-size:15px;font-weight:650}
+.dashboard-readings{padding-left:28px;gap:22px}
+.reading-label{font-size:14px;margin-bottom:6px}
+.dashboard-reading strong{font-size:28px;line-height:1.2}
+.classroom-reading strong{font-size:21px}
+.reading-total{font-size:16px}
+.live-indicator{width:8px;height:8px;margin-right:9px}
+.task-reading{gap:14px}
+.task-gauge{width:56px;height:56px}
+.task-gauge circle{stroke-width:4.5}
+.learning-focus-label{font-size:14px}
+.learning-focus-head h2{font-size:28px}
+.lesson-number{font-size:14px}
+.learning-focus .project-info-grid h3{font-size:19px}
+.learning-focus .project-info-grid p{font-size:19px;line-height:1.9}
+.learning-focus .project-unit h3{font-size:16px}
+.learning-focus .project-unit p{font-size:18px;line-height:1.85}
+
+@media(max-width:1180px){
+ .dashboard-status{gap:18px;padding:18px 22px}
+ .dashboard-readings{padding:15px 0 0;gap:16px}
+ .task-gauge{width:48px;height:48px}
+ .learning-focus-head h2{font-size:26px}
+}
+@media(max-width:600px){
+ .dashboard-status{padding:16px 14px}
+ .journey-heading{font-size:13px}
+ .journey-heading b{font-size:15px}
+ .journey-step{gap:8px}
+ .journey-step:not(:last-child)::after{top:15px;left:calc(50% + 20px);width:calc(100% - 40px)}
+ .journey-node{width:32px;height:32px;font-size:14px}
+ .journey-name{font-size:13px}
+ .dashboard-readings{gap:8px;padding-top:13px}
+ .reading-label{font-size:13px;margin-bottom:6px}
+ .dashboard-reading strong{font-size:22px}
+ .classroom-reading strong{font-size:17px}
+ .reading-total{font-size:14px}
+ .task-reading{gap:7px}
+ .task-gauge{width:42px;height:42px}
+ .learning-focus-label{font-size:13px}
+ .learning-focus-head h2{font-size:24px}
+ .learning-focus .project-info-grid h3{font-size:18px}
+ .learning-focus .project-info-grid p{font-size:18px;line-height:1.85}
+ .learning-focus .project-unit h3{font-size:16px}
+ .learning-focus .project-unit p{font-size:17px}
+}
