@@ -11,7 +11,7 @@ const {chromium}=require('playwright'),root=path.resolve(__dirname,'..');
  try{
   browser=await chromium.launch({headless:true,...(fs.existsSync(chromium.executablePath())?{}:{channel:'msedge'})});
   const page=await browser.newPage(),errors=[];page.on('pageerror',error=>errors.push(error.message));
-  let state={project:'流程测试',groupCount:1,groupId:1,currentStage:3,members:['甲','乙'],roles:['建模者','质疑者']};
+  let state={project:'流程测试',groupCount:1,groupId:1,currentStage:3,members:['甲','乙'],roles:['建模者','质疑者'],currentLesson:{lessonNo:1,totalLessons:4,supportMaterials:[{id:'pdf-1',name:'项目说明.pdf',mime:'application/pdf'},{id:'sheet-1',name:'价格数据.xlsx',mime:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'},{id:'image-1',name:'示意图.png',mime:'image/png'}]}};
   await page.route('**/api/**',async route=>{
    const request=route.request(),url=new URL(request.url());let result={};
    if(url.pathname==='/api/session')result={authenticated:true,role:'student',groupId:1,groupCount:1};
@@ -34,6 +34,9 @@ const {chromium}=require('playwright'),root=path.resolve(__dirname,'..');
   assert.equal(hintStyles[0],hintStyles[1]);assert.equal(hintStyles[2],hintStyles[3]);
   const beforeHover=hintStyles[2];await page.locator('.hint-reading').hover();
   assert.equal(await page.locator('.hint-reading strong').evaluate(el=>getComputedStyle(el).color),beforeHover);
+  await page.goto(base+'/student/stage1-materials.html');
+  assert.deepEqual(await page.locator('.stage1-material-icon').allTextContents(),['PDF','XLSX','PNG']);
+  assert.equal(await page.locator('.stage1-material-item').count(),3);
 
   await page.goto(base+'/student/stage3-model.html');
   await page.locator('#m-var').fill('x');await page.locator('#m-rel').fill('y=x²');await page.locator('#m-model').fill('y=x²');await page.locator('#m-range').fill('-2≤x≤2');
