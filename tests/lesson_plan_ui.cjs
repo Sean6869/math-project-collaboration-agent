@@ -86,6 +86,12 @@ const state={className:'七年级测试班',project:'原项目',groupCount:3,gro
    else if(url.pathname==='/api/runtime')result={database:{healthy:true,sizeBytes:1024},data:{events:0,states:1,sessions:1,groups:3,files:0},ai:{configured:false,freeAiConfigured:false,calls:0,failedCalls:0},security:{sessionSeconds:3600},environment:'test'};
    await route.fulfill({contentType:'application/json',body:JSON.stringify(result)});
   });
+  // Use realistic reading-length metadata for dashboard layout review.
+  state.project='《小小采购员》';state.members=['成员1','成员2','成员3','成员4'];state.membersLocked=true;state.stageSubmitted={1:true};
+  state.currentLesson={...state.currentLesson,projectInfo:{...project,
+   teachingUnit:'三年级《数据的整理和表示》、四年级下册第三单元《小数乘法》',
+   projectSummary:'本课时为方案探究制作阶段，引导学生整理前期收集的奖品偏好、价格等数据，用制表的方法整理数据并进行简单分析，结合奖品价格、折扣活动计算不同采购方案的总价，绘制数据分析对照表，运用列表策略对比筛选出最实惠的奖品购买方案，形成各组的初步购买方案。',
+   learningObjectives:'知识目标：学会用制表的方法整理数据并进行简单分析，掌握小数相关的价格计算方法，理解列表策略在优化采购方案中的作用。\n能力目标：能够独立完成多套采购方案的总价计算，通过对比分析筛选出符合预算的最优采购方案，提升数据分析与综合应用知识解决问题的能力。'}};
   let audited=0;
   for(const viewport of [{width:1440,height:1000},{width:900,height:1100},{width:390,height:844}]){
    await page.setViewportSize(viewport);
@@ -96,6 +102,26 @@ const state={className:'七年级测试班',project:'原项目',groupCount:3,gro
     if(role==='student'&&file==='dashboard.html'){
      assert.equal(await page.locator('.page-head h1').textContent(),state.project);
      assert.equal(await page.locator('#projectOverview .project-info-grid article').count(),3);
+     assert.equal(await page.locator('.dashboard-status').count(),1);
+     assert.equal(await page.locator('.dashboard-status .journey-step').count(),5);
+     assert.equal(await page.locator('.journey-step[aria-current="step"]').count(),1);
+     assert.equal(await page.locator('.main>.stage-strip,.main>.cols-4').count(),0);
+     const layout=await page.evaluate(()=>{
+      const status=document.querySelector('.dashboard-status'),info=document.querySelector('#projectOverview'),details=document.querySelector('.dashboard-details');
+      return {statusBottom:status.getBoundingClientRect().bottom,infoTop:info.getBoundingClientRect().top,infoBottom:info.getBoundingClientRect().bottom,detailsTop:details.getBoundingClientRect().top,font:parseFloat(getComputedStyle(info.querySelector('.project-summary p')).fontSize)};
+     });
+     assert(layout.statusBottom<=layout.infoTop&&layout.infoBottom<=layout.detailsTop,'project learning information must be between the status bar and task panels');
+     assert(layout.font>=17,'project summary must have the larger reading type size');
+     if(viewport.width===1440){
+      state.stagePaused=true;state.stageTaskStatus=Array.from({length:5},()=>[false,false,false,false]);state.stageTaskStatus[4]=[true,true,false,true];
+      await page.waitForFunction(()=>document.querySelector('.dashboard-status')?.classList.contains('is-paused')&&document.querySelector('.gauge-value')?.getAttribute('stroke-dasharray')==='75 100',null,{timeout:12000});
+      assert.equal(await page.locator('.live-indicator').evaluate(el=>getComputedStyle(el).animationName),'none');
+      state.stagePaused=false;delete state.stageTaskStatus;
+      await page.waitForFunction(()=>document.querySelector('.dashboard-status')?.classList.contains('is-running')&&document.querySelector('.gauge-value')?.getAttribute('stroke-dasharray')==='0 100',null,{timeout:12000});
+      await page.emulateMedia({reducedMotion:'reduce'});
+      assert.equal(await page.locator('.live-indicator').evaluate(el=>getComputedStyle(el).animationName),'none');
+      await page.emulateMedia({reducedMotion:'no-preference'});
+     }
      const name='maple-student-dashboard-'+viewport.width+'.png';await page.screenshot({path:path.join(os.tmpdir(),name),fullPage:true});
     }
     const typeOutliers=await page.evaluate(()=>[...document.querySelectorAll('body *')].filter(el=>el.offsetParent!==null&&[...el.childNodes].some(node=>node.nodeType===3&&node.textContent.trim())).map(el=>({tag:el.tagName,className:el.className,size:parseFloat(getComputedStyle(el).fontSize)})).filter(item=>item.size<12||item.size>30));

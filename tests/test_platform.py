@@ -242,7 +242,9 @@ class PlatformTest(unittest.TestCase):
         status, overview = self.json_request(teacher, "/api/state")
         groups = {item["id"]: item for item in overview["state"]["groups"]}
         self.assertGreater(groups[1]["progress"], 0)
-        self.assertEqual(groups[1]["latest"], "工作区已保存")
+        self.assertEqual(groups[1]["latest"], saved["state"]["versions"][-1]["note"])
+        self.assertEqual(saved["state"]["versions"][-1]["model"], "二次函数模型")
+        self.assertTrue(saved["state"]["stageTaskStatus"][2][2])
 
     def test_hint_level_state_machine_stays_in_level_until_student_advances(self):
         student = self.client()
@@ -540,8 +542,7 @@ class PlatformTest(unittest.TestCase):
         self.assertIn("function stageStrip(compact=false)", script)
         self.assertIn("${compact?'':`<div class=\"stage-state\">", script)
         self.assertIn("const title=esc(s.project)", script)
-        self.assertIn("${projectOverview(s.currentLesson)}", script)
-        self.assertIn("+stageStrip(s.currentStage)+", script)
+        self.assertIn("+dashboardStatus(s)+projectOverview(s.currentLesson)+", script)
         self.assertIn("+stageStrip(true)+", script)
         self.assertIn(".stage-strip.compact .stage-card", styles)
 

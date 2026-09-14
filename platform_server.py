@@ -8,6 +8,7 @@ import hashlib
 import hmac
 import io
 import json
+import math
 import mimetypes
 import os
 import re
@@ -493,12 +494,17 @@ def init_database() -> None:
 
 def state_get(scope: str) -> dict:
     with database() as db:
-        row = db.execute("SELECT data FROM states WHERE scope=?", (scope,)).fetchone()
+        row = db.execute("SELECT data,updated_at FROM states WHERE scope=?", (scope,)).fetchone()
     if not row:
         return {}
     try:
         value = json.loads(row["data"])
-        return value if isinstance(value, dict) else {}
+        if not isinstance(value, dict):
+            return {}
+        if scope.startswith("group:"):
+            # Recover only the saved model, never invent past revisions or submissions.
+            ensure_model_version(value, row["updated_at"], recover_only=True)
+        return value
     except json.JSONDecodeError:
         return {}
 
@@ -532,6 +538,30 @@ def _has_value(value: object) -> bool:
     return value is not None and value is not False
 
 
+def model_versions(state: dict) -> list[dict]:
+    versions = state.get("versions")
+    return [item for item in versions if isinstance(item, dict) and _has_value(item.get("model"))] if isinstance(versions, list) else []
+
+
+def ensure_model_version(state: dict, timestamp: str, recover_only: bool = False) -> None:
+    workspace = state.get("workspace")
+    if not isinstance(workspace, dict) or not _has_value(workspace.get("model")):
+        return
+    valid = model_versions(state)
+    if recover_only and valid:
+        return
+    snapshot = {key: workspace.get(key, "") for key in ("model", "variables", "relation", "constraints")}
+    if valid and all(snapshot[key] == valid[-1].get(key, snapshot[key]) for key in snapshot):
+        return
+    versions = state.get("versions")
+    versions = list(versions) if isinstance(versions, list) else []
+    number = max([len(versions)] + [int(item["v"][1:]) for item in valid if re.fullmatch(r"V\d+", str(item.get("v", "")))]) + 1
+    versions.append({"v": f"V{number}", "time": timestamp,
+                     "note": "从已保存模型恢复版本记录" if recover_only else "保存模型与变量、关系、约束快照",
+                     **snapshot})
+    state["versions"] = versions
+
+
 def stage_task_status(group_state: dict) -> list[list[bool]]:
     workspace = group_state.get("workspace", {}) if isinstance(group_state.get("workspace"), dict) else {}
     members = [name for name in group_state.get("members", []) if isinstance(name, str) and name.strip()]
@@ -542,12 +572,16 @@ def stage_task_status(group_state: dict) -> list[list[bool]]:
     preparation = group_state.get("preparationChecks", {}) if isinstance(group_state.get("preparationChecks"), dict) else {}
     evidence = group_state.get("evidence", []) if isinstance(group_state.get("evidence"), list) else []
     viewpoints = group_state.get("viewpoints", []) if isinstance(group_state.get("viewpoints"), list) else []
-    versions = group_state.get("versions", []) if isinstance(group_state.get("versions"), list) else []
+    versions = model_versions(group_state)
     product = group_state.get("product", {}) if isinstance(group_state.get("product"), dict) else {}
     rehearsal_checks = product.get("rehearsalChecks", []) if isinstance(product.get("rehearsalChecks"), list) else []
     reflection = [line.strip() for line in str(product.get("reflection", "")).splitlines()]
-    graph_complete = all(_has_value(graph.get(key)) for key in ("a", "b", "c", "min", "max", "note"))
-    checklist_complete = len(checklist) >= 6 and all(value is True for value in checklist.values())
+    try:
+        numbers = [float(graph[key]) for key in ("a", "b", "c", "min", "max")]
+        graph_complete = all(math.isfinite(value) for value in numbers) and numbers[3] < numbers[4] and _has_value(graph.get("note"))
+    except (KeyError, TypeError, ValueError):
+        graph_complete = False
+    checklist_complete = all(checklist.get(str(i), checklist.get(i)) is True for i in range(6))
     return [
         [preparation.get("goal") is True, preparation.get("materials") is True,
          bool(group_state.get("membersLocked")) and bool(members), preparation.get("rules") is True],
@@ -560,7 +594,7 @@ def stage_task_status(group_state: dict) -> list[list[bool]]:
          _has_value(workspace.get("model")) and len(versions) >= 1,
          graph_complete or checklist_complete],
         [len(evidence) >= 1, any(isinstance(item, dict) and item.get("verified") is True for item in evidence),
-         len(viewpoints) >= 2 and all(isinstance(item, dict) and all(_has_value(item.get(key)) for key in ("claim", "basis", "risk")) for item in viewpoints[:2]),
+         sum(isinstance(item, dict) and all(_has_value(item.get(key)) for key in ("claim", "basis", "risk")) for item in viewpoints) >= 2,
          len(versions) >= 2],
         [all(_has_value(value) for value in (workspace.get("problem"), workspace.get("model"), product.get("claim"), product.get("limitations")))
          and any(isinstance(item, dict) and item.get("verified") is True for item in evidence),
@@ -648,6 +682,7 @@ def dynamic_group_summaries(class_state: dict) -> list[dict]:
     stored = class_state.get("groups", [])
     stored = stored if isinstance(stored, list) else []
     count = group_count()
+    current_stage = class_current_stage(class_state)
     summaries = []
     queue = class_state.get("queue", []) if isinstance(class_state.get("queue", []), list) else []
     for number in range(1, count + 1):
@@ -663,9 +698,9 @@ def dynamic_group_summaries(class_state: dict) -> list[dict]:
             "id": number,
             "roleRound": int(group_state.get("roleRound", 1)),
             "membersLocked": bool(group_state.get("membersLocked")),
-            "stage": int(group_state.get("currentStage", class_state.get("currentStage", 1))),
+            "stage": current_stage,
             "submitted": submitted_count,
-            "currentSubmitted": validated_stage_submissions(group_state).get(int(class_state.get("currentStage", 1)), False),
+            "currentSubmitted": validated_stage_submissions(group_state).get(current_stage, False),
             "status": status,
             "help": help_total(group_state),
             "maxHint": highest_hint_level(group_state),
@@ -721,19 +756,41 @@ def acknowledge_broadcast(group_no: int, broadcast_id: str) -> dict:
     return message
 
 
+STUDENT_STAGE_PAGE_RE = re.compile(r"^/student/stage([1-5])(?:-[^/]*)?\.html$")
+
+
+def class_current_stage(class_state: dict | None = None) -> int:
+    """Return the teacher-controlled phase, with a safe value for old/corrupt state."""
+    value = (class_state or state_get("class")).get("currentStage", 1)
+    try:
+        value = int(value)
+    except (TypeError, ValueError):
+        return 1
+    return max(1, min(5, value))
+
+
+def student_stage_page_locked(path: str, session: dict | None, current_stage: int) -> bool:
+    """Only phases already opened by the teacher may be reached by a student."""
+    if not session or session.get("role") != "student":
+        return False
+    match = STUDENT_STAGE_PAGE_RE.fullmatch(path)
+    return bool(match and int(match.group(1)) > class_current_stage({"currentStage": current_stage}))
+
+
 def merged_state(group_no: int) -> dict:
     value = state_get("class")
     group_state = state_get(f"group:{group_no}")
     value.update(group_state)
     value.update(current_broadcast())
     value["stageSubmitted"] = validated_stage_submissions(group_state)
+    value["stageTaskStatus"] = stage_task_status(group_state)
     value["broadcastViewed"] = group_no in value.get("seenGroups", [])
     # 课堂阶段、暂停状态和 AI 开关由教师端统一控制；小组初始状态中的
     # currentStage=1 不能覆盖教师已经开放的阶段，否则学生刷新后会被误判回阶段1。
     class_state = state_get("class")
     for key in ("currentStage", "stagePaused", "aiOpen"):
         if key in class_state:
-            value[key] = class_state[key]
+            value[key] = class_current_stage(class_state) if key == "currentStage" else class_state[key]
     value["freeAiEnabled"] = class_state.get("freeAiEnabled", True) is not False
     try:
         value["freeAiQuota"] = max(1, min(100, int(class_state.get("freeAiQuota", FREE_AI_QUOTA_DEFAULT))))
@@ -1515,6 +1572,13 @@ class Handler(SimpleHTTPRequestHandler):
         if route.path.startswith("/api/"):
             self.json_response({"error": "接口不存在"}, HTTPStatus.NOT_FOUND)
             return
+        session = self.current_session()
+        if student_stage_page_locked(route.path, session, class_current_stage()):
+            self.send_response(HTTPStatus.FOUND)
+            self.send_header("Location", "/student/dashboard.html")
+            self.send_header("Cache-Control", "no-store, max-age=0")
+            self.end_headers()
+            return
         super().do_GET()
 
     def do_POST(self) -> None:
@@ -1653,12 +1717,22 @@ class Handler(SimpleHTTPRequestHandler):
                 return
         candidate = dict(group_state)
         candidate.update({key: incoming[key] for key in GROUP_KEYS if key in incoming})
+        # Version history is append-only and derived from the model actually saved.
+        # Old clients cannot erase history or complete a task with empty versions.
+        candidate["versions"] = group_state.get("versions", [])
+        ensure_model_version(candidate, utc_now())
+        incoming["versions"] = candidate.get("versions", [])
         requested = incoming.get("stageSubmitted", {}) if isinstance(incoming.get("stageSubmitted"), dict) else {}
         saved_submissions = group_state.get("stageSubmitted", {}) if isinstance(group_state.get("stageSubmitted"), dict) else {}
         valid_submissions = validated_stage_submissions(candidate)
         for number in range(1, 6):
             wants_submit = bool(requested.get(str(number), requested.get(number, False)))
             was_submitted = bool(saved_submissions.get(str(number), saved_submissions.get(number, False)))
+            if session["role"] == "student" and wants_submit and not was_submitted:
+                classroom = state_get("class")
+                if classroom.get("stagePaused") or number != int(classroom.get("currentStage", 1)):
+                    self.json_response({"error": "只能提交当前开放且未暂停的阶段"}, HTTPStatus.CONFLICT)
+                    return
             if wants_submit and not was_submitted and not valid_submissions[number]:
                 self.json_response({"error": f"阶段{number}任务尚未全部完成，不能提交"}, HTTPStatus.CONFLICT)
                 return
@@ -1714,7 +1788,7 @@ class Handler(SimpleHTTPRequestHandler):
             state_put("class", class_state)
         self.sync_group_summary(group, group_state)
         record_event(session["role"], group, "state_save", incoming.get("currentStage"), "workspace")
-        self.json_response({"ok": True, "updatedAt": utc_now()})
+        self.json_response({"ok": True, "updatedAt": utc_now(), "state": merged_state(group)})
 
     def initialize_from_request(self, body: dict) -> None:
         if is_initialized():

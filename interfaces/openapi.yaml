@@ -136,10 +136,10 @@ paths:
           schema: {type: integer, minimum: 1, maximum: 20}
           description: 仅教师可选择查看的小组
       responses:
-        '200': {description: 状态对象}
+        '200': {description: 状态对象，包含五阶段四项任务的布尔矩阵 stageTaskStatus 与已验证的 stageSubmitted}
         '401': {description: 未登录}
     put:
-      summary: 保存状态；学生只能写入本组字段
+      summary: 保存状态；学生只能写入本组字段，服务器按实际模型变化维护版本快照
       requestBody:
         required: true
         content:
@@ -150,8 +150,9 @@ paths:
               properties:
                 state: {type: object}
       responses:
-        '200': {description: 已保存}
+        '200': {description: 已保存，返回 ok、updatedAt 和包含实际版本及任务状态的 state}
         '403': {description: 权限不足}
+        '409': {description: 阶段产出不完整、阶段未开放或已暂停，或成员与角色状态冲突}
   /api/broadcast:
     get:
       summary: 获取当前广播及本组查看状态或全班查看进度
