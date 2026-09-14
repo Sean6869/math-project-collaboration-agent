@@ -143,5 +143,9 @@ html:has(.auth-shell),body:has(.auth-shell){height:100%;overflow:hidden}.auth-sh
  .learning-focus .project-unit p{font-size:17px}
 }
 .journey-step.is-done:not(.is-current) .journey-name{color:var(--green);font-weight:700}
+.journey-step.is-past:not(.is-done):not(.is-current) .journey-node{background:#f4f7fa;border-color:#9cabb9;color:var(--ink2);font-weight:800}
+.journey-step.is-past:not(.is-done):not(.is-current) .journey-name{color:var(--ink2);font-weight:700}
+.stage-card.past:not(.done):not(.current) .stage-name{color:var(--ink2)}
+.stage-card.past:not(.done):not(.current) .stage-state{color:#50667a;font-weight:650}
 .dashboard-reading strong{font-weight:800}
 .reading-total{font-weight:700}
