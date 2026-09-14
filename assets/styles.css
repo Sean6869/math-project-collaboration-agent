@@ -142,3 +142,6 @@ html:has(.auth-shell),body:has(.auth-shell){height:100%;overflow:hidden}.auth-sh
  .learning-focus .project-unit h3{font-size:16px}
  .learning-focus .project-unit p{font-size:17px}
 }
+.journey-step.is-done:not(.is-current) .journey-name{color:var(--green);font-weight:700}
+.dashboard-reading strong{font-weight:800}
+.reading-total{font-weight:700}
