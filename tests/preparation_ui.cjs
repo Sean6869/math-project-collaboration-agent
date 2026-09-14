@@ -40,11 +40,11 @@ const {chromium}=require('playwright'),root=path.resolve(__dirname,'..');
   await new Promise(resolve=>setImmediate(resolve));
   state=pending.state;
   await pending.route.fulfill({contentType:'application/json',body:JSON.stringify({state})});
-  await page.waitForURL(base+'/student/stage1.html');
+  await page.waitForURL(base+'/student/stage1-roles.html');
   assert.equal(requests,2,'save queue must recover after failure');
   await page.goto(base+'/student/stage1-materials.html');
   for(const id of ['prepGoal','prepMaterials','prepRules'])assert(await page.locator('#'+id).isChecked(),'saved checks survive navigation');
   assert.deepEqual(errors,[]);
-  console.log('PASS: wait for save, prevent duplicate clicks, retain failed checks, retry and return to stage 1, persist confirmation');
+  console.log('PASS: wait for save, prevent duplicate clicks, retain failed checks, retry and continue to roles, persist confirmation');
  }finally{if(browser)await browser.close();await new Promise(resolve=>server.close(resolve))}
 })().catch(error=>{console.error(error);process.exitCode=1});

@@ -149,3 +149,5 @@ html:has(.auth-shell),body:has(.auth-shell){height:100%;overflow:hidden}.auth-sh
 .stage-card.past:not(.done):not(.current) .stage-state{color:#50667a;font-weight:650}
 .dashboard-reading strong{font-weight:800}
 .reading-total{font-weight:700}
+.hint-reading strong,.hint-reading:hover strong{color:inherit}
+.dashboard-reading .reading-total{color:inherit;font-size:inherit;font-weight:inherit;margin-left:4px}

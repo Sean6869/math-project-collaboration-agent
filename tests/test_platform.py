@@ -865,6 +865,8 @@ class PlatformTest(unittest.TestCase):
         self.assertFalse(result["membersLocked"])
         self.assertEqual(result["members"], first_members)
         self.assertEqual(len(result["roles"]), 5)
+        self.assertEqual(result["state"]["members"], first_members)
+        self.assertFalse(result["state"]["membersLocked"])
         status, result = self.json_request(
             student, "/api/group/members", "POST",
             {"action": "submit"},
@@ -872,6 +874,8 @@ class PlatformTest(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertTrue(result["membersLocked"])
         self.assertEqual(len(result["roles"]), 5)
+        self.assertEqual(result["state"]["members"], first_members)
+        self.assertTrue(result["state"]["membersLocked"])
         status, state_result = self.json_request(student, "/api/state")
         locked_state = state_result["state"]
         locked_state["members"] = first_members + ["越权修改"]

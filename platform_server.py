@@ -2111,7 +2111,7 @@ class Handler(SimpleHTTPRequestHandler):
             group_state["membersLocked"] = False
             state_put(f"group:{group}", group_state)
             record_event("teacher", group, "members_unlocked", 1, str(session.get("username", "")))
-            self.json_response({"ok": True, "members": group_state.get("members", []), "membersLocked": False})
+            self.json_response({"ok": True, "members": group_state.get("members", []), "membersLocked": False, "state": merged_state(group)})
             return
         if action not in {"save", "submit"}:
             raise ValueError("不支持的成员操作")
@@ -2151,7 +2151,7 @@ class Handler(SimpleHTTPRequestHandler):
         else:
             event_type = "members_submitted" if session["role"] == "student" else "members_teacher_updated"
         record_event(session["role"], group, event_type, 1, f"count={len(members)}")
-        self.json_response({"ok": True, "members": members, "roles": group_state["roles"], "membersLocked": group_state["membersLocked"]})
+        self.json_response({"ok": True, "members": members, "roles": group_state["roles"], "membersLocked": group_state["membersLocked"], "state": merged_state(group)})
 
     def register_teacher(self, body: dict) -> None:
         if not is_initialized():
