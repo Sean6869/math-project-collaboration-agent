@@ -177,3 +177,4 @@ html:has(.auth-shell),body:has(.auth-shell){height:100%;overflow:hidden}.auth-sh
 .stage1-materials-empty{padding:clamp(22px,3cqw,42px) 12px}
 .stage1-material-layout .project-overview p{font-size:clamp(16px,1.25cqw,20px);line-height:1.85}
 @media(max-width:800px){.stage1-material-item{grid-template-columns:auto minmax(0,1fr)}.stage1-material-actions{grid-column:2;justify-content:flex-start}.stage1-material-layout .project-overview p{font-size:17px}}
+.field-help{display:block;margin-top:3px;color:var(--muted);font-size:var(--text-xs);font-weight:400}

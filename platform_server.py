@@ -111,7 +111,7 @@ CLASS_KEYS = {
 GROUP_KEYS = {
     "groupId", "roles", "roleRound", "stageSubmitted", "stageTimes",
     "workspace", "versions", "evidence", "viewpoints", "firstThoughts",
-    "debate", "product", "events", "questionTree", "graphConfig", "checklist", "preparationChecks", "freeAi",
+    "debate", "product", "events", "questionTree", "graphConfig", "checklist", "preparationChecks", "freeAi", "mathTools",
 }
 HINT_POLICY_DEFAULT = {"L1": 20, "L2": 10, "L3": 5, "L4": 3}
 HINT_LEVEL_NAMES = {1: "定位", 2: "拆解", 3: "局部示范", 4: "教师介入"}
