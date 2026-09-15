@@ -202,15 +202,14 @@ class PlatformTest(unittest.TestCase):
         self.assertEqual(data["state"]["currentStage"], 2, "小组刷新不能被默认阶段1覆盖")
         self.assertEqual(data["state"]["project"], "集成测试项目")
         self.assertEqual(data["state"]["classGrade"], 8)
-        with mock.patch.object(app, "deepseek_hint") as upstream:
-            with self.assertRaises(urllib.error.HTTPError) as off_topic:
-                self.json_request(
-                    student, "/api/hints", "POST",
-                    {"action": "ask", "newThread": True, "done": "我在玩游戏", "type": "其他", "issue": "英雄联盟怎么出装"},
-                )
-        self.assertEqual(off_topic.exception.code, 422)
-        self.assertIn("只支持初中数学", off_topic.exception.read().decode())
-        upstream.assert_not_called()
+        with mock.patch.object(app, "deepseek_hint", return_value=(None, 0, "not_configured")) as upstream:
+            status, project_hint = self.json_request(
+                student, "/api/hints", "POST",
+                {"action": "ask", "newThread": True, "done": "我已经了解项目材料", "type": "项目流程", "issue": "项目是什么，接下来要做什么"},
+            )
+        self.assertEqual(status, 200)
+        self.assertEqual(project_hint["source"], "teacher_fallback")
+        upstream.assert_called_once()
         status, hint = self.json_request(
             student, "/api/hints", "POST",
             {"done": "已经画出草图", "type": "变量关系", "issue": "不知道如何表示两条边的关系"},
@@ -641,23 +640,17 @@ class PlatformTest(unittest.TestCase):
             {"role": "student", "classCode": "CLASS2026", "groupId": 2, "groupCode": "TEAM02"},
         )
         self.assertEqual(status, 200)
-        with mock.patch.object(app.urllib.request, "urlopen") as upstream:
-            with self.assertRaises(urllib.error.HTTPError) as off_topic:
-                self.json_request(
-                    student, "/api/ai/chat", "POST",
-                    {"prompt": "英雄联盟怎么出装", "newConversation": True},
-                )
-        self.assertEqual(off_topic.exception.code, 422)
-        self.assertIn("只支持初中数学", off_topic.exception.read().decode())
-        upstream.assert_not_called()
-        with mock.patch.object(app.urllib.request, "urlopen") as upstream:
-            with self.assertRaises(urllib.error.HTTPError) as stream_off_topic:
-                self.json_request(
-                    student, "/api/ai/chat/stream", "POST",
-                    {"prompt": "英雄联盟怎么出装", "newConversation": True},
-                )
-        self.assertEqual(stream_off_topic.exception.code, 422)
-        upstream.assert_not_called()
+        fake_project = mock.MagicMock()
+        fake_project.__enter__.return_value = fake_project
+        fake_project.read.return_value = json.dumps({"choices": [{"message": {"content": "当前项目是数学项目式学习，下一步先查看本阶段任务。"}}]}).encode()
+        with mock.patch.object(app.urllib.request, "urlopen", return_value=fake_project) as upstream:
+            status, project_result = self.json_request(
+                student, "/api/ai/chat", "POST",
+                {"prompt": "项目是什么，接下来要做什么", "newConversation": True},
+            )
+        self.assertEqual(status, 200)
+        self.assertEqual(project_result["source"], "ark")
+        self.assertIn("数学项目任务书", json.loads(upstream.call_args.args[0].data)["messages"][0]["content"])
         with mock.patch.dict(os.environ, {"ARK_API_KEY": ""}):
             with self.assertRaises(urllib.error.HTTPError) as context:
                 self.json_request(
@@ -669,8 +662,8 @@ class PlatformTest(unittest.TestCase):
 
         status, saved = self.json_request(student, "/api/state")
         self.assertEqual(status, 200)
-        self.assertEqual(saved["state"]["freeAi"]["activeConversationId"], "")
-        self.assertEqual(saved["state"]["freeAi"]["conversations"], [])
+        self.assertTrue(saved["state"]["freeAi"]["activeConversationId"])
+        self.assertEqual(len(saved["state"]["freeAi"]["conversations"]), 1)
 
         class FakeResponse:
             def __init__(self, payload):
@@ -706,7 +699,7 @@ class PlatformTest(unittest.TestCase):
             self.assertEqual(text_body["model"], app.ARK_TEXT_MODEL)
             self.assertEqual(text_body["speed"], app.ARK_TEXT_SPEED)
             self.assertEqual(text_body["messages"][0]["role"], "system")
-            self.assertIn("只处理与初中数学直接相关", text_body["messages"][0]["content"])
+            self.assertIn("数学项目式学习小组协作场景", text_body["messages"][0]["content"])
             self.assertEqual(text_body["messages"][-1]["content"], "请检查一元一次不等式")
             conversation_id = text_result["conversationId"]
 
@@ -735,7 +728,7 @@ class PlatformTest(unittest.TestCase):
             self.assertEqual(status, 200)
             self.assertEqual(image_result["intent"], "image")
             self.assertEqual(image_result["source"], "ark")
-            self.assertEqual(image_result["usage"], 2)
+            self.assertEqual(image_result["usage"], 3)
             image_file = image_result["file"]
             image_body = json.loads(urlopen.call_args.args[0].data)
             self.assertEqual(image_body["model"], app.ARK_IMAGE_MODEL)

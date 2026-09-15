@@ -230,11 +230,13 @@ def student_math_scope(state: dict) -> str:
     grade = student_grade(state)
     audience = {7: "七年级", 8: "八年级", 9: "九年级"}.get(grade, "初中阶段")
     return (
-        f"服务对象为中国{audience}学生。只处理与初中数学直接相关的概念、计算、推理、图形、统计、"
-        "数学表达或数学建模任务。生活、科学、项目或游戏只能作为数学问题的情境，不能回答其非数学内容。"
-        "表达、术语和步骤应以该年级或更早所学内容为主；确需扩展时，要先用学生已有知识解释，并明确标为拓展。"
-        "对于与数学无直接关系的请求，不提供实质答案，只回复：这里只支持初中数学相关问题，请把问题改写为包含"
-        "数量关系、计算、图形、统计或数学建模的提问。"
+        f"你服务于中国{audience}学生的数学项目式学习小组协作场景。用户提问不需要先证明是数学问题；"
+        "项目主题、项目任务书、驱动性问题、任务与子任务、项目计划、材料、实施、作品、展示、评价、反思、修改、优化，"
+        "以及小组成员、分工、角色、讨论、沟通、协商、共识、冲突、教师反馈和下一步，均属于服务范围。"
+        "回答前判断用户是在问项目流程、协作安排还是数学内容：项目流程和协作问题直接结合数学项目任务书回答；"
+        "数学问题给出符合年级的概念、数量关系、计算、图形、统计、函数、建模、验证或推理；混合问题同时说明两者关系。"
+        "不要因为问题没有数学术语而拒答，也不要把项目流程问题硬改写成数学题。所有回答都要回到当前数学项目任务书、当前阶段和共享工作区；"
+        "信息不足时明确指出需要补充什么。数学解释的表达、术语和步骤应以该年级或更早所学内容为主；确需扩展时先用已有知识解释并标明拓展。"
     )
 
 
@@ -249,6 +251,12 @@ MATH_TERMS = (
 MATH_CONTEXT_TERMS = (
     "数量", "计算", "关系", "图像", "数据", "单位", "距离", "速度", "时间", "价格", "成本", "性价比",
     "长度", "宽度", "最大值", "最小值", "最优", "模型", "相似", "平移", "旋转",
+)
+PROJECT_CONTEXT_TERMS = (
+    "项目", "项目式学习", "任务书", "主题", "驱动性问题", "核心问题", "任务", "子任务", "探究", "调查", "研究", "实践",
+    "数据收集", "方案设计", "项目计划", "实施", "作品", "成果", "展示", "汇报", "评价", "反思", "修改", "优化", "下一步",
+    "小组", "团队", "同伴", "同学", "组员", "组长", "成员", "合作", "协作", "分工", "角色", "职责", "共同完成", "交流", "沟通",
+    "讨论", "分享", "倾听", "回应", "解释", "补充", "质疑", "协商", "共识", "冲突", "协调", "互助", "互评", "教师", "老师", "学生", "课堂", "学习目标",
 )
 MATH_SYMBOL_RE = re.compile(
     r"(?:\d+(?:\.\d+)?\s*[+\-×÷*/=<>≤≥]\s*[A-Za-z\d(]|[A-Za-z]\s*=\s*[-+]?\d|"
@@ -267,8 +275,13 @@ def has_math_signal(text: str) -> bool:
     return any(term in compact for term in MATH_TERMS) or contextual >= 2 or bool(MATH_SYMBOL_RE.search(text or ""))
 
 
+def has_project_signal(text: str) -> bool:
+    compact = re.sub(r"\s+", "", text or "")
+    return any(term in compact for term in PROJECT_CONTEXT_TERMS)
+
+
 def is_math_question(text: str, history: list[dict] | None = None) -> bool:
-    if has_math_signal(text):
+    if has_math_signal(text) or has_project_signal(text):
         return True
     clean = re.sub(r"\s+", "", text or "")
     if not MATH_CONTINUATION_RE.fullmatch(clean):
@@ -277,7 +290,7 @@ def is_math_question(text: str, history: list[dict] | None = None) -> bool:
         str(item.get("content", item.get("question", item.get("reply", ""))))
         for item in (history or [])[-6:] if isinstance(item, dict)
     )
-    return has_math_signal(recent)
+    return has_math_signal(recent) or has_project_signal(recent)
 
 
 def ensure_math_question(text: str, history: list[dict] | None = None) -> None:
@@ -973,7 +986,7 @@ def deepseek_hint(
         + MATH_FORMAT_RULE
         + f"当前严格执行{level}：{contracts[level]}"
         "不得重复历史提示；信息不足时先澄清，不得猜测。材料冲突、数学结论不可靠或需要教师判断时，在nextAction中写明请教师核验。"
-        "回答必须体现苏格拉底式引导：诊断开头先具体肯定学生已经完成的有效工作，再指出一个可改进点；支架至少提出一个能让学生自己判断的追问；下一步给出一个可在当前材料上执行的动作，并保留学生作出数学判断的责任。"
+        "项目流程或协作类提问应直接回答项目是什么、当前做到哪一步、接下来做什么；数学类提问继续体现苏格拉底式引导：诊断开头先具体肯定学生已经完成的有效工作，再指出一个可改进点；支架至少提出一个能让学生自己判断的追问；下一步给出一个可在当前材料上执行的动作，并保留学生作出数学判断的责任。"
         "diagnosis、guidance、nextAction三个字段都不少于80个中文字符，目标各100字左右，不能用空话凑字数。"
         "只输出一个JSON对象，不要Markdown和额外文字，格式为："
         '{"diagnosis":"针对本次尝试的简短诊断","guidance":"符合当前层级的支架","nextAction":"学生下一步可执行动作；L3必须明确留下由学生完成的剩余一步"}'
@@ -989,7 +1002,7 @@ def deepseek_hint(
         "适用年级": student_grade(state) or "初中阶段",
         "项目": state.get("project", ""), "数学主题": config.get("mathTopic", ""),
         "课程目标": config.get("standard", ""), "当前阶段": state.get("currentStage", 1),
-        "当前课时项目信息": state.get("currentLesson"),
+        "当前课时项目信息": state.get("currentLesson"), "数学项目任务书": project_charter(state),
         "提示层级": level, "已完成": done, "卡点类型": issue_type, "具体卡点": issue,
         "共享工作区": state.get("workspace", {}), "已检查工作区": checked_work,
         "同一求助主题的最近对话": recent, "已审核材料": knowledge_names, "材料摘录": knowledge,
@@ -1062,6 +1075,16 @@ def free_ai_state(group_state: dict) -> dict:
     return {"conversations": conversations, "activeConversationId": active_id, "usage": usage}
 
 
+def project_charter(state: dict) -> dict:
+    config = state.get("teacherConfig", {}) if isinstance(state.get("teacherConfig"), dict) else {}
+    lesson = state.get("currentLesson") if isinstance(state.get("currentLesson"), dict) else {}
+    return {
+        "项目名称": state.get("project", ""), "数学主题": config.get("mathTopic", ""),
+        "课程目标": config.get("standard", ""), "最终成果": config.get("finalProduct", ""),
+        "当前阶段": state.get("currentStage", 1), "当前课时": lesson,
+    }
+
+
 def free_ai_context(state: dict, group: int) -> str:
     config = state.get("teacherConfig", {}) if isinstance(state.get("teacherConfig"), dict) else {}
     workspace = state.get("workspace", {}) if isinstance(state.get("workspace"), dict) else {}
@@ -1070,7 +1093,7 @@ def free_ai_context(state: dict, group: int) -> str:
         "项目": state.get("project", ""), "数学主题": config.get("mathTopic", ""),
         "课程目标": config.get("standard", ""), "最终成果": config.get("finalProduct", ""),
         "当前阶段": state.get("currentStage", 1), "小组": group, "共享工作区": workspace,
-        "当前课时项目信息": state.get("currentLesson"),
+        "当前课时项目信息": state.get("currentLesson"), "数学项目任务书": project_charter(state),
     }
     return json.dumps(context, ensure_ascii=False)
 
@@ -1080,7 +1103,7 @@ def ark_free_messages(state: dict, group: int, prompt: str, history: list[dict])
         "你是‘迈谱 Maple’学生小组自由工作区的初中数学助手。"
         + student_math_scope(state)
         + "你的任务是帮助学生减少机械性整理，把更多时间留给小组协作和高阶思考。"
-        "你可以解释概念、检查思路和书写数学表达，但不要替学生完成未经讨论的整个项目，"
+        "你可以回答项目是什么、接下来做什么，解释概念、检查思路和书写数学表达，但不要替学生完成未经讨论的整个项目，"
         "不要伪造数据；缺少信息时明确列出需要补充的内容。"
         + MATH_FORMAT_RULE
         + "回答使用清晰的Markdown。"
@@ -2210,7 +2233,6 @@ class Handler(SimpleHTTPRequestHandler):
             conversation = next(
                 (item for item in workspace["conversations"] if item.get("id") == workspace["activeConversationId"]), None,
             )
-        ensure_math_question(prompt, conversation.get("messages", []) if conversation else [])
         if conversation is None:
             conversation = {
                 "id": secrets.token_urlsafe(8), "title": prompt[:20],
@@ -2410,7 +2432,6 @@ class Handler(SimpleHTTPRequestHandler):
             if usage[next_level] >= policy[next_level]:
                 raise ValueError(f"{next_level}额度已用完，请先联系教师调整")
             attempt = done
-            ensure_math_question(f"{attempt}\n{issue}", messages)
             thread["type"] = issue_type
             thread["currentLevel"] = next_level_no
             thread.setdefault("transitions", []).append({"time": utc_now(), "from": f"L{level_no}", "to": next_level, "attempt": attempt})
@@ -2494,7 +2515,6 @@ class Handler(SimpleHTTPRequestHandler):
         if not done or (not issue and not thread):
             raise ValueError("请先填写已有进展和具体卡点")
         existing_messages = thread.get("messages", []) if thread and isinstance(thread.get("messages"), list) else []
-        ensure_math_question(f"{done}\n{issue}", existing_messages)
         if not thread:
             thread = {
                 "id": secrets.token_hex(8), "status": "active", "currentLevel": 1,
