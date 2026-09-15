@@ -20,8 +20,11 @@ const state={className:'七年级测试班',project:'原项目',groupCount:3,gro
    else if(url.pathname==='/api/lesson-plan/resources'){
     const body=req.postDataJSON();assert.equal(body.name,'采购清单.txt');const item={id:'resource-1',name:body.name,mime:'text/plain'};resources.unshift(item);result=item;
    }else if(url.pathname==='/api/lesson-plan/source')return route.fulfill({contentType:'text/html',body:'<p>课程支持材料预览正文</p>'});
+   else if(url.pathname==='/api/lesson-plan/inspect'){
+    const body=req.postDataJSON();assert.equal(body.name,'新教案.docx');job={id:'inspected',name:body.name,status:'inspected',detail:'AI建议4课时：原文明确安排4课时',lessonCount:4,result:null};result={id:job.id};
+   }
    else if(url.pathname==='/api/lesson-plan/analyze'){
-    analyzeCalls++;assert.equal(req.postDataJSON().lessonCount,4);
+    analyzeCalls++;assert.equal(req.postDataJSON().lessonCount,4);assert.equal(req.postDataJSON().retryId,analyzeCalls===1?'inspected':'failed');
     job=analyzeCalls===1?{id:'failed',name:'新教案.docx',status:'failed',detail:'解析超时',result:null}:{id:'retried',name:'新教案.docx',status:'ready',detail:'解析完成',result:plan};result={id:job.id};
    }else if(url.pathname==='/api/lesson-plan/publish'){
     const body=req.postDataJSON();assert.equal(body.reviewed,true);assert.equal(body.shareSource,true);assert.deepEqual(body.resourceIds,['resource-1']);publishCalls++;
@@ -43,7 +46,7 @@ const state={className:'七年级测试班',project:'原项目',groupCount:3,gro
   await page.locator('#resourceFile').setInputFiles({name:'采购清单.txt',mimeType:'text/plain',buffer:Buffer.from('预算材料')});await page.locator('#resourceUpload').click();await page.getByText('采购清单.txt',{exact:true}).waitFor();
   await page.locator('#saveProject').click();await page.waitForFunction(()=>document.querySelector('#planSaveStatus').textContent.includes('已发布'));
   assert.equal(publishCalls,1);assert.equal(published.selectedLesson,2);assert.equal(published.plan.lessons[1].projectInfo.learningObjectives,'第二课时人工审核目标');
-  await page.locator('#planFile').setInputFiles({name:'新教案.docx',mimeType:'application/vnd.openxmlformats-officedocument.wordprocessingml.document',buffer:Buffer.from('mock document')});
+  await page.locator('#planFile').setInputFiles({name:'新教案.docx',mimeType:'application/vnd.openxmlformats-officedocument.wordprocessingml.document',buffer:Buffer.from('mock document')});await page.waitForFunction(()=>document.querySelector('#planStatus').textContent.includes('建议4课时'));assert.equal(await page.locator('#planTotal').inputValue(),'4');
   await page.locator('#planAnalyze').click();await page.waitForFunction(()=>document.querySelector('#planStatus').textContent.includes('超时'));
   assert.equal(await page.getByLabel('学习目标',{exact:true}).inputValue(),'第二课时人工审核目标');assert.equal(await page.locator('[data-material-preview]').count(),2);
   await page.locator('#planRetry').click();await page.waitForFunction(()=>document.querySelector('#planSaveStatus').textContent==='已填入，待保存');assert.equal(publishCalls,1);assert.equal(analyzeCalls,2);

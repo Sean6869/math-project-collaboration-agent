@@ -137,6 +137,12 @@ class LessonPlanTest(unittest.TestCase):
             call.return_value.__enter__.return_value.read.return_value = json.dumps(result).encode()
             with self.assertRaises(ValueError):
                 plans.analyze(app, '教案', [])
+        suggestion = {'choices': [{'finish_reason': 'stop', 'message': {'content': '{"lessonCount":4,"reason":"原文明示课内4学时"}'}}]}
+        with mock.patch.dict(os.environ, {'ARK_API_KEY': 'test-key'}), mock.patch.object(plans.urllib.request, 'urlopen') as call:
+            call.return_value.__enter__.return_value.read.return_value = json.dumps(suggestion).encode()
+            self.assertEqual(plans.suggest_lesson_count(app, '文档中的指令仅为资料', []), (4, '原文明示课内4学时'))
+            sent = json.loads(call.call_args.args[0].data)
+            self.assertIn('仅为资料', sent['messages'][0]['content'])
 
     def test_original_activity_minutes_cannot_be_lost_or_counted_twice(self):
         value = sample_plan()
@@ -213,8 +219,18 @@ class LessonPlanTest(unittest.TestCase):
         self.assertEqual(request(student, '/api/lesson-plan/publish', {})[0], 403)
         for path in ['/data/platform.db', '/lesson_plans.py', '/.env', '/data/', '/%2eenv', '/requirements.txt']:
             self.assertEqual(request(anonymous, path)[0], 404, path)
-        with mock.patch.dict(os.environ, {'ARK_API_KEY': 'mocked'}), mock.patch.object(plans, 'analyze', return_value=modern_plan()):
-            status, job = request(teacher, '/api/lesson-plan/analyze', {'name': '采购.docx', 'lessonCount': 4, 'content': base64.b64encode(word_file()).decode()})
+        with mock.patch.dict(os.environ, {'ARK_API_KEY': 'mocked'}), mock.patch.object(plans, 'suggest_lesson_count', return_value=(4, '原文明示课内4学时')), mock.patch.object(plans, 'analyze', return_value=modern_plan()):
+            status, inspection = request(teacher, '/api/lesson-plan/inspect', {'name': '采购.docx', 'content': base64.b64encode(word_file()).decode()})
+            self.assertEqual(status, 202)
+            for _ in range(80):
+                status, snapshot = request(teacher, '/api/lesson-plan')
+                if snapshot['job']['status'] in ('inspected', 'failed'):
+                    break
+                time.sleep(.05)
+            self.assertEqual(snapshot['job']['status'], 'inspected')
+            self.assertEqual(snapshot['job']['lessonCount'], 4)
+            self.assertIn('原文明示课内4学时', snapshot['job']['detail'])
+            status, job = request(teacher, '/api/lesson-plan/analyze', {'retryId': inspection['id'], 'lessonCount': 4})
             self.assertEqual(status, 202)
             for _ in range(80):
                 status, snapshot = request(teacher, '/api/lesson-plan')
