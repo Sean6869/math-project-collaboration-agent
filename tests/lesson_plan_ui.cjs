@@ -24,7 +24,7 @@ const state={className:'七年级测试班',project:'原项目',groupCount:3,gro
     const body=req.postDataJSON();assert.equal(body.name,'新教案.docx');job={id:'inspected',name:body.name,status:'inspected',detail:'AI建议4课时：原文明确安排4课时',lessonCount:4,result:null};result={id:job.id};
    }
    else if(url.pathname==='/api/lesson-plan/analyze'){
-    analyzeCalls++;assert.equal(req.postDataJSON().lessonCount,4);assert.equal(req.postDataJSON().retryId,analyzeCalls===1?'inspected':'failed');
+    analyzeCalls++;assert.equal(req.postDataJSON().lessonCount,analyzeCalls===1?4:3);assert.equal(req.postDataJSON().retryId,analyzeCalls===1?'inspected':'failed');
     job=analyzeCalls===1?{id:'failed',name:'新教案.docx',status:'failed',detail:'解析超时',result:null}:{id:'retried',name:'新教案.docx',status:'ready',detail:'解析完成',result:plan};result={id:job.id};
    }else if(url.pathname==='/api/lesson-plan/publish'){
     const body=req.postDataJSON();assert.equal(body.reviewed,true);assert.equal(body.shareSource,true);assert.deepEqual(body.resourceIds,['resource-1']);publishCalls++;
@@ -38,6 +38,8 @@ const state={className:'七年级测试班',project:'原项目',groupCount:3,gro
   assert.equal(await page.locator('#pcGroupCount').inputValue(),'3');assert.equal(await page.locator('#pcLesson option').count(),4);
   for(const [key,label] of Object.entries(fields)){const field=page.getByLabel(label,{exact:true});assert.equal(await field.count(),1);assert.equal(await field.inputValue(),key==='lessonSchedule'?'第1课时 / 共4课时':project[key])}
   assert.equal(await page.getByText('本课时任务',{exact:true}).count(),0);assert.equal(await page.locator('#planWarnings').count(),0);assert.equal(publishCalls,0);
+  assert.equal(await page.locator('#planShare').count(),0);assert.equal(await page.locator('[data-plan-share]').count(),1);assert.equal(await page.locator('[data-plan-share]').isChecked(),true);
+  const [planBox,resourceBox,chooseBox,analyzeBox]=await Promise.all([page.locator('#planSource').boundingBox(),page.locator('#resourceSource').boundingBox(),page.locator('label[for="planFile"]+ .file-upload .evidence-file-button').boundingBox(),page.locator('#planAnalyze').boundingBox()]);assert.equal(Math.round(planBox.y),Math.round(resourceBox.y));assert.equal(Math.round(planBox.height),Math.round(resourceBox.height));assert.equal(Math.round(chooseBox.width),Math.round(analyzeBox.width));assert.equal(Math.round(chooseBox.height),Math.round(analyzeBox.height));
   await page.locator('[data-material-preview]').click();await page.frameLocator('.material-preview').getByText('课程支持材料预览正文').waitFor();
   assert(page.url().endsWith('/teacher/project.html'));await page.locator('[data-close]').click();
   await page.locator('#pcLesson').selectOption('2');await page.getByLabel('学习目标',{exact:true}).fill('第二课时人工审核目标');
@@ -49,7 +51,7 @@ const state={className:'七年级测试班',project:'原项目',groupCount:3,gro
   await page.locator('#planFile').setInputFiles({name:'新教案.docx',mimeType:'application/vnd.openxmlformats-officedocument.wordprocessingml.document',buffer:Buffer.from('mock document')});await page.waitForFunction(()=>document.querySelector('#planStatus').textContent.includes('建议4课时'));assert.equal(await page.locator('#planTotal').inputValue(),'4');
   await page.locator('#planAnalyze').click();await page.waitForFunction(()=>document.querySelector('#planStatus').textContent.includes('超时'));
   assert.equal(await page.getByLabel('学习目标',{exact:true}).inputValue(),'第二课时人工审核目标');assert.equal(await page.locator('[data-material-preview]').count(),2);
-  await page.locator('#planRetry').click();await page.waitForFunction(()=>document.querySelector('#planSaveStatus').textContent==='已填入，待保存');assert.equal(publishCalls,1);assert.equal(analyzeCalls,2);
+  assert.equal(await page.locator('#planRetry').count(),0);await page.locator('#planTotal').fill('3');await page.locator('#planAnalyze').click();await page.waitForFunction(()=>document.querySelector('#planSaveStatus').textContent==='已填入，待保存');assert.equal(publishCalls,1);assert.equal(analyzeCalls,2);
   await page.evaluate(()=>scrollTo(0,0));await page.screenshot({path:path.join(os.tmpdir(),'maple-project-metadata-desktop.png'),fullPage:true});
   await page.setViewportSize({width:390,height:844});assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),'mobile must not overflow');
   await page.evaluate(()=>scrollTo(0,0));await page.screenshot({path:path.join(os.tmpdir(),'maple-project-metadata-mobile.png'),fullPage:true});

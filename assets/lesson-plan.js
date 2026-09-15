@@ -28,7 +28,7 @@ async function mount({s,api,esc,toast,refreshState,teacherId}){
   const multiline=['teachingUnit','projectSummary','learningObjectives'].includes(key);
   return '<div class="field'+(multiline?' span-2':'')+'"><label for="'+fieldId(key)+'">'+esc(label)+'</label>'+(multiline?'<textarea rows="4" id="'+fieldId(key)+'"></textarea>':'<input id="'+fieldId(key)+'">')+'</div>';
  }).join('');
- const source=$('planSource');source.innerHTML='<h2>教案智能解析</h2><div class="field"><label for="planTotal">总课时数</label><input id="planTotal" type="number" min="1" max="30"></div><div class="field mt12"><label for="planFile">教案文件（PDF / DOCX，最大10MB）</label><div class="file-upload"><input id="planFileStatus" class="file-name" type="text" readonly placeholder="尚未选择教案"><div class="file-upload-actions"><label class="btn evidence-file-button">选择文件<input id="planFile" type="file" accept=".pdf,.docx" hidden></label><button id="planAnalyze" class="btn primary">解析教案</button><label class="inline-review"><input type="checkbox" id="planShare">发布教案给学生</label><button id="planRetry" class="btn" hidden>重新解析</button></div></div></div><p id="planStatus" role="status" aria-live="polite"></p><div id="planPreview"></div><button class="btn mt12" id="planApply" hidden>填入解析结果</button>';
+ const source=$('planSource');source.innerHTML='<h2>教案智能解析</h2><div class="field"><label for="planTotal">总课时数</label><input id="planTotal" type="number" min="1" max="30"></div><div class="field mt12"><label for="planFile">教案文件（PDF / DOCX，最大10MB）</label><div class="file-upload"><input id="planFileStatus" class="file-name" type="text" readonly placeholder="尚未选择教案"><div class="file-upload-actions"><label class="btn evidence-file-button">选择文件<input id="planFile" type="file" accept=".pdf,.docx" hidden></label><button id="planAnalyze" class="btn primary">解析教案</button></div></div></div><p id="planStatus" role="status" aria-live="polite"></p><div id="planPreview"></div><button class="btn mt12" id="planApply" hidden>填入解析结果</button>';
  const resourceSource=$('resourceSource');resourceSource.innerHTML='<h2>课程支持材料</h2><div class="field"><label for="resourceFile">无需AI解析，可上传多份；勾选后随本课时发布给学生</label><div class="file-upload"><input id="resourceFileStatus" class="file-name" type="text" readonly placeholder="尚未选择材料"><div class="file-upload-actions"><label class="btn evidence-file-button">选择文件<input id="resourceFile" type="file" multiple accept=".pdf,.docx,.txt,.md,.csv,.png,.jpg,.jpeg,.webp" hidden></label><button id="resourceUpload" class="btn primary">上传材料</button></div></div></div><div id="resourceList" class="task-list"></div>';
  $('resourceFile').onchange=()=>{$('resourceFileStatus').value=[...$('resourceFile').files].map(file=>file.name).join('、')};
  $('planTotal').value=plan.lessons.length;
@@ -43,12 +43,10 @@ async function mount({s,api,esc,toast,refreshState,teacherId}){
  function paint(){
   for(const key of Object.keys(fields))$(fieldId(key)).value=plan.lessons[selected-1].projectInfo[key]||'';
   $('pcLesson').innerHTML=plan.lessons.map((_,i)=>'<option value="'+(i+1)+'">第'+(i+1)+'课时 / 共'+plan.lessons.length+'课时</option>').join('');$('pcLesson').value=selected;
-  $('planShare').checked=shareSource;
  }
  function changed(){read();dirty=true;stash();$('planSaveStatus').textContent='未保存'}
  $('projectCard').querySelectorAll('input,textarea').forEach(el=>el.addEventListener('input',changed));
  $('pcLesson').onchange=()=>{read();selected=Number($('pcLesson').value);paint();dirty=true;stash();$('planSaveStatus').textContent='未保存'};
- $('planShare').onchange=()=>{shareSource=$('planShare').checked;sourceJobId=job?.id||sourceJobId;dirty=true;stash()};
  $('resourceUpload').onclick=async()=>{
   const files=[...$('resourceFile').files];if(!files.length){toast('请选择课程材料');return}
   if(files.some(file=>!file.size||file.size>10*1024*1024)){toast('每份材料必须为10MB以内的非空文件');return}
@@ -64,11 +62,11 @@ async function mount({s,api,esc,toast,refreshState,teacherId}){
  async function inspect(file){
   if(!file)return;
   if(!file.size||file.size>10*1024*1024){toast('请选择10MB以内的非空教案');$('planFile').value='';$('planFileStatus').value='';return}
-  busy=true;$('planAnalyze').disabled=true;$('planRetry').disabled=true;$('planTotal').disabled=true;$('planStatus').textContent='正在上传教案，AI将先判断合适的总课时数…';
+  busy=true;$('planAnalyze').disabled=true;$('planTotal').disabled=true;$('planStatus').textContent='正在上传教案，AI将先判断合适的总课时数…';
   try{
    const content=await new Promise((resolve,reject)=>{const reader=new FileReader();reader.onload=()=>resolve(String(reader.result).split(',')[1]);reader.onerror=()=>reject(new Error('文件读取失败'));reader.readAsDataURL(file)});
    const result=await api('/api/lesson-plan/inspect',{method:'POST',body:JSON.stringify({name:file.name,content})});pendingJob=result.id;sourceJobId=result.id;await poll();
-  }catch(e){$('planStatus').textContent=e.message;busy=false;$('planRetry').disabled=false;$('planTotal').disabled=false}
+  }catch(e){$('planStatus').textContent=e.message;busy=false;$('planAnalyze').disabled=false;$('planTotal').disabled=false}
  }
  $('planFile').onchange=()=>{const file=$('planFile').files[0];$('planFileStatus').value=file?.name||'';if(file)inspect(file)};
  function applyResult(force=false){
@@ -81,13 +79,14 @@ async function mount({s,api,esc,toast,refreshState,teacherId}){
  function preview(){
   busy=Boolean(job&&['inspecting','extracting','analyzing'].includes(job.status));
   if(job?.status==='inspected'&&inspectedJob!==job.id){inspectedJob=job.id;$('planTotal').value=job.lessonCount}
-  $('planAnalyze').disabled=busy||job?.status!=='inspected';$('planRetry').hidden=!job||['inspecting','inspected'].includes(job.status);$('planRetry').disabled=busy;$('planTotal').disabled=busy;
+  $('planAnalyze').disabled=busy||!job?.id;$('planTotal').disabled=busy;
   $('planStatus').textContent=job?.detail||'';
+  applyResult();
   const material=job||snapshot.published.supportMaterial;
   const url=material?'/api/lesson-plan/'+(job?'source':'material')+'?id='+encodeURIComponent(material.id):'';
-  $('planPreview').innerHTML=material?'<div class="task flex"><b>'+esc(material.name)+'</b><span class="resource-actions"><button class="btn sm" data-material-preview="'+esc(url)+'">预览</button><a class="btn sm" href="'+esc(url)+'&amp;download=1">下载</a>'+(job?'<button class="btn sm danger" data-plan-delete="'+esc(job.id)+'">删除</button>':'')+'</span></div>':'';
-  document.querySelector('[data-plan-delete]')?.addEventListener('click',async event=>{if(!confirm('删除这份教案吗？'))return;event.currentTarget.disabled=true;try{await api('/api/lesson-plan/source/'+encodeURIComponent(event.currentTarget.dataset.planDelete),{method:'DELETE'});job=null;sourceJobId=null;pendingJob=null;preview();toast('教案已删除')}catch(error){event.currentTarget.disabled=false;toast(error.message)}});
-  $('planShare').disabled=!material;applyResult();
+  $('planPreview').innerHTML=material?'<div class="task resource-item"><input type="checkbox" aria-label="随本课时发布 '+esc(material.name)+'" title="勾选后随本课时发布给学生" data-plan-share '+(shareSource?'checked':'')+'><span><b>'+esc(material.name)+'</b></span><span class="resource-actions"><button class="btn sm" data-material-preview="'+esc(url)+'">预览</button><a class="btn sm" href="'+esc(url)+'&amp;download=1">下载</a>'+(job?'<button class="btn sm danger" data-plan-delete="'+esc(job.id)+'">删除</button>':'')+'</span></div><small class="muted">勾选后随本课时发布给学生</small>':'';
+  document.querySelector('[data-plan-share]')?.addEventListener('change',event=>{shareSource=event.currentTarget.checked;sourceJobId=job?.id||sourceJobId;dirty=true;stash();$('planSaveStatus').textContent='未保存'});
+  document.querySelector('[data-plan-delete]')?.addEventListener('click',async event=>{if(!confirm('删除这份教案吗？'))return;event.currentTarget.disabled=true;try{await api('/api/lesson-plan/source/'+encodeURIComponent(event.currentTarget.dataset.planDelete),{method:'DELETE'});job=null;sourceJobId=null;pendingJob=null;shareSource=false;dirty=true;stash();preview();toast('教案已删除')}catch(error){event.currentTarget.disabled=false;toast(error.message)}});
  }
  async function poll(){if(!$('planStatus'))return;try{job=(await api('/api/lesson-plan')).job;preview();if(busy)setTimeout(poll,2000)}catch(e){$('planStatus').textContent='读取失败：'+e.message;setTimeout(poll,4000)}}
  async function start(){
@@ -96,12 +95,12 @@ async function mount({s,api,esc,toast,refreshState,teacherId}){
   if(!Number.isInteger(lessonCount)||lessonCount<1||lessonCount>30){toast('总课时数应为1—30');return}
   if(!job?.id){toast('请先选择教案，等待AI给出课时建议');return}
   if(dirty&&!confirm('解析成功后替换备课草稿？已发布信息不变。'))return;
-  busy=true;$('planAnalyze').disabled=true;$('planRetry').disabled=true;$('planTotal').disabled=true;$('planStatus').textContent='正在按'+lessonCount+'课时解析教案…';
+  busy=true;$('planAnalyze').disabled=true;$('planTotal').disabled=true;$('planStatus').textContent='正在按'+lessonCount+'课时解析教案…';
   try{
-   const result=await api('/api/lesson-plan/analyze',{method:'POST',body:JSON.stringify({retryId:job.id,lessonCount})});pendingJob=result.id;sourceJobId=result.id;shareSource=true;dirty=true;stash();await poll();$('planShare').checked=shareSource;
-  }catch(e){$('planStatus').textContent=e.message;busy=false;$('planAnalyze').disabled=false;$('planRetry').disabled=false;$('planTotal').disabled=false}
+   const result=await api('/api/lesson-plan/analyze',{method:'POST',body:JSON.stringify({retryId:job.id,lessonCount})});pendingJob=result.id;sourceJobId=result.id;shareSource=true;dirty=true;stash();await poll();
+  }catch(e){$('planStatus').textContent=e.message;busy=false;$('planAnalyze').disabled=false;$('planTotal').disabled=false}
  }
- $('planAnalyze').onclick=start;$('planRetry').onclick=start;
+ $('planAnalyze').onclick=start;
  $('saveProject').onclick=async()=>{
   read();const count=Number($('pcGroupCount').value);
   if(!Number.isInteger(count)||count<1||count>20){toast('小组数量应为1—20');return}
