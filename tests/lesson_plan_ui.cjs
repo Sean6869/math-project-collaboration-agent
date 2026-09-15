@@ -34,7 +34,7 @@ const state={className:'七年级测试班',project:'原项目',groupCount:3,gro
   assert.equal(await page.locator('#pcProject').inputValue(),'小小采购员');assert.equal(await page.locator('#pcClass').inputValue(),'七年级测试班');
   assert.equal(await page.locator('#pcGroupCount').inputValue(),'3');assert.equal(await page.locator('#pcLesson option').count(),4);
   for(const [key,label] of Object.entries(fields)){const field=page.getByLabel(label,{exact:true});assert.equal(await field.count(),1);assert.equal(await field.inputValue(),key==='lessonSchedule'?'第1课时 / 共4课时':project[key])}
-  assert.equal(await page.getByText('本课时任务',{exact:true}).count(),0);assert(await page.locator('#planWarnings').isVisible());assert.equal(publishCalls,0);
+  assert.equal(await page.getByText('本课时任务',{exact:true}).count(),0);assert.equal(await page.locator('#planWarnings').count(),0);assert.equal(publishCalls,0);
   await page.locator('[data-material-preview]').click();await page.frameLocator('.material-preview').getByText('课程支持材料预览正文').waitFor();
   assert(page.url().endsWith('/teacher/project.html'));await page.locator('[data-close]').click();
   await page.locator('#pcLesson').selectOption('2');await page.getByLabel('学习目标',{exact:true}).fill('第二课时人工审核目标');
