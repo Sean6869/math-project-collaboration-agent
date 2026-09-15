@@ -1543,13 +1543,13 @@ class Handler(SimpleHTTPRequestHandler):
             with database() as db:
                 if session["role"] == "student":
                     rows = db.execute(
-                        "SELECT id,original_name,mime,size,uploaded_at,uploaded_by,extracted_text<>'' AS indexed "
+                        "SELECT id,original_name AS name,mime,size,uploaded_at,uploaded_by,extracted_text<>'' AS indexed "
                         "FROM files WHERE group_no=? OR uploaded_by='teacher' ORDER BY uploaded_at DESC",
                         (session["groupId"],),
                     ).fetchall()
                 else:
                     rows = db.execute(
-                        "SELECT id,original_name,mime,size,uploaded_at,uploaded_by,extracted_text<>'' AS indexed "
+                        "SELECT id,original_name AS name,mime,size,uploaded_at,uploaded_by,extracted_text<>'' AS indexed "
                         "FROM files ORDER BY uploaded_at DESC"
                     ).fetchall()
             self.json_response({"files": [dict(row) for row in rows]})
