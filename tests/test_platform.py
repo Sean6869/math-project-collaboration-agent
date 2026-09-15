@@ -539,7 +539,7 @@ class PlatformTest(unittest.TestCase):
         script = (ROOT / "assets" / "app.js").read_text(encoding="utf-8")
         styles = (ROOT / "assets" / "styles.css").read_text(encoding="utf-8")
         self.assertIn("function stageStrip(compact=false)", script)
-        self.assertIn("${compact?'':`<div class=\"stage-state\">", script)
+        self.assertIn("<div class=\"stage-state\">${label}</div>", script)
         self.assertIn("const title=esc(s.project)", script)
         self.assertIn("+dashboardStatus(s)+projectOverview(s.currentLesson)+", script)
         self.assertIn("+stageStrip(true)+", script)
