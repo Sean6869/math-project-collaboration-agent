@@ -1765,6 +1765,7 @@ class Handler(SimpleHTTPRequestHandler):
             class_state = state_get("class")
             config = class_state.get("teacherConfig", {}) if isinstance(class_state.get("teacherConfig"), dict) else {}
             config["knowledge"] = [name for name in config.get("knowledge", []) if name != row["original_name"]]
+            config["knowledgePending"] = [name for name in config.get("knowledgePending", []) if name != row["original_name"]]
             class_state["teacherConfig"] = config
             state_put("class", class_state)
         record_event(session["role"], session.get("groupId"), "file_delete", 4 if session["role"] == "student" else None, row["original_name"])
