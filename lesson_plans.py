@@ -490,6 +490,31 @@ def handle(app, handler, method, route):
                 db.execute('INSERT INTO course_resources(id,owner,name,mime,source,created_at) VALUES(?,?,?,?,?,?)',
                            (resource_id, owner, name, mime, raw, app.utc_now()))
             handler.json_response({'id': resource_id, 'name': name, 'mime': mime}, 201)
+        elif method == 'DELETE' and route.startswith('/api/lesson-plan/resources/'):
+            resource_id = route.rsplit('/', 1)[-1]
+            with app.database() as db:
+                row = db.execute('SELECT id FROM course_resources WHERE id=? AND owner=?', (resource_id, owner)).fetchone()
+                if not row:
+                    handler.json_response({'error': '课程材料不存在或无权删除'}, 404)
+                    return
+                db.execute('DELETE FROM course_resources WHERE id=? AND owner=?', (resource_id, owner))
+            published = app.state_get('project-plan')
+            published['supportResources'] = [item for item in published.get('supportResources', []) if item.get('id') != resource_id]
+            app.state_put('project-plan', published)
+            handler.json_response({'ok': True})
+        elif method == 'DELETE' and route.startswith('/api/lesson-plan/source/'):
+            job_id = route.rsplit('/', 1)[-1]
+            with app.database() as db:
+                row = db.execute('SELECT id FROM lesson_jobs WHERE id=? AND owner=?', (job_id, owner)).fetchone()
+                if not row:
+                    handler.json_response({'error': '教案不存在或无权删除'}, 404)
+                    return
+                db.execute('DELETE FROM lesson_jobs WHERE id=? AND owner=?', (job_id, owner))
+            published = app.state_get('project-plan')
+            if (published.get('supportMaterial') or {}).get('id') == job_id:
+                published['supportMaterial'] = None
+                app.state_put('project-plan', published)
+            handler.json_response({'ok': True})
         elif method == 'POST' and route == '/api/lesson-plan/publish':
             handler.json_response(publish(app, handler.read_json(), owner))
         elif method == 'POST' and route == '/api/lesson-plan/analyze':

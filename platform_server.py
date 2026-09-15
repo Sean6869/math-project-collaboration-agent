@@ -1729,6 +1729,47 @@ class Handler(SimpleHTTPRequestHandler):
         except ValueError as exc:
             self.json_response({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
 
+    def do_DELETE(self) -> None:
+        if not self.check_origin():
+            return
+        route = urlparse(self.path).path
+        if lesson_plans.handle(sys.modules[__name__], self, 'DELETE', route):
+            return
+        if not route.startswith("/api/files/"):
+            self.json_response({"error": "接口不存在"}, HTTPStatus.NOT_FOUND)
+            return
+        session = self.require_session()
+        if not session:
+            return
+        file_id = route.rsplit("/", 1)[-1]
+        if not re.fullmatch(r"[A-Za-z0-9]+", file_id):
+            self.json_response({"error": "文件标识无效"}, HTTPStatus.BAD_REQUEST)
+            return
+        with database() as db:
+            if session["role"] == "student":
+                row = db.execute("SELECT original_name,stored_name FROM files WHERE id=? AND uploaded_by='student-evidence' AND group_no=?", (file_id, session["groupId"])).fetchone()
+            else:
+                row = db.execute("SELECT original_name,stored_name FROM files WHERE id=?", (file_id,)).fetchone()
+            if not row:
+                self.json_response({"error": "文件不存在或无权删除"}, HTTPStatus.NOT_FOUND)
+                return
+            target = UPLOAD_DIR / row["stored_name"]
+            if target.resolve().parent == UPLOAD_DIR.resolve() and target.exists():
+                target.unlink()
+            db.execute("DELETE FROM files WHERE id=?", (file_id,))
+        if session["role"] == "student":
+            group = state_get(f"group:{session['groupId']}")
+            group["evidence"] = [item for item in group.get("evidence", []) if not isinstance(item, dict) or item.get("file", {}).get("id") != file_id]
+            state_put(f"group:{session['groupId']}", group)
+        else:
+            class_state = state_get("class")
+            config = class_state.get("teacherConfig", {}) if isinstance(class_state.get("teacherConfig"), dict) else {}
+            config["knowledge"] = [name for name in config.get("knowledge", []) if name != row["original_name"]]
+            class_state["teacherConfig"] = config
+            state_put("class", class_state)
+        record_event(session["role"], session.get("groupId"), "file_delete", 4 if session["role"] == "student" else None, row["original_name"])
+        self.json_response({"ok": True})
+
     def do_PUT(self) -> None:
         if not self.check_origin():
             return
