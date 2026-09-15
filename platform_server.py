@@ -1554,6 +1554,36 @@ class Handler(SimpleHTTPRequestHandler):
                     ).fetchall()
             self.json_response({"files": [dict(row) for row in rows]})
             return
+        if route.path.startswith("/api/files/"):
+            session = self.require_session()
+            if not session:
+                return
+            file_id = route.path.rsplit("/", 1)[-1]
+            if not re.fullmatch(r"[A-Za-z0-9]+", file_id):
+                self.json_response({"error": "文件标识无效"}, HTTPStatus.BAD_REQUEST)
+                return
+            with database() as db:
+                if session["role"] == "student":
+                    row = db.execute(
+                        "SELECT original_name,stored_name,mime,size FROM files "
+                        "WHERE id=? AND (group_no=? OR uploaded_by='teacher')",
+                        (file_id, session["groupId"]),
+                    ).fetchone()
+                else:
+                    row = db.execute("SELECT original_name,stored_name,mime,size FROM files WHERE id=?", (file_id,)).fetchone()
+            target = UPLOAD_DIR / row["stored_name"] if row else None
+            if not row or not target.is_file() or target.resolve().parent != UPLOAD_DIR.resolve():
+                self.json_response({"error": "文件不存在"}, HTTPStatus.NOT_FOUND)
+                return
+            raw = target.read_bytes()
+            self.send_response(HTTPStatus.OK)
+            self.send_header("Content-Type", row["mime"])
+            self.send_header("Content-Disposition", f"inline; filename*=UTF-8''{quote(row['original_name'])}")
+            self.send_header("Content-Length", str(len(raw)))
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(raw)
+            return
         if route.path.startswith("/api/ai/files/"):
             session = self.require_session()
             if not session:
@@ -1677,7 +1707,7 @@ class Handler(SimpleHTTPRequestHandler):
                 if session:
                     self.free_ai_chat_stream(session, self.read_json())
             elif route == "/api/files":
-                session = self.require_session("teacher")
+                session = self.require_session()
                 if session:
                     self.upload(session, self.read_json(MAX_UPLOAD_BYTES * 2))
             elif route == "/api/escalations":
@@ -2644,21 +2674,24 @@ class Handler(SimpleHTTPRequestHandler):
         (UPLOAD_DIR / stored).write_bytes(raw)
         mime = mimetypes.guess_type(name)[0] or "application/octet-stream"
         extracted = extract_document(name, raw)
+        uploaded_by = "teacher" if session["role"] == "teacher" else "student-evidence"
+        group_no = None if session["role"] == "teacher" else session.get("groupId")
         with database() as db:
-            db.execute("INSERT INTO files(id,original_name,stored_name,mime,size,extracted_text,uploaded_at,uploaded_by) VALUES(?,?,?,?,?,?,?,?)", (file_id, name, stored, mime, len(raw), extracted, utc_now(), session["role"]))
-        class_state = state_get("class")
-        config = class_state.get("teacherConfig", {})
-        if not isinstance(config, dict):
-            config = {}
-        knowledge = config.get("knowledge", [])
-        if not isinstance(knowledge, list):
-            knowledge = []
-        if name not in knowledge:
-            knowledge.append(name)
-        config["knowledge"] = knowledge
-        class_state["teacherConfig"] = config
-        state_put("class", class_state)
-        record_event("teacher", None, "file_upload", None, name)
+            db.execute("INSERT INTO files(id,original_name,stored_name,mime,size,extracted_text,uploaded_at,uploaded_by,group_no) VALUES(?,?,?,?,?,?,?,?,?)", (file_id, name, stored, mime, len(raw), extracted, utc_now(), uploaded_by, group_no))
+        if session["role"] == "teacher":
+            class_state = state_get("class")
+            config = class_state.get("teacherConfig", {})
+            if not isinstance(config, dict):
+                config = {}
+            knowledge = config.get("knowledge", [])
+            if not isinstance(knowledge, list):
+                knowledge = []
+            if name not in knowledge:
+                knowledge.append(name)
+            config["knowledge"] = knowledge
+            class_state["teacherConfig"] = config
+            state_put("class", class_state)
+        record_event(session["role"], group_no, "file_upload", 4 if session["role"] == "student" else None, name)
         self.json_response({"file": {"id": file_id, "name": name, "size": len(raw), "indexed": bool(extracted)}})
 
     def export_events(self, fmt: str) -> None:
