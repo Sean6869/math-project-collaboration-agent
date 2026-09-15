@@ -73,7 +73,7 @@ async function mount({s,api,esc,toast,refreshState,teacherId}){
  function preview(){
   busy=Boolean(job&&['extracting','analyzing'].includes(job.status));
   $('planAnalyze').disabled=busy;$('planRetry').hidden=!job;$('planRetry').disabled=busy;$('planTotal').disabled=busy;
-  $('planStatus').textContent=job?job.name+'：'+job.detail:'';
+  $('planStatus').textContent=job?.detail||'';
   const material=job||snapshot.published.supportMaterial;
   const url=material?'/api/lesson-plan/'+(job?'source':'material')+'?id='+encodeURIComponent(material.id):'';
   $('planPreview').innerHTML=material?'<div class="material-file"><b>'+esc(material.name)+'</b><div class="toolbar"><button class="btn" data-material-preview="'+esc(url)+'">预览</button><a class="btn" href="'+esc(url)+'&amp;download=1">下载</a>'+(job?'<button class="btn danger" data-plan-delete="'+esc(job.id)+'">删除</button>':'')+'</div></div>':'';
