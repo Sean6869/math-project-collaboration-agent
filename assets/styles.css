@@ -152,6 +152,14 @@ html:has(.auth-shell),body:has(.auth-shell){height:100%;overflow:hidden}.auth-sh
 .hint-reading strong,.hint-reading:hover strong{color:inherit}
 .dashboard-reading .reading-total{color:inherit;font-size:inherit;font-weight:inherit;margin-left:4px}
 
+/* Only the current phase carries a color accent; completed phases stay readable in gray. */
+.stage-card.done:not(.current),.stage-card.past:not(.current){border-color:var(--line);background:#fff;box-shadow:none}
+.stage-card.done:not(.current) .stage-name,.stage-card.past:not(.current) .stage-name{color:var(--ink2)}
+.stage-card.done:not(.current) .stage-state,.stage-card.past:not(.current) .stage-state{color:var(--muted);font-weight:650}
+.journey-step.is-done:not(.is-current) .journey-node{background:#f4f7fa;border-color:#cbd7e2;color:var(--ink2);box-shadow:none}
+.journey-step.is-done:not(.is-current) .journey-name{color:var(--ink2);font-weight:700}
+.journey-step.is-done:not(.is-current)::after{background:#dce5ef}
+
 /* Published course materials share the preparation card's height and scale with its container. */
 .stage1-material-layout{container-type:inline-size;align-items:stretch}
 .stage1-material-layout>.card{height:100%;box-sizing:border-box;min-width:0}
