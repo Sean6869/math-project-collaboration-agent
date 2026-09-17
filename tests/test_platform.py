@@ -8,6 +8,7 @@ import tempfile
 import threading
 import unittest
 import urllib.error
+import urllib.parse
 import urllib.request
 from unittest import mock
 from pathlib import Path
@@ -545,6 +546,61 @@ class PlatformTest(unittest.TestCase):
         self.assertIn("+stageStrip(true)+", script)
         self.assertIn(".stage-strip.compact .stage-card", styles)
 
+    def test_binary_evidence_upload_ai_compare_and_legacy_knowledge_removal(self):
+        student = self.client()
+        status, _ = self.json_request(
+            student, "/api/login", "POST",
+            {"role": "student", "classCode": "CLASS2026", "groupId": 2, "groupCode": "TEAM02"},
+        )
+        self.assertEqual(status, 200)
+        raw = b"\xff\xd8\xff\xe0" + b"camera-evidence" * 100
+        request = urllib.request.Request(
+            self.base + "/api/files", data=raw, method="POST",
+            headers={"Content-Type": "application/octet-stream", "X-File-Name": urllib.parse.quote("现场证据.jpg")},
+        )
+        with student.open(request, timeout=8) as response:
+            uploaded = json.loads(response.read())
+        self.assertEqual(uploaded["file"]["name"], "现场证据.jpg")
+        self.assertEqual(uploaded["file"]["size"], len(raw))
+        group_state = app.state_get("group:2")
+        group_state["evidence"] = [
+            {"text": "现场证据", "file": uploaded["file"]},
+            {"text": "无附件计算", "file": None},
+        ]
+        group_state["mathLab"] = {"attachment": uploaded["file"]}
+        app.state_put("group:2", group_state)
+        delete_request = urllib.request.Request(
+            self.base + "/api/files/" + uploaded["file"]["id"], method="DELETE"
+        )
+        with student.open(delete_request, timeout=8) as response:
+            self.assertEqual(response.status, 200)
+        group_state = app.state_get("group:2")
+        self.assertEqual([item["text"] for item in group_state["evidence"]], ["无附件计算"])
+        self.assertIsNone(group_state["mathLab"]["attachment"])
+
+        class_state = app.state_get("class")
+        class_state.update({"aiOpen": True, "currentStage": 4})
+        app.state_put("class", class_state)
+        viewpoints = [
+            {"who": "方案A", "claim": "选A", "basis": "实测三次", "risk": "样本较少"},
+            {"who": "方案B", "claim": "选B", "basis": "预算计算", "risk": "价格会变"},
+        ]
+        with mock.patch.object(app, "ark_free_chat", return_value=("先核对样本范围，再比较预算边界。", 10, "ok", "test-model")) as compare:
+            status, result = self.json_request(student, "/api/ai/compare", "POST", {"stage": 4, "viewpoints": viewpoints})
+        self.assertEqual(status, 200)
+        self.assertIn("核对", result["answer"])
+        self.assertIn("方案A", compare.call_args.args[2])
+
+        teacher = self.client()
+        self.json_request(teacher, "/api/login", "POST", {"role": "teacher", "username": "test_teacher", "password": "StrongTeacher#2026"})
+        class_state = app.state_get("class")
+        config = class_state.setdefault("teacherConfig", {})
+        config["knowledge"] = ["仅有旧记录.pdf"]
+        app.state_put("class", class_state)
+        status, removed = self.json_request(teacher, "/api/knowledge/remove", "POST", {"name": "仅有旧记录.pdf"})
+        self.assertEqual(status, 200)
+        self.assertNotIn("仅有旧记录.pdf", removed["state"]["teacherConfig"]["knowledge"])
+
     def test_free_ai_stream_uses_ark_sse_and_configured_timeout(self):
         class FakeStreamResponse:
             def __init__(self, lines):
@@ -823,7 +879,10 @@ class PlatformTest(unittest.TestCase):
             self.assertEqual(error.headers["Location"], "/?current")
             self.assertEqual(error.headers["Clear-Site-Data"], '"cache"')
 
-        for route in ("/teacher/versions.html", "/teacher/research.html", "/expert/overview.html"):
+        for route in (
+            "/teacher/versions.html", "/teacher/research.html", "/expert/overview.html",
+            "/student/stage4-tools.html", "/student/stage4-versions.html",
+        ):
             with self.assertRaises(urllib.error.HTTPError) as context:
                 urllib.request.urlopen(self.base + route, timeout=3)
             self.assertEqual(context.exception.code, 404, route)

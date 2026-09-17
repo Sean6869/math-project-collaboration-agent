@@ -110,8 +110,8 @@ CLASS_KEYS = {
 }
 GROUP_KEYS = {
     "groupId", "roles", "roleRound", "stageSubmitted", "stageTimes",
-    "workspace", "versions", "evidence", "viewpoints", "firstThoughts",
-    "debate", "product", "events", "questionTree", "graphConfig", "checklist", "preparationChecks", "freeAi", "mathTools",
+    "workspace", "versions", "evidence", "viewpoints", "comparisonAi", "firstThoughts",
+    "debate", "product", "events", "questionTree", "graphConfig", "checklist", "preparationChecks", "freeAi", "mathTools", "mathLab",
 }
 HINT_POLICY_DEFAULT = {"L1": 20, "L2": 10, "L3": 5, "L4": 3}
 HINT_LEVEL_NAMES = {1: "定位", 2: "拆解", 3: "局部示范", 4: "教师介入"}
@@ -1706,10 +1706,26 @@ class Handler(SimpleHTTPRequestHandler):
                 session = self.require_session("student")
                 if session:
                     self.free_ai_chat_stream(session, self.read_json())
+            elif route == "/api/ai/compare":
+                session = self.require_session("student")
+                if session:
+                    self.compare_solutions(session, self.read_json())
+            elif route == "/api/stages/submit":
+                session = self.require_session("student")
+                if session:
+                    self.submit_stage(session, self.read_json())
+            elif route == "/api/knowledge/remove":
+                session = self.require_session("teacher")
+                if session:
+                    self.remove_knowledge_material(session, self.read_json())
             elif route == "/api/files":
                 session = self.require_session()
                 if session:
-                    self.upload(session, self.read_json(MAX_UPLOAD_BYTES * 2))
+                    content_type = self.headers.get("Content-Type", "").lower()
+                    if content_type.startswith("application/json"):
+                        self.upload(session, self.read_json(MAX_UPLOAD_BYTES * 2))
+                    else:
+                        self.upload_binary(session)
             elif route == "/api/escalations":
                 session = self.require_session("student")
                 if session:
@@ -1759,7 +1775,17 @@ class Handler(SimpleHTTPRequestHandler):
             db.execute("DELETE FROM files WHERE id=?", (file_id,))
         if session["role"] == "student":
             group = state_get(f"group:{session['groupId']}")
-            group["evidence"] = [item for item in group.get("evidence", []) if not isinstance(item, dict) or item.get("file", {}).get("id") != file_id]
+            group["evidence"] = [
+                item for item in group.get("evidence", [])
+                if not (
+                    isinstance(item, dict)
+                    and isinstance(item.get("file"), dict)
+                    and item["file"].get("id") == file_id
+                )
+            ]
+            math_lab = group.get("mathLab")
+            if isinstance(math_lab, dict) and isinstance(math_lab.get("attachment"), dict) and math_lab["attachment"].get("id") == file_id:
+                math_lab["attachment"] = None
             state_put(f"group:{session['groupId']}", group)
         else:
             class_state = state_get("class")
@@ -2377,6 +2403,54 @@ class Handler(SimpleHTTPRequestHandler):
             response["file"] = file_metadata
         return response
 
+    def compare_solutions(self, session: dict, body: dict) -> None:
+        group = int(session["groupId"])
+        state = merged_state(group)
+        if not state.get("aiOpen", True):
+            raise UpstreamServiceError("AI已由教师暂停", HTTPStatus.CONFLICT)
+        try:
+            stage = int(body.get("stage", 3))
+        except (TypeError, ValueError) as exc:
+            raise ValueError("阶段参数无效") from exc
+        if stage not in {3, 4}:
+            raise ValueError("方案比较仅支持阶段3或阶段4")
+        raw_viewpoints = body.get("viewpoints")
+        if not isinstance(raw_viewpoints, list) or len(raw_viewpoints) != 2:
+            raise ValueError("请提供两个待比较方案")
+        viewpoints = []
+        for index, raw in enumerate(raw_viewpoints):
+            if not isinstance(raw, dict):
+                raise ValueError("方案内容格式无效")
+            item = {
+                "who": str(raw.get("who", f"方案{'AB'[index]}"))[:40],
+                "claim": str(raw.get("claim", "")).strip()[:1200],
+                "basis": str(raw.get("basis", "")).strip()[:1200],
+                "risk": str(raw.get("risk", "")).strip()[:1200],
+            }
+            if not item["claim"] or not item["basis"]:
+                raise ValueError("两个方案都需要填写方案内容和依据")
+            viewpoints.append(item)
+        prompt = (
+            f"请协助初中学生比较阶段{stage}中的两个项目方案。"
+            "只根据学生提供的信息分析，不虚构数据，也不替小组直接决定最终方案。"
+            "请依次给出：1. 可比性检查；2. 各方案依据的强项与不足；"
+            "3. 风险、限制和缺失证据；4. 小组下一步应核验的2至4个具体问题。"
+            f"两个方案如下：{json.dumps(viewpoints, ensure_ascii=False)}"
+        )
+        answer, latency, status, model = ark_free_chat(state, group, prompt, [])
+        result = "returned" if answer else "failed"
+        with database() as db:
+            db.execute(
+                "INSERT INTO ai_calls(ts,group_no,level,model,latency_ms,status,detail) VALUES(?,?,?,?,?,?,?)",
+                (utc_now(), group, "COMPARE", model, latency, result, status[:1000]),
+            )
+        if not answer:
+            if status == "not_configured":
+                raise UpstreamServiceError("方案比较AI尚未配置", HTTPStatus.SERVICE_UNAVAILABLE)
+            raise UpstreamServiceError("方案比较AI暂时不可用，请稍后重试", HTTPStatus.BAD_GATEWAY)
+        record_event("student", group, "ai_compare", stage, "方案A/B")
+        self.json_response({"ok": True, "answer": answer, "model": model, "latencyMs": latency})
+
     def free_ai_chat(self, session: dict, body: dict) -> None:
         context = self.prepare_free_ai_chat(session, body)
         if context["intent"] == "image":
@@ -2683,6 +2757,8 @@ class Handler(SimpleHTTPRequestHandler):
         active = progress > 0 or bool(help_total(group_state)) or bool(group_state.get("helpHistory"))
         item.update({
             "id": group, "stage": int(group_state.get("currentStage", class_state.get("currentStage", 1))),
+            "submitted": submitted_count,
+            "currentSubmitted": validated_stage_submissions(group_state).get(class_current_stage(class_state), False),
             "help": help_total(group_state), "maxHint": highest_hint_level(group_state),
             "latest": latest, "status": "等待教师" if item.get("teacher") else "已完成" if submitted_count == 5 else "持续推进" if active else "准备中", "progress": progress,
         })
@@ -2700,15 +2776,76 @@ class Handler(SimpleHTTPRequestHandler):
         ]
         state_put("class", class_state)
 
+    def submit_stage(self, session: dict, body: dict) -> None:
+        group = int(session["groupId"])
+        class_state = state_get("class")
+        stage_no = class_current_stage(class_state)
+        try:
+            requested_stage = int(body.get("stage", stage_no))
+        except (TypeError, ValueError) as exc:
+            raise ValueError("阶段编号无效") from exc
+        if requested_stage != stage_no or class_state.get("stagePaused"):
+            self.json_response({"error": "只能提交当前开放且未暂停的阶段"}, HTTPStatus.CONFLICT)
+            return
+        group_state = state_get(f"group:{group}")
+        if not all(stage_task_status(group_state)[stage_no - 1]):
+            self.json_response({"error": f"阶段{stage_no}任务尚未全部完成，不能提交"}, HTTPStatus.CONFLICT)
+            return
+        submissions = group_state.get("stageSubmitted", {})
+        submissions = dict(submissions) if isinstance(submissions, dict) else {}
+        submissions[str(stage_no)] = True
+        group_state["stageSubmitted"] = submissions
+        state_put(f"group:{group}", group_state)
+        self.sync_group_summary(group, group_state)
+        record_event("student", group, "stage_submit", stage_no, f"阶段{stage_no}产出")
+        self.json_response({"ok": True, "state": merged_state(group)})
+
+    def remove_knowledge_material(self, session: dict, body: dict) -> None:
+        name = Path(str(body.get("name", ""))).name[:180]
+        if not name:
+            raise ValueError("材料名称无效")
+        with database() as db:
+            rows = db.execute(
+                "SELECT id,stored_name FROM files WHERE original_name=? AND uploaded_by='teacher'", (name,)
+            ).fetchall()
+            for row in rows:
+                target = UPLOAD_DIR / row["stored_name"]
+                if target.resolve().parent == UPLOAD_DIR.resolve() and target.exists():
+                    target.unlink()
+            db.execute("DELETE FROM files WHERE original_name=? AND uploaded_by='teacher'", (name,))
+        class_state = state_get("class")
+        config = class_state.get("teacherConfig", {}) if isinstance(class_state.get("teacherConfig"), dict) else {}
+        config["knowledge"] = [item for item in config.get("knowledge", []) if item != name]
+        config["knowledgePending"] = [item for item in config.get("knowledgePending", []) if item != name]
+        class_state["teacherConfig"] = config
+        state_put("class", class_state)
+        record_event("teacher", None, "file_delete", None, name)
+        self.json_response({"ok": True, "state": merged_state(1)})
+
     def upload(self, session: dict, body: dict) -> None:
         name = Path(str(body.get("name", ""))).name[:180]
-        suffix = Path(name).suffix.lower()
-        if not name or suffix not in ALLOWED_UPLOADS:
-            raise ValueError("不支持此文件类型")
         try:
             raw = base64.b64decode(str(body.get("content", "")), validate=True)
         except ValueError as exc:
             raise ValueError("文件内容无效") from exc
+        self.store_upload(session, name, raw)
+
+    def upload_binary(self, session: dict) -> None:
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+        except ValueError as exc:
+            raise ValueError("文件长度无效") from exc
+        if length <= 0 or length > MAX_UPLOAD_BYTES:
+            raise ValueError("文件为空或超过上传限制")
+        name = Path(unquote(self.headers.get("X-File-Name", ""))).name[:180]
+        raw = self.rfile.read(length)
+        self._body_read = True
+        self.store_upload(session, name, raw)
+
+    def store_upload(self, session: dict, name: str, raw: bytes) -> None:
+        suffix = Path(name).suffix.lower()
+        if not name or suffix not in ALLOWED_UPLOADS:
+            raise ValueError("不支持此文件类型")
         if not raw or len(raw) > MAX_UPLOAD_BYTES:
             raise ValueError("文件为空或超过上传限制")
         file_id = secrets.token_hex(12)

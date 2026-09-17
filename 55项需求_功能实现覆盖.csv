@@ -15,7 +15,7 @@ TR-C05,数学认知支架,学生小组,L3局部支架,P0,student/help.html,已�
 TR-C06,数学认知支架,系统/教师,连续无效自动转教师,P0,student/help.html; teacher/queue.html,已实现
 TR-C07,数学认知支架,学生小组,任务复述与信息约束表,P0,student/stage2.html; student/stage2-understanding.html,已实现
 TR-C08,数学认知支架,学生小组,变量关系与模型版本,P0,student/stage3.html; student/stage3-model.html; student/stage3-graph.html,已实现
-TR-C09,数学认知支架,学生小组,重复计算与图表辅助,P1,student/stage4-tools.html; student/stage3-graph.html,已实现
+TR-C09,数学认知支架,学生小组,重复计算与图表辅助,P1,student/math-tools.html; student/stage3-graph.html,已实现
 TR-C10,数学认知支架,学生小组,范围单位条件与合理性检查,P0,student/stage3-check.html; student/stage5-product.html,已实现
 TR-C11,数学认知支架,教师,教师预设提示模板与最高层级,P0,teacher/scaffolds.html; teacher/project.html,已实现
 TR-C12,数学认知支架,学生小组,提示使用回看,P1,student/stage5-reflection.html; student/history.html,已实现
@@ -53,4 +53,4 @@ TR-R08,治理与非功能,系统,HTTPS与数据保护,P0,teacher/governance.html
 TR-R09,治理与非功能,教师/管理员,项目与提示规则可配置,P1,teacher/project.html; teacher/scaffolds.html,已实现
 TR-R10,治理与非功能,系统,错误与模型调用监控,P1,teacher/audit.html; teacher/governance.html,已实现
 TR-R11,治理与非功能,系统,浏览器与设备兼容,P0,全站,需上线环境验收
-TR-R12,治理与非功能,系统,需求与项目配置版本化,P1,student/stage4-versions.html; teacher/audit.html,部分实现（模型版本与配置操作审计）
+TR-R12,治理与非功能,系统,需求与项目配置版本化,P1,student/history.html; teacher/audit.html,部分实现（模型版本与配置操作审计）
