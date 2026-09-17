@@ -41,6 +41,7 @@ const root=path.resolve(__dirname,'..');
   await page.goto(base+'/student/stage4-discussion.html');await page.locator('#debateSpeaker').waitFor();assert.deepEqual(await page.locator('#debateSpeaker option').allTextContents(),['甲','乙']);
   await page.locator('#debateSpeaker').selectOption({label:'乙'});await page.locator('#debateText').fill('我质疑的是样本量；我的依据是只有两次测量。');await waitPut(()=>page.locator('#addDebate').click());
   assert(page.url().endsWith('/student/stage4-discussion.html'));await page.waitForFunction(()=>document.body.textContent.includes('乙：'));
+  const discussion=page.locator('.discussion-entry').last();assert((await discussion.boundingBox()).width>300);assert(!(await discussion.textContent()).includes('回应'));
   assert.equal(await page.getByText('进入数学工具',{exact:true}).getAttribute('href'),'math-tools.html');
 
   await page.goto(base+'/student/stage4-evidence.html');await page.locator('#addEvidence').click();assert(await page.locator('#newEvidencePhoto').getAttribute('multiple')!==null);
@@ -52,6 +53,7 @@ const root=path.resolve(__dirname,'..');
   await page.goto(base+'/student/math-tools.html');await page.locator('[data-math-lab-tool]').first().waitFor();assert.equal(await page.locator('[data-math-lab-tool]').count(),8);
   await page.locator('#mathLabInput').fill('√81+2²+50%');await page.locator('#runMathLab').click();assert((await page.locator('#mathLabResult').inputValue()).includes('13.5'));
   await page.locator('[data-math-lab-tool="equation"]').click();await page.locator('#mathLabInput').fill('2x+5=17');await page.locator('#runMathLab').click();assert((await page.locator('#mathLabResult').inputValue()).includes('x=6'));
+  const mathColumns=await page.locator('.math-lab-layout>.card').evaluateAll(cards=>cards.map(card=>card.getBoundingClientRect().height));assert(Math.abs(mathColumns[0]-mathColumns[1])<1);
   await page.locator('#mathLabExplanation').fill('预算条件下最多购买6份');await waitPut(()=>page.locator('[data-math-lab-save="evidence"]').click());
 
   await saveTeacher({currentStage:5});await page.goto(base+'/student/stage5-product.html');await page.locator('[data-p="evidenceValidation"]').waitFor();await page.locator('[data-p="title"]').fill('更新后的成果');await waitPut(()=>page.locator('#saveProduct').click());assert(page.url().endsWith('/student/stage5-product.html'));assert.equal(await page.getByText('进入展示预演',{exact:true}).getAttribute('href'),'stage5-rehearsal.html');
