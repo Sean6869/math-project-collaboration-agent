@@ -547,6 +547,7 @@ class PlatformTest(unittest.TestCase):
         self.assertIn(".stage-strip.compact .stage-card", styles)
 
     def test_binary_evidence_upload_ai_compare_and_legacy_knowledge_removal(self):
+        original_group_state = app.state_get("group:2")
         student = self.client()
         status, _ = self.json_request(
             student, "/api/login", "POST",
@@ -600,6 +601,7 @@ class PlatformTest(unittest.TestCase):
         status, removed = self.json_request(teacher, "/api/knowledge/remove", "POST", {"name": "仅有旧记录.pdf"})
         self.assertEqual(status, 200)
         self.assertNotIn("仅有旧记录.pdf", removed["state"]["teacherConfig"]["knowledge"])
+        app.state_put("group:2", original_group_state)
 
     def test_free_ai_stream_uses_ark_sse_and_configured_timeout(self):
         class FakeStreamResponse:
