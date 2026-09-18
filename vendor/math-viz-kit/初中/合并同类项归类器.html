@@ -25,7 +25,7 @@
     .expr-title{font-size:13px;font-weight:700;color:var(--ink2);margin-bottom:8px;}
     .expr-display{font-family:'JetBrains Mono',monospace;font-size:18px;font-weight:700;color:var(--blue);background:var(--blue-light);border-radius:var(--radius-sm);padding:10px;text-align:center;}
     .terms-pool{display:flex;gap:8px;flex-wrap:wrap;padding:12px 0;}
-    .term-card{padding:8px 16px;border-radius:var(--radius-sm);font-family:'JetBrains Mono',monospace;font-size:16px;font-weight:700;cursor:grab;user-select:none;border:2px solid transparent;transition:box-shadow .15s;display:inline-block;}
+    .term-card{padding:8px 16px;border-radius:var(--radius-sm);font-family:'JetBrains Mono',monospace;font-size:16px;font-weight:700;cursor:grab;user-select:none;touch-action:none;border:2px solid transparent;transition:box-shadow .15s;display:inline-block;}
     .term-card.dragging{opacity:0.5;cursor:grabbing;}
     .buckets{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:8px;}
     .bucket{border:2px dashed var(--border);border-radius:var(--radius-sm);padding:10px;min-height:80px;transition:background .15s;}
@@ -161,9 +161,7 @@ function renderBuckets() {
     const resultStr = items.length===0?'（空）': sum===0?'0':
       (sum===1?'':(sum===-1?'-':sum))+type.replace('const','');
     return `
-      <div class="bucket" id="bucket_${type}" ondragover="e=>{e.preventDefault();document.getElementById('bucket_${type}').classList.add('over')}"
-        ondragleave="document.getElementById('bucket_${type}').classList.remove('over')"
-        ondrop="onDrop(event,'${type}')">
+      <div class="bucket" id="bucket_${type}" data-bucket-type="${type}">
         <div class="bucket-label">${type==='const'?'常数项':type+' 类'}</div>
         <div class="bucket-terms">
           ${items.map(t=>`<div class="term-card" draggable="true"
@@ -176,6 +174,11 @@ function renderBuckets() {
   }).join('');
   bDiv.querySelectorAll('.term-card').forEach(card=>{
     card.addEventListener('dragstart', onDragStart);
+  });
+  bDiv.querySelectorAll('.bucket').forEach(bucket=>{
+    bucket.addEventListener('dragover',e=>{e.preventDefault();e.dataTransfer.dropEffect='move';bucket.classList.add('over');});
+    bucket.addEventListener('dragleave',e=>{if(!bucket.contains(e.relatedTarget))bucket.classList.remove('over');});
+    bucket.addEventListener('drop',e=>onDrop(e,bucket.dataset.bucketType));
   });
   checkResult();
 }
@@ -191,22 +194,61 @@ function onDrop(e, toType) {
   e.preventDefault();
   document.getElementById('bucket_'+toType).classList.remove('over');
   if(!dragItem) return;
+  placeItem(dragItem,dragOrigin,toType);
+  dragItem = null;
+}
+
+function placeItem(item, origin, toType) {
   // Remove from origin
-  if(dragOrigin !== 'pool') {
-    buckets[dragOrigin] = (buckets[dragOrigin]||[]).filter(t=>t.text!==dragItem.text);
+  if(origin !== 'pool') {
+    buckets[origin] = (buckets[origin]||[]).filter(t=>t.text!==item.text);
   }
   // Add to destination (check if right type)
   if(!buckets[toType]) buckets[toType]=[];
-  if(!buckets[toType].find(t=>t.text===dragItem.text)){
-    buckets[toType].push(dragItem);
-    if(dragItem.type !== toType) {
-      document.getElementById('fb').innerHTML=`<strong>注意：</strong>"${dragItem.text}" 是 ${dragItem.type==='const'?'常数项':dragItem.type+'类'}，不是 ${toType==='const'?'常数项':toType+'类'}！应该放到正确的格子里。`;
+  if(!buckets[toType].find(t=>t.text===item.text)){
+    buckets[toType].push(item);
+    if(item.type !== toType) {
+      document.getElementById('fb').innerHTML=`<strong>注意：</strong>"${item.text}" 是 ${item.type==='const'?'常数项':item.type+'类'}，不是 ${toType==='const'?'常数项':toType+'类'}！应该放到正确的格子里。`;
     }
   }
-  dragItem = null;
   renderPool();
   renderBuckets();
 }
+
+// Native HTML drag handles mouse input. Pointer events provide the same
+// interaction on phones and tablets, where draggable elements are unreliable.
+let pointerDrag = null;
+document.addEventListener('pointerdown',e=>{
+  const card=e.target.closest('.term-card');
+  if(!card || e.pointerType==='mouse') return;
+  e.preventDefault();
+  pointerDrag={
+    id:e.pointerId,
+    item:JSON.parse(decodeURIComponent(card.dataset.term)),
+    origin:card.dataset.origin,
+    card
+  };
+  card.classList.add('dragging');
+  card.setPointerCapture?.(e.pointerId);
+});
+document.addEventListener('pointermove',e=>{
+  if(!pointerDrag || pointerDrag.id!==e.pointerId) return;
+  e.preventDefault();
+  document.querySelectorAll('.bucket.over').forEach(bucket=>bucket.classList.remove('over'));
+  document.elementsFromPoint(e.clientX,e.clientY).find(el=>el.classList?.contains('bucket'))?.classList.add('over');
+});
+document.addEventListener('pointerup',e=>{
+  if(!pointerDrag || pointerDrag.id!==e.pointerId) return;
+  const target=document.elementsFromPoint(e.clientX,e.clientY).find(el=>el.classList?.contains('bucket'));
+  pointerDrag.card.classList.remove('dragging');
+  if(target) placeItem(pointerDrag.item,pointerDrag.origin,target.dataset.bucketType);
+  pointerDrag=null;
+});
+document.addEventListener('pointercancel',()=>{
+  pointerDrag?.card.classList.remove('dragging');
+  pointerDrag=null;
+  document.querySelectorAll('.bucket.over').forEach(bucket=>bucket.classList.remove('over'));
+});
 
 function checkResult() {
   const ex = EXPR_SETS[exprIdx];
