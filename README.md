@@ -57,9 +57,12 @@ ARK_TEXT_MODEL=doubao-seed-2-0-mini-260428
 ARK_IMAGE_URL=https://ark.cn-beijing.volces.com/api/v3/images/generations
 ARK_IMAGE_MODEL=doubao-seedream-5-0-260128
 ARK_IMAGE_RESPONSE_FORMAT=b64_json
+DESMOS_API_KEY=你的Desmos API Key
 ```
 
 图片生成结果会保存到 `/app/data/uploads`；如果使用 Railway，必须将该目录挂载到持久化 Volume。正式部署前应把 API 密钥只填入部署平台的环境变量，不要提交到 GitHub。
+
+数学工具区和阶段3“模型表征与检验”使用 [Desmos API v1.12](https://www.desmos.com/api/v1.12/docs/index.html?lang=zh-CN) 的中文版图形计算器。请在 [Desmos API Key 页面](https://www.desmos.com/my-api) 申请客户端 Key，并在本地 `.env` 或 Railway Variables 中设置 `DESMOS_API_KEY`；建议在 Desmos 后台把 Key 限制为平台部署域名。未配置时页面会显示配置提示，不会出现空白嵌入区。
 
 ## 生产部署
 

@@ -200,6 +200,10 @@ class PlatformTest(unittest.TestCase):
         )
         self.assertEqual(status, 200)
         self.assertEqual(login["groupId"], 1)
+        with mock.patch.object(app, "DESMOS_API_KEY", "test-desmos-key"):
+            status, config = self.json_request(student, "/api/math-tools/config")
+        self.assertEqual(status, 200)
+        self.assertEqual(config, {"apiKey": "test-desmos-key"})
         status, data = self.json_request(student, "/api/state")
         self.assertEqual(data["state"]["currentStage"], 2, "小组刷新不能被默认阶段1覆盖")
         self.assertEqual(data["state"]["project"], "集成测试项目")
@@ -566,13 +570,6 @@ class PlatformTest(unittest.TestCase):
             uploaded = json.loads(response.read())
         self.assertEqual(uploaded["file"]["name"], "现场证据.jpg")
         self.assertEqual(uploaded["file"]["size"], len(raw))
-        with mock.patch.object(app, "ark_recognize_math_image", return_value=("2x+5=17", 8, "ok")):
-            status, recognized = self.json_request(
-                student, "/api/ai/recognize-math", "POST",
-                {"image": "data:image/jpeg;base64," + base64.b64encode(raw).decode("ascii")},
-            )
-        self.assertEqual(status, 200)
-        self.assertEqual(recognized["text"], "2x+5=17")
         group_state = app.state_get("group:2")
         group_state["evidence"] = [
             {"text": "现场证据", "file": uploaded["file"]},

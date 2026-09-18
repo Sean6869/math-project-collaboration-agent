@@ -89,6 +89,7 @@ ARK_TEXT_MODEL = os.environ.get("ARK_TEXT_MODEL", "doubao-seed-2-0-mini-260428")
 ARK_IMAGE_URL = os.environ.get("ARK_IMAGE_URL", "https://ark.cn-beijing.volces.com/api/v3/images/generations")
 ARK_IMAGE_MODEL = os.environ.get("ARK_IMAGE_MODEL", "doubao-seedream-5-0-260128")
 ARK_IMAGE_RESPONSE_FORMAT = os.environ.get("ARK_IMAGE_RESPONSE_FORMAT", "b64_json").strip().lower()
+DESMOS_API_KEY = os.environ.get("DESMOS_API_KEY", "").strip()
 ARK_TEXT_TIMEOUT_SECONDS = env_seconds("ARK_TEXT_TIMEOUT_SECONDS", 120)
 ARK_IMAGE_TIMEOUT_SECONDS = env_seconds("ARK_IMAGE_TIMEOUT_SECONDS", 180)
 MATH_FORMAT_RULE = "所有数学表达式必须用 $...$、$$...$$、\\(...\\) 或 \\[...\\] 包裹；不得裸露输出LaTex命令。"
@@ -580,6 +581,7 @@ def stage_task_status(group_state: dict) -> list[list[bool]]:
     thoughts = group_state.get("firstThoughts", {}) if isinstance(group_state.get("firstThoughts"), dict) else {}
     questions = group_state.get("questionTree", []) if isinstance(group_state.get("questionTree"), list) else []
     graph = group_state.get("graphConfig", {}) if isinstance(group_state.get("graphConfig"), dict) else {}
+    math_tools = group_state.get("mathTools", {}) if isinstance(group_state.get("mathTools"), dict) else {}
     checklist = group_state.get("checklist", {}) if isinstance(group_state.get("checklist"), dict) else {}
     preparation = group_state.get("preparationChecks", {}) if isinstance(group_state.get("preparationChecks"), dict) else {}
     evidence = group_state.get("evidence", []) if isinstance(group_state.get("evidence"), list) else []
@@ -593,6 +595,12 @@ def stage_task_status(group_state: dict) -> list[list[bool]]:
         graph_complete = all(math.isfinite(value) for value in numbers) and numbers[3] < numbers[4] and _has_value(graph.get("note"))
     except (KeyError, TypeError, ValueError):
         graph_complete = False
+    desmos_state = math_tools.get("desmosState", {}) if isinstance(math_tools.get("desmosState"), dict) else {}
+    desmos_items = desmos_state.get("expressions", {}).get("list", []) if isinstance(desmos_state.get("expressions"), dict) else []
+    desmos_complete = _has_value(math_tools.get("note")) and any(
+        isinstance(item, dict) and (_has_value(item.get("latex")) or _has_value(item.get("columns")))
+        for item in desmos_items
+    )
     checklist_complete = all(checklist.get(str(i), checklist.get(i)) is True for i in range(6))
     return [
         [preparation.get("goal") is True, preparation.get("materials") is True,
@@ -604,7 +612,7 @@ def stage_task_status(group_state: dict) -> list[list[bool]]:
         [all(_has_value(workspace.get(key)) for key in ("variables", "constraints")),
          _has_value(workspace.get("relation")),
          _has_value(workspace.get("model")) and len(versions) >= 1,
-         graph_complete or checklist_complete],
+         graph_complete or desmos_complete or checklist_complete],
         [len(evidence) >= 1, any(isinstance(item, dict) and item.get("verified") is True for item in evidence),
          sum(isinstance(item, dict) and all(_has_value(item.get(key)) for key in ("claim", "basis", "risk")) for item in viewpoints) >= 2,
          len(versions) >= 2],
@@ -1157,36 +1165,6 @@ def ark_free_chat(
         return None, latency, type(exc).__name__, ARK_TEXT_MODEL
 
 
-def ark_recognize_math_image(raw: bytes, mime: str) -> tuple[str | None, int, str]:
-    if not os.environ.get("ARK_API_KEY", ""):
-        return None, 0, "not_configured"
-    messages = [
-        {"role": "system", "content": (
-            "你是科学计算器的算式转写器。只转写图片中清楚可见且可以计算的一个算式，不解题，"
-            "不补写看不清的内容。使用 +、-、*、/、^、!、%、括号，以及 sqrt、sin、cos、tan、"
-            "log、ln、abs、pi、e；无法辨认时只输出[看不清]。"
-        )},
-        {"role": "user", "content": [
-            {"type": "image_url", "image_url": {
-                "url": f"data:{mime};base64,{base64.b64encode(raw).decode('ascii')}", "detail": "high",
-            }},
-            {"type": "text", "text": "只返回一行可直接放入科学计算器的纯文本算式，不要使用Markdown。"},
-        ]},
-    ]
-    request = ark_text_request(messages, False)
-    started = time.perf_counter()
-    try:
-        with urllib.request.urlopen(request, timeout=ARK_TEXT_TIMEOUT_SECONDS) as response:
-            body = json.loads(response.read())
-        answer = str(body["choices"][0]["message"]["content"]).strip()
-        answer = re.sub(r"^```(?:text)?\s*|\s*```$", "", answer, flags=re.I).strip()
-        return (answer[:5000] if answer else None), round((time.perf_counter() - started) * 1000), "ok"
-    except urllib.error.HTTPError as exc:
-        return None, round((time.perf_counter() - started) * 1000), f"HTTP {exc.code}"
-    except (urllib.error.URLError, TimeoutError, KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
-        return None, round((time.perf_counter() - started) * 1000), type(exc).__name__
-
-
 def sse_payloads(response):
     data_lines = []
     for raw_line in response:
@@ -1389,7 +1367,11 @@ class Handler(SimpleHTTPRequestHandler):
         self.send_header("X-Frame-Options", "SAMEORIGIN" if document_preview else "DENY")
         self.send_header("Referrer-Policy", "same-origin")
         self.send_header("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
-        self.send_header("Content-Security-Policy", "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'")
+        if path in {"/student/math-tools.html", "/student/stage3-graph.html"}:
+            content_policy = "default-src 'self'; script-src 'self' 'unsafe-inline' https://www.desmos.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://www.desmos.com https://*.desmos.com; connect-src 'self' https://www.desmos.com https://*.desmos.com; worker-src 'self' blob:"
+        else:
+            content_policy = "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'"
+        self.send_header("Content-Security-Policy", content_policy)
         super().end_headers()
 
     def log_message(self, fmt: str, *args: object) -> None:
@@ -1497,6 +1479,10 @@ class Handler(SimpleHTTPRequestHandler):
             session = self.require_session()
             if session:
                 self.json_response(broadcast_for_session(session))
+            return
+        if route.path == "/api/math-tools/config":
+            if self.require_session():
+                self.json_response({"apiKey": DESMOS_API_KEY})
             return
         if route.path == "/api/runtime":
             if not self.require_session("teacher"):
@@ -1738,10 +1724,6 @@ class Handler(SimpleHTTPRequestHandler):
                 session = self.require_session("student")
                 if session:
                     self.compare_solutions(session, self.read_json())
-            elif route == "/api/ai/recognize-math":
-                session = self.require_session("student")
-                if session:
-                    self.recognize_math_image(session, self.read_json())
             elif route == "/api/stages/submit":
                 session = self.require_session("student")
                 if session:
@@ -2479,32 +2461,6 @@ class Handler(SimpleHTTPRequestHandler):
             raise UpstreamServiceError("方案比较AI暂时不可用，请稍后重试", HTTPStatus.BAD_GATEWAY)
         record_event("student", group, "ai_compare", stage, "方案A/B")
         self.json_response({"ok": True, "answer": answer, "model": model, "latencyMs": latency})
-
-    def recognize_math_image(self, session: dict, body: dict) -> None:
-        group = int(session["groupId"])
-        state = merged_state(group)
-        if not state.get("aiOpen", True):
-            raise UpstreamServiceError("AI已由教师暂停，请手动输入数学内容", HTTPStatus.CONFLICT)
-        match = re.fullmatch(r"data:(image/(?:jpeg|png|webp));base64,([A-Za-z0-9+/=]+)", str(body.get("image", "")))
-        if not match:
-            raise ValueError("图片数据无效")
-        try:
-            raw = base64.b64decode(match.group(2), validate=True)
-        except ValueError as exc:
-            raise ValueError("图片数据无效") from exc
-        if not raw or len(raw) > 3 * 1024 * 1024:
-            raise ValueError("图片压缩后仍过大，请只拍需要识别的区域")
-        answer, latency, status = ark_recognize_math_image(raw, match.group(1))
-        with database() as db:
-            db.execute(
-                "INSERT INTO ai_calls(ts,group_no,level,model,latency_ms,status,detail) VALUES(?,?,?,?,?,?,?)",
-                (utc_now(), group, "MATH_OCR", ARK_TEXT_MODEL, latency, "returned" if answer else "failed", status[:1000]),
-            )
-        if not answer:
-            if status == "not_configured":
-                raise UpstreamServiceError("图片识别服务尚未配置，请手动输入数学内容", HTTPStatus.SERVICE_UNAVAILABLE)
-            raise UpstreamServiceError("图片暂时无法识别，请重新拍摄或手动输入", HTTPStatus.BAD_GATEWAY)
-        self.json_response({"ok": True, "text": answer, "latencyMs": latency})
 
     def free_ai_chat(self, session: dict, body: dict) -> None:
         context = self.prepare_free_ai_chat(session, body)

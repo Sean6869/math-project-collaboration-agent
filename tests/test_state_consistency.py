@@ -54,6 +54,10 @@ class StateConsistencyTest(unittest.TestCase):
             state = complete_state(); state[key] = value; states.append(state)
         for checks in ({str(i): True for i in range(6)}, {"old": False, **{str(i): True for i in range(6)}}, {str(i): True for i in range(1, 7)}):
             state = complete_state(); state["graphConfig"] = {}; state["checklist"] = checks; states.append(state)
+        desmos = complete_state()
+        desmos["graphConfig"] = {}
+        desmos["mathTools"] = {"note": "用交点检验预算边界", "desmosState": {"expressions": {"list": [{"id": "1", "latex": "y=3x"}]}}}
+        states.append(desmos)
         script = """
 const vm=require('node:vm'),fs=require('node:fs');
 const source=fs.readFileSync('assets/app.js','utf8').replace('window.MPT={boot,load,save,reset,toast}', 'window.MPT={stageTaskReady,normalizeState}');
