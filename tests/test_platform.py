@@ -163,6 +163,14 @@ class PlatformTest(unittest.TestCase):
         with client.open(request, timeout=8) as response:
             return response.status, json.loads(response.read())
 
+    def test_desmos_pages_allow_required_official_assets(self):
+        for path in ("/student/math-tools.html", "/student/stage3-graph.html"):
+            with self.client().open(self.base + path, timeout=8) as response:
+                policy = response.headers["Content-Security-Policy"]
+            self.assertIn("script-src 'self' 'unsafe-inline' https://www.desmos.com https://*.desmos.com", policy)
+            self.assertIn("style-src 'self' 'unsafe-inline' https://www.desmos.com https://*.desmos.com", policy)
+            self.assertIn("font-src 'self' data: https://www.desmos.com https://*.desmos.com", policy)
+
     def test_teacher_state_and_student_hint_fallback(self):
         teacher = self.client()
         status, login = self.json_request(
