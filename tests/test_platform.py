@@ -592,6 +592,26 @@ class PlatformTest(unittest.TestCase):
         group_state = app.state_get("group:2")
         self.assertEqual([item["text"] for item in group_state["evidence"]], ["无附件计算"])
 
+        screenshot_request = urllib.request.Request(
+            self.base + "/api/files", data=raw, method="POST",
+            headers={
+                "Content-Type": "image/png",
+                "X-File-Name": urllib.parse.quote("模型截图.png"),
+                "X-File-Purpose": "math-stage",
+            },
+        )
+        with student.open(screenshot_request, timeout=8) as response:
+            screenshot = json.loads(response.read())["file"]
+        self.assertEqual(screenshot["uploadedBy"], "student-math-stage")
+        group_state = app.state_get("group:2")
+        group_state["mathTools"] = {"screenshots": [{"id": screenshot["id"], "name": screenshot["name"]}]}
+        app.state_put("group:2", group_state)
+        with student.open(self.base + "/api/files/" + screenshot["id"] + "?download=1", timeout=8) as response:
+            self.assertTrue(response.headers["Content-Disposition"].startswith("attachment"))
+        with student.open(urllib.request.Request(self.base + "/api/files/" + screenshot["id"], method="DELETE"), timeout=8) as response:
+            self.assertEqual(response.status, 200)
+        self.assertEqual(app.state_get("group:2")["mathTools"]["screenshots"], [])
+
         class_state = app.state_get("class")
         class_state.update({"aiOpen": True, "currentStage": 4})
         app.state_put("class", class_state)

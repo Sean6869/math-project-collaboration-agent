@@ -595,11 +595,16 @@ def stage_task_status(group_state: dict) -> list[list[bool]]:
         graph_complete = all(math.isfinite(value) for value in numbers) and numbers[3] < numbers[4] and _has_value(graph.get("note"))
     except (KeyError, TypeError, ValueError):
         graph_complete = False
-    desmos_state = math_tools.get("desmosState", {}) if isinstance(math_tools.get("desmosState"), dict) else {}
-    desmos_items = desmos_state.get("expressions", {}).get("list", []) if isinstance(desmos_state.get("expressions"), dict) else []
+    desmos_states = math_tools.get("states", {}) if isinstance(math_tools.get("states"), dict) else {}
+    legacy_desmos = math_tools.get("desmosState")
+    if isinstance(legacy_desmos, dict):
+        desmos_states = {"legacy": legacy_desmos, **desmos_states}
     desmos_complete = _has_value(math_tools.get("note")) and any(
-        isinstance(item, dict) and (_has_value(item.get("latex")) or _has_value(item.get("columns")))
-        for item in desmos_items
+        isinstance(state, dict) and any(
+            isinstance(item, dict) and (_has_value(item.get("latex")) or _has_value(item.get("columns")))
+            for item in (state.get("expressions", {}).get("list", []) if isinstance(state.get("expressions"), dict) else [])
+        )
+        for state in desmos_states.values()
     )
     checklist_complete = all(checklist.get(str(i), checklist.get(i)) is True for i in range(6))
     return [
@@ -1350,7 +1355,8 @@ class Handler(SimpleHTTPRequestHandler):
         relative = target.relative_to(ROOT)
         public_page = len(relative.parts) == 2 and relative.parts[0] in {'student', 'teacher'} and target.suffix == '.html'
         public_asset = len(relative.parts) >= 2 and relative.parts[0] == 'assets' and target.suffix.lower() in {'.js', '.css', '.png', '.jpg', '.jpeg', '.webp', '.svg', '.ico', '.woff', '.woff2'}
-        if target not in (ROOT, ROOT / 'index.html') and not public_page and not public_asset:
+        visualization = len(relative.parts) >= 3 and relative.parts[:2] == ('vendor', 'math-viz-kit') and target.suffix.lower() == '.html'
+        if target not in (ROOT, ROOT / 'index.html') and not public_page and not public_asset and not visualization:
             return str(ROOT / '__not_found__')
         return str(target)
 
@@ -1364,13 +1370,16 @@ class Handler(SimpleHTTPRequestHandler):
             self.send_header("Cache-Control", "no-store")
         self.send_header("X-Content-Type-Options", "nosniff")
         document_preview = path in ('/api/lesson-plan/source', '/api/lesson-plan/material')
-        self.send_header("X-Frame-Options", "SAMEORIGIN" if document_preview else "DENY")
+        visualization = path.startswith('/vendor/math-viz-kit/')
+        self.send_header("X-Frame-Options", "SAMEORIGIN" if document_preview or visualization else "DENY")
         self.send_header("Referrer-Policy", "same-origin")
         self.send_header("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
         if path in {"/student/math-tools.html", "/student/stage3-graph.html"}:
             # Desmos v1.12 contains generated Function/eval code. Scope unsafe-eval
             # to the two calculator pages instead of weakening the whole site.
             content_policy = "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://www.desmos.com https://*.desmos.com; style-src 'self' 'unsafe-inline' https://www.desmos.com https://*.desmos.com; font-src 'self' data: https://www.desmos.com https://*.desmos.com; img-src 'self' data: blob: https://www.desmos.com https://*.desmos.com; connect-src 'self' https://www.desmos.com https://*.desmos.com; worker-src 'self' blob:"
+        elif visualization:
+            content_policy = "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' data: https://fonts.gstatic.com; img-src 'self' data:; frame-src 'self'"
         else:
             content_policy = "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'"
         self.send_header("Content-Security-Policy", content_policy)
@@ -1594,7 +1603,8 @@ class Handler(SimpleHTTPRequestHandler):
             raw = target.read_bytes()
             self.send_response(HTTPStatus.OK)
             self.send_header("Content-Type", row["mime"])
-            self.send_header("Content-Disposition", f"inline; filename*=UTF-8''{quote(row['original_name'])}")
+            disposition = "attachment" if parse_qs(route.query).get("download") == ["1"] else "inline"
+            self.send_header("Content-Disposition", f"{disposition}; filename*=UTF-8''{quote(row['original_name'])}")
             self.send_header("Content-Length", str(len(raw)))
             self.send_header("Cache-Control", "no-store")
             self.end_headers()
@@ -1779,7 +1789,10 @@ class Handler(SimpleHTTPRequestHandler):
             return
         with database() as db:
             if session["role"] == "student":
-                row = db.execute("SELECT original_name,stored_name FROM files WHERE id=? AND uploaded_by='student-evidence' AND group_no=?", (file_id, session["groupId"])).fetchone()
+                row = db.execute(
+                    "SELECT original_name,stored_name FROM files WHERE id=? AND uploaded_by IN ('student-evidence','student-math-stage','student-math-lab') AND group_no=?",
+                    (file_id, session["groupId"]),
+                ).fetchone()
             else:
                 row = db.execute("SELECT original_name,stored_name FROM files WHERE id=?", (file_id,)).fetchone()
             if not row:
@@ -1791,7 +1804,8 @@ class Handler(SimpleHTTPRequestHandler):
             db.execute("DELETE FROM files WHERE id=?", (file_id,))
         if session["role"] == "student":
             group = state_get(f"group:{session['groupId']}")
-            group["evidence"] = [
+            evidence_before = group.get("evidence", [])
+            evidence_after = [
                 item for item in group.get("evidence", [])
                 if not (
                     isinstance(item, dict)
@@ -1799,7 +1813,17 @@ class Handler(SimpleHTTPRequestHandler):
                     and item["file"].get("id") == file_id
                 )
             ]
-            state_put(f"group:{session['groupId']}", group)
+            math_tools = group.get("mathTools", {}) if isinstance(group.get("mathTools"), dict) else {}
+            screenshots_before = math_tools.get("screenshots", [])
+            screenshots_after = [
+                item for item in math_tools.get("screenshots", [])
+                if not isinstance(item, dict) or item.get("id") != file_id
+            ]
+            if evidence_after != evidence_before or screenshots_after != screenshots_before:
+                group["evidence"] = evidence_after
+                math_tools["screenshots"] = screenshots_after
+                group["mathTools"] = math_tools
+                state_put(f"group:{session['groupId']}", group)
         else:
             class_state = state_get("class")
             config = class_state.get("teacherConfig", {}) if isinstance(class_state.get("teacherConfig"), dict) else {}
@@ -2866,7 +2890,9 @@ class Handler(SimpleHTTPRequestHandler):
         (UPLOAD_DIR / stored).write_bytes(raw)
         mime = mimetypes.guess_type(name)[0] or "application/octet-stream"
         extracted = extract_document(name, raw)
-        uploaded_by = "teacher" if session["role"] == "teacher" else "student-evidence"
+        purpose = self.headers.get("X-File-Purpose", "")
+        student_purposes = {"math-stage": "student-math-stage", "math-lab": "student-math-lab"}
+        uploaded_by = "teacher" if session["role"] == "teacher" else student_purposes.get(purpose, "student-evidence")
         group_no = None if session["role"] == "teacher" else session.get("groupId")
         with database() as db:
             db.execute("INSERT INTO files(id,original_name,stored_name,mime,size,extracted_text,uploaded_at,uploaded_by,group_no) VALUES(?,?,?,?,?,?,?,?,?)", (file_id, name, stored, mime, len(raw), extracted, utc_now(), uploaded_by, group_no))
@@ -2884,7 +2910,7 @@ class Handler(SimpleHTTPRequestHandler):
             class_state["teacherConfig"] = config
             state_put("class", class_state)
         record_event(session["role"], group_no, "file_upload", 4 if session["role"] == "student" else None, name)
-        self.json_response({"file": {"id": file_id, "name": name, "size": len(raw), "indexed": bool(extracted)}})
+        self.json_response({"file": {"id": file_id, "name": name, "mime": mime, "size": len(raw), "uploadedBy": uploaded_by, "uploadedAt": utc_now(), "indexed": bool(extracted)}})
 
     def export_events(self, fmt: str) -> None:
         with database() as db:
