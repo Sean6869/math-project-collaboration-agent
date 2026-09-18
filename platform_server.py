@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import base64
 import csv
+import functools
+import gzip
 import hashlib
 import hmac
 import io
@@ -90,8 +92,8 @@ ARK_IMAGE_URL = os.environ.get("ARK_IMAGE_URL", "https://ark.cn-beijing.volces.c
 ARK_IMAGE_MODEL = os.environ.get("ARK_IMAGE_MODEL", "doubao-seedream-5-0-260128")
 ARK_IMAGE_RESPONSE_FORMAT = os.environ.get("ARK_IMAGE_RESPONSE_FORMAT", "b64_json").strip().lower()
 DESMOS_API_KEY = os.environ.get("DESMOS_API_KEY", "").strip()
-ARK_TEXT_TIMEOUT_SECONDS = env_seconds("ARK_TEXT_TIMEOUT_SECONDS", 120)
-ARK_IMAGE_TIMEOUT_SECONDS = env_seconds("ARK_IMAGE_TIMEOUT_SECONDS", 180)
+ARK_TEXT_TIMEOUT_SECONDS = env_seconds("ARK_TEXT_TIMEOUT_SECONDS", 60)
+ARK_IMAGE_TIMEOUT_SECONDS = env_seconds("ARK_IMAGE_TIMEOUT_SECONDS", 120)
 MATH_FORMAT_RULE = "所有数学表达式必须用 $...$、$$...$$、\\(...\\) 或 \\[...\\] 包裹；不得裸露输出LaTex命令。"
 FREE_AI_QUOTA_DEFAULT = 30
 FREE_AI_HISTORY_LIMIT = 40
@@ -101,6 +103,14 @@ LOGIN_FAILURES: dict[str, list[float]] = {}
 LOGIN_LOCK = threading.Lock()
 SETUP_TOKEN_DISPLAY = ""
 SETUP_TOKEN_FILE = DATA_DIR / "setup-token.txt"
+COMPRESSIBLE_STATIC_TYPES = {".html", ".js", ".css", ".json", ".txt", ".md", ".svg"}
+
+
+@functools.lru_cache(maxsize=64)
+def compressed_static(path: str, modified_ns: int, size: int) -> bytes:
+    """Cache only recently requested compressed assets; the mtime key invalidates edits."""
+    del modified_ns, size
+    return gzip.compress(Path(path).read_bytes(), compresslevel=5, mtime=0)
 
 CLASS_KEYS = {
     "project", "className", "currentStage", "stagePaused",
@@ -141,8 +151,9 @@ class UpstreamServiceError(ValueError):
 def database() -> sqlite3.Connection:
     db = sqlite3.connect(DB_PATH, timeout=20, factory=ClosingConnection)
     db.row_factory = sqlite3.Row
-    db.execute("PRAGMA journal_mode=WAL")
     db.execute("PRAGMA foreign_keys=ON")
+    db.execute("PRAGMA busy_timeout=5000")
+    db.execute("PRAGMA synchronous=NORMAL")
     return db
 
 
@@ -412,6 +423,9 @@ def init_database() -> None:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
     with database() as db:
+        # WAL is persistent. Setting it once avoids negotiating journal mode on
+        # every short request, which is noticeable when a class polls together.
+        db.execute("PRAGMA journal_mode=WAL")
         db.executescript(
             """
             CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -736,14 +750,14 @@ def dynamic_group_summaries(class_state: dict) -> list[dict]:
     return summaries
 
 
-def current_broadcast() -> dict:
+def current_broadcast(class_state: dict | None = None) -> dict:
     saved = state_get("broadcast")
     if saved:
         if saved.get("broadcastType") == "共性数学澄清":
             saved["broadcastType"] = "统一答疑"
         saved["seenGroups"] = sorted({int(group) for group in saved.get("seenGroups", []) if str(group).isdigit() and 1 <= int(group) <= group_count()})
         return saved
-    return {"broadcast": state_get("class").get("broadcast", ""), "broadcastType": "教师广播", "broadcastId": "", "seenGroups": []}
+    return {"broadcast": (class_state or state_get("class")).get("broadcast", ""), "broadcastType": "教师广播", "broadcastId": "", "seenGroups": []}
 
 
 def broadcast_for_session(session: dict) -> dict:
@@ -801,17 +815,17 @@ def student_stage_page_locked(path: str, session: dict | None, current_stage: in
     return bool(match and int(match.group(1)) > class_current_stage({"currentStage": current_stage}))
 
 
-def merged_state(group_no: int) -> dict:
-    value = state_get("class")
+def merged_state(group_no: int, monitoring: bool = True) -> dict:
+    class_state = state_get("class")
+    value = dict(class_state)
     group_state = state_get(f"group:{group_no}")
     value.update(group_state)
-    value.update(current_broadcast())
+    value.update(current_broadcast(class_state))
     value["stageSubmitted"] = validated_stage_submissions(group_state)
     value["stageTaskStatus"] = stage_task_status(group_state)
     value["broadcastViewed"] = group_no in value.get("seenGroups", [])
     # 课堂阶段、暂停状态和 AI 开关由教师端统一控制；小组初始状态中的
     # currentStage=1 不能覆盖教师已经开放的阶段，否则学生刷新后会被误判回阶段1。
-    class_state = state_get("class")
     for key in ("currentStage", "stagePaused", "aiOpen"):
         if key in class_state:
             value[key] = class_current_stage(class_state) if key == "currentStage" else class_state[key]
@@ -829,7 +843,9 @@ def merged_state(group_no: int) -> dict:
     value["activeHelpThread"] = active_help_thread(group_state)
     value["helpThreads"] = group_state.get("helpThreads", []) if isinstance(group_state.get("helpThreads", []), list) else []
     value["freeAi"] = free_ai_state(group_state)
-    value["groups"] = dynamic_group_summaries(value)
+    # Student pages only need the persisted summaries. Recomputing every group
+    # on each poll multiplied one small request into up to 20 state reads.
+    value["groups"] = dynamic_group_summaries(value) if monitoring else list(class_state.get("groups", []))
     topics: dict[str, list[int]] = {}
     for item in value["groups"]:
         if item.get("issue"):
@@ -839,11 +855,14 @@ def merged_state(group_no: int) -> dict:
          "note": "多个小组在提示请求中选择了相同卡点类型。", "action": "请教师结合各组原始记录判断是否需要共性澄清"}
         for index, (title, numbers) in enumerate(topics.items(), 1) if len(numbers) >= 2
     ]
-    with database() as db:
-        calls = db.execute(
-            "SELECT ts,group_no,level,model,latency_ms,status FROM ai_calls ORDER BY id DESC LIMIT 50"
-        ).fetchall()
-    value["aiCalls"] = [dict(row) for row in calls]
+    if monitoring:
+        with database() as db:
+            calls = db.execute(
+                "SELECT ts,group_no,level,model,latency_ms,status FROM ai_calls ORDER BY id DESC LIMIT 50"
+            ).fetchall()
+        value["aiCalls"] = [dict(row) for row in calls]
+    else:
+        value.pop("aiCalls", None)
     value["currentLesson"] = lesson_plans.current(sys.modules[__name__])
     return value
 
@@ -984,8 +1003,10 @@ def deepseek_hint(
     config = state.get("teacherConfig", {})
     knowledge_names = config.get("knowledge", []) if isinstance(config, dict) else []
     with database() as db:
-        texts = db.execute("SELECT original_name,extracted_text FROM files WHERE extracted_text<>'' ORDER BY uploaded_at DESC LIMIT 5").fetchall()
-    knowledge = "\n".join(f"[{row['original_name']}] {row['extracted_text'][:4000]}" for row in texts)
+        texts = db.execute("SELECT original_name,extracted_text FROM files WHERE extracted_text<>'' ORDER BY uploaded_at DESC LIMIT 3").fetchall()
+    # A short, recent evidence window keeps prompt transfer and first-token time
+    # bounded while retaining enough source text for grounded scaffolding.
+    knowledge = "\n".join(f"[{row['original_name']}] {row['extracted_text'][:1600]}" for row in texts)
     contracts = {
         "L1": "定位支架：只指出一个尚未明确的目标、条件或检查项；提出一个聚焦问题和一个立即可执行的观察/核对动作。不得让学生写函数、表达式、不等式，不得给完整公式、建模方法或结果。",
         "L2": "结构支架：把卡点拆成2—3个子问题，建议变量、图表或数量关系的组织方式和处理顺序；下一步只让学生做第一个整理动作。不得完成全部建模或推导。",
@@ -1009,11 +1030,12 @@ def deepseek_hint(
                 "层级": item.get("level", ""), "学生提问": item.get("question", item.get("prompt", "")),
                 "学生尝试": item.get("done", ""), "支架": item.get("reply", ""),
             })
+    charter = project_charter(state)
     user = {
         "适用年级": student_grade(state) or "初中阶段",
         "项目": state.get("project", ""), "数学主题": config.get("mathTopic", ""),
         "课程目标": config.get("standard", ""), "当前阶段": state.get("currentStage", 1),
-        "当前课时项目信息": state.get("currentLesson"), "数学项目任务书": project_charter(state),
+        "当前课时项目信息": charter.get("当前课时", {}), "数学项目任务书": charter,
         "提示层级": level, "已完成": done, "卡点类型": issue_type, "具体卡点": issue,
         "共享工作区": state.get("workspace", {}), "已检查工作区": checked_work,
         "同一求助主题的最近对话": recent, "已审核材料": knowledge_names, "材料摘录": knowledge,
@@ -1089,10 +1111,19 @@ def free_ai_state(group_state: dict) -> dict:
 def project_charter(state: dict) -> dict:
     config = state.get("teacherConfig", {}) if isinstance(state.get("teacherConfig"), dict) else {}
     lesson = state.get("currentLesson") if isinstance(state.get("currentLesson"), dict) else {}
+    lesson_info = lesson.get("projectInfo") if isinstance(lesson.get("projectInfo"), dict) else {}
+    compact_lesson = {
+        key: lesson.get(key, "") for key in ("lessonNo", "title", "mathFocus", "objectives", "output")
+        if lesson.get(key) not in (None, "", [], {})
+    }
+    compact_lesson["projectInfo"] = {
+        key: lesson_info.get(key, "") for key in ("title", "grade", "teachingUnit", "learningObjectives")
+        if lesson_info.get(key)
+    }
     return {
         "项目名称": state.get("project", ""), "数学主题": config.get("mathTopic", ""),
         "课程目标": config.get("standard", ""), "最终成果": config.get("finalProduct", ""),
-        "当前阶段": state.get("currentStage", 1), "当前课时": lesson,
+        "当前阶段": state.get("currentStage", 1), "当前课时": compact_lesson,
     }
 
 
@@ -1104,7 +1135,7 @@ def free_ai_context(state: dict, group: int) -> str:
         "项目": state.get("project", ""), "数学主题": config.get("mathTopic", ""),
         "课程目标": config.get("standard", ""), "最终成果": config.get("finalProduct", ""),
         "当前阶段": state.get("currentStage", 1), "小组": group, "共享工作区": workspace,
-        "当前课时项目信息": state.get("currentLesson"), "数学项目任务书": project_charter(state),
+        "数学项目任务书": project_charter(state),
     }
     return json.dumps(context, ensure_ascii=False)
 
@@ -1121,10 +1152,10 @@ def ark_free_messages(state: dict, group: int, prompt: str, history: list[dict])
         f"当前项目上下文：{free_ai_context(state, group)}"
     )
     messages = [{"role": "system", "content": system}]
-    for item in history[-12:]:
+    for item in history[-8:]:
         if not isinstance(item, dict) or item.get("role") not in {"user", "assistant"}:
             continue
-        content = str(item.get("content", "")).strip()[:3000]
+        content = str(item.get("content", "")).strip()[:2000]
         if content:
             messages.append({"role": item["role"], "content": content})
     messages.append({"role": "user", "content": prompt})
@@ -1133,7 +1164,10 @@ def ark_free_messages(state: dict, group: int, prompt: str, history: list[dict])
 
 def ark_text_request(messages: list[dict], stream: bool) -> urllib.request.Request:
     api_key = os.environ.get("ARK_API_KEY", "")
-    payload = json.dumps({"model": ARK_TEXT_MODEL, "messages": messages, "stream": stream}, ensure_ascii=False).encode()
+    payload = json.dumps({
+        "model": ARK_TEXT_MODEL, "messages": messages, "stream": stream,
+        "temperature": 0.2, "max_tokens": 1600,
+    }, ensure_ascii=False).encode()
     return urllib.request.Request(
         ARK_TEXT_URL, data=payload,
         headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json", "User-Agent": "Maple-Platform/1"},
@@ -1364,10 +1398,41 @@ class Handler(SimpleHTTPRequestHandler):
         self.send_error(HTTPStatus.NOT_FOUND)
         return None
 
+    def send_head(self):
+        target = Path(self.translate_path(self.path))
+        if target.is_file() and target.suffix.lower() in COMPRESSIBLE_STATIC_TYPES:
+            stat = target.stat()
+            accepts_gzip = "gzip" in self.headers.get("Accept-Encoding", "").lower()
+            encoding_tag = "-gzip" if accepts_gzip else "-identity"
+            etag = f'"{stat.st_mtime_ns:x}-{stat.st_size:x}{encoding_tag}"'
+            if self.headers.get("If-None-Match") == etag:
+                self.send_response(HTTPStatus.NOT_MODIFIED)
+                self.send_header("ETag", etag)
+                self.send_header("Vary", "Accept-Encoding")
+                self.end_headers()
+                return None
+            raw = compressed_static(str(target), stat.st_mtime_ns, stat.st_size) if accepts_gzip else target.read_bytes()
+            self.send_response(HTTPStatus.OK)
+            self.send_header("Content-Type", self.guess_type(str(target)))
+            self.send_header("Content-Length", str(len(raw)))
+            self.send_header("Last-Modified", self.date_time_string(stat.st_mtime))
+            self.send_header("ETag", etag)
+            self.send_header("Vary", "Accept-Encoding")
+            if accepts_gzip:
+                self.send_header("Content-Encoding", "gzip")
+            self.end_headers()
+            return io.BytesIO(raw)
+        return super().send_head()
+
     def end_headers(self) -> None:
         path = urlparse(self.path).path
-        if not path.startswith("/api/") and (path in ("/", "/index.html") or Path(path).suffix in {".html", ".js", ".css"}):
-            self.send_header("Cache-Control", "no-store")
+        if not path.startswith("/api/"):
+            if path.startswith("/vendor/math-viz-kit/"):
+                self.send_header("Cache-Control", "public, max-age=86400")
+            elif Path(path).suffix in {".html", ".js", ".css"} or path == "/":
+                self.send_header("Cache-Control", "no-cache")
+            elif path.startswith("/assets/images/"):
+                self.send_header("Cache-Control", "public, max-age=86400")
         self.send_header("X-Content-Type-Options", "nosniff")
         document_preview = path in ('/api/lesson-plan/source', '/api/lesson-plan/material')
         visualization = path.startswith('/vendor/math-viz-kit/')
@@ -1379,7 +1444,9 @@ class Handler(SimpleHTTPRequestHandler):
             # to the two calculator pages instead of weakening the whole site.
             content_policy = "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://www.desmos.com https://*.desmos.com; style-src 'self' 'unsafe-inline' https://www.desmos.com https://*.desmos.com; font-src 'self' data: https://www.desmos.com https://*.desmos.com; img-src 'self' data: blob: https://www.desmos.com https://*.desmos.com; connect-src 'self' https://www.desmos.com https://*.desmos.com; worker-src 'self' blob:"
         elif visualization:
-            content_policy = "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' data: https://fonts.gstatic.com; img-src 'self' data:; frame-src 'self'"
+            # The vendored tools are self-contained. Blocking remote font calls
+            # removes a slow third-party dependency on school/mobile networks.
+            content_policy = "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; img-src 'self' data:; frame-src 'self'"
         else:
             content_policy = "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'"
         self.send_header("Content-Security-Policy", content_policy)
@@ -1559,7 +1626,7 @@ class Handler(SimpleHTTPRequestHandler):
             count = group_count()
             group = session.get("groupId") or int(query.get("group", ["1"])[0])
             group = max(1, min(count, int(group)))
-            self.json_response({"state": merged_state(group), "role": session["role"]})
+            self.json_response({"state": merged_state(group, monitoring=session["role"] == "teacher"), "role": session["role"]})
             return
         if route.path == "/api/files":
             session = self.require_session()
@@ -1946,7 +2013,7 @@ class Handler(SimpleHTTPRequestHandler):
             state_put("class", class_state)
         self.sync_group_summary(group, group_state)
         record_event(session["role"], group, "state_save", incoming.get("currentStage"), "workspace")
-        self.json_response({"ok": True, "updatedAt": utc_now(), "state": merged_state(group)})
+        self.json_response({"ok": True, "updatedAt": utc_now(), "state": merged_state(group, monitoring=session["role"] == "teacher")})
 
     def initialize_from_request(self, body: dict) -> None:
         if is_initialized():
@@ -2269,7 +2336,7 @@ class Handler(SimpleHTTPRequestHandler):
             group_state["membersLocked"] = False
             state_put(f"group:{group}", group_state)
             record_event("teacher", group, "members_unlocked", 1, str(session.get("username", "")))
-            self.json_response({"ok": True, "members": group_state.get("members", []), "membersLocked": False, "state": merged_state(group)})
+            self.json_response({"ok": True, "members": group_state.get("members", []), "membersLocked": False, "state": merged_state(group, monitoring=True)})
             return
         if action not in {"save", "submit"}:
             raise ValueError("不支持的成员操作")
@@ -2309,7 +2376,7 @@ class Handler(SimpleHTTPRequestHandler):
         else:
             event_type = "members_submitted" if session["role"] == "student" else "members_teacher_updated"
         record_event(session["role"], group, event_type, 1, f"count={len(members)}")
-        self.json_response({"ok": True, "members": members, "roles": group_state["roles"], "membersLocked": group_state["membersLocked"], "state": merged_state(group)})
+        self.json_response({"ok": True, "members": members, "roles": group_state["roles"], "membersLocked": group_state["membersLocked"], "state": merged_state(group, monitoring=session["role"] == "teacher")})
 
     def register_teacher(self, body: dict) -> None:
         if not is_initialized():
@@ -2348,7 +2415,7 @@ class Handler(SimpleHTTPRequestHandler):
 
     def prepare_free_ai_chat(self, session: dict, body: dict) -> dict:
         group = int(session["groupId"])
-        state = merged_state(group)
+        state = merged_state(group, monitoring=False)
         enabled, quota = free_ai_settings(state)
         if not enabled or not state.get("aiOpen", True):
             raise UpstreamServiceError("自由工作区已由教师暂停", HTTPStatus.CONFLICT)
@@ -2442,7 +2509,7 @@ class Handler(SimpleHTTPRequestHandler):
 
     def compare_solutions(self, session: dict, body: dict) -> None:
         group = int(session["groupId"])
-        state = merged_state(group)
+        state = merged_state(group, monitoring=False)
         if not state.get("aiOpen", True):
             raise UpstreamServiceError("AI已由教师暂停", HTTPStatus.CONFLICT)
         try:
@@ -2548,7 +2615,7 @@ class Handler(SimpleHTTPRequestHandler):
 
     def hint(self, session: dict, body: dict) -> None:
         group = int(session["groupId"])
-        state = merged_state(group)
+        state = merged_state(group, monitoring=False)
         group_state = state_get(f"group:{group}")
         policy = hint_policy(state)
         usage = hint_usage(group_state)
@@ -2835,7 +2902,7 @@ class Handler(SimpleHTTPRequestHandler):
         state_put(f"group:{group}", group_state)
         self.sync_group_summary(group, group_state)
         record_event("student", group, "stage_submit", stage_no, f"阶段{stage_no}产出")
-        self.json_response({"ok": True, "state": merged_state(group)})
+        self.json_response({"ok": True, "state": merged_state(group, monitoring=False)})
 
     def remove_knowledge_material(self, session: dict, body: dict) -> None:
         name = Path(str(body.get("name", ""))).name[:180]

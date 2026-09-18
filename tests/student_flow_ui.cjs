@@ -39,14 +39,19 @@ const {chromium}=require('playwright'),root=path.resolve(__dirname,'..');
   assert.equal(await page.locator('.stage1-material-item').count(),3);
 
   await page.goto(base+'/student/stage3-model.html');
-  await page.locator('#m-var').fill('x');await page.locator('#m-rel').fill('y=x²');await page.locator('#m-model').fill('y=x²');await page.locator('#m-range').fill('-2≤x≤2');
-  await page.locator('#saveModel').click();await page.waitForURL(base+'/student/stage3-graph.html');
-  for(const [id,value] of [['graphA','1'],['graphB','0'],['graphC','0'],['graphMin','-2'],['graphMax','2'],['graphJudge','图像符合范围']])await page.locator('#'+id).fill(value);
-  await page.locator('#saveGraphJudge').click();await page.waitForURL(base+'/student/stage3-compare.html');
+  await page.locator('#m-problem').fill('比较函数在给定范围内的变化');await page.locator('#m-var').fill('x');await page.locator('#m-rel').fill('y=x²');await page.locator('#m-range').fill('-2≤x≤2');
+  await page.locator('#saveModel').click();await page.getByText('数学方案 V1 已保存',{exact:true}).waitFor();
+  assert(page.url().endsWith('/student/stage3-model.html'),'saving the model must stay on the current task');
+  await page.getByText('模型表征与检验',{exact:true}).click();await page.waitForURL(base+'/student/stage3-graph.html');
+  assert.equal(await page.locator('.page-head h1').textContent(),'模型表征与检验');
+  await page.goto(base+'/student/stage3-compare.html');
   for(const input of await page.locator('[data-v]').all())await input.fill('已填写');
-  await page.locator('#saveCompare').click();await page.waitForURL(base+'/student/stage3-check.html');
+  await page.locator('#saveCompare').click();await page.getByText('方案比较已保存',{exact:true}).waitFor();
+  assert(page.url().endsWith('/student/stage3-compare.html'),'saving the comparison must stay on the current task');
+  await page.getByText('进入核验清单',{exact:true}).click();await page.waitForURL(base+'/student/stage3-check.html');
   for(const input of await page.locator('[data-check]').all())await input.check();
-  await page.locator('#saveCheck').click();await page.waitForURL(base+'/student/stage3.html');
+  await page.locator('#saveCheck').click();await page.getByText('检查结果已保存',{exact:true}).waitFor();
+  assert(page.url().endsWith('/student/stage3-check.html'),'saving the checklist must stay on the current task');
 
   state={project:'成员测试',groupCount:1,groupId:1,currentStage:1,members:[],roles:[]};
   await page.goto(base+'/student/stage1-roles.html');
@@ -57,6 +62,6 @@ const {chromium}=require('playwright'),root=path.resolve(__dirname,'..');
   assert.deepEqual(await page.locator('[data-member]').allTextContents(),['','','','']);
   assert.deepEqual(await page.locator('[data-member]').evaluateAll(inputs=>inputs.map(input=>input.value)),names);
   assert.deepEqual(errors,[]);
-  console.log('PASS: dashboard typography, hover color, stage-3 save flow, and first member save');
+  console.log('PASS: dashboard typography, hover color, explicit stage-3 navigation, and first member save');
  }finally{if(browser)await browser.close();await new Promise(resolve=>server.close(resolve))}
 })().catch(error=>{console.error(error);process.exitCode=1});
