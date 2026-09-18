@@ -85,8 +85,7 @@ DEEPSEEK_URL = DEEPSEEK_BASE_URL + "/chat/completions"
 DEEPSEEK_MODEL = normalize_deepseek_model(os.environ.get("DEEPSEEK_MODEL"))
 DEEPSEEK_REASONING_MODEL = os.environ.get("DEEPSEEK_REASONING_MODEL", "deepseek-v4-pro")
 ARK_TEXT_URL = os.environ.get("ARK_TEXT_URL", "https://ark.cn-beijing.volces.com/api/v3/chat/completions")
-ARK_TEXT_MODEL = os.environ.get("ARK_TEXT_MODEL", "doubao-seed-2-0-lite-260428")
-ARK_TEXT_SPEED = os.environ.get("ARK_TEXT_SPEED", "fast").strip() or "fast"
+ARK_TEXT_MODEL = os.environ.get("ARK_TEXT_MODEL", "doubao-seed-2-0-mini-260428")
 ARK_IMAGE_URL = os.environ.get("ARK_IMAGE_URL", "https://ark.cn-beijing.volces.com/api/v3/images/generations")
 ARK_IMAGE_MODEL = os.environ.get("ARK_IMAGE_MODEL", "doubao-seedream-5-0-260128")
 ARK_IMAGE_RESPONSE_FORMAT = os.environ.get("ARK_IMAGE_RESPONSE_FORMAT", "b64_json").strip().lower()
@@ -1121,7 +1120,7 @@ def ark_free_messages(state: dict, group: int, prompt: str, history: list[dict])
 
 def ark_text_request(messages: list[dict], stream: bool) -> urllib.request.Request:
     api_key = os.environ.get("ARK_API_KEY", "")
-    payload = json.dumps({"model": ARK_TEXT_MODEL, "messages": messages, "stream": stream, "speed": ARK_TEXT_SPEED}, ensure_ascii=False).encode()
+    payload = json.dumps({"model": ARK_TEXT_MODEL, "messages": messages, "stream": stream}, ensure_ascii=False).encode()
     return urllib.request.Request(
         ARK_TEXT_URL, data=payload,
         headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json", "User-Agent": "Maple-Platform/1"},
@@ -1163,14 +1162,15 @@ def ark_recognize_math_image(raw: bytes, mime: str) -> tuple[str | None, int, st
         return None, 0, "not_configured"
     messages = [
         {"role": "system", "content": (
-            "你是面向初中学生的数学图片转写助手。只转写图片中清楚可见的算式、方程、数据、单位、"
-            "几何条件或推理步骤，不解题，不补写看不清的内容；无法辨认处写[看不清]。"
+            "你是科学计算器的算式转写器。只转写图片中清楚可见且可以计算的一个算式，不解题，"
+            "不补写看不清的内容。使用 +、-、*、/、^、!、%、括号，以及 sqrt、sin、cos、tan、"
+            "log、ln、abs、pi、e；无法辨认时只输出[看不清]。"
         )},
         {"role": "user", "content": [
             {"type": "image_url", "image_url": {
                 "url": f"data:{mime};base64,{base64.b64encode(raw).decode('ascii')}", "detail": "high",
             }},
-            {"type": "text", "text": "请按原有顺序转成可编辑纯文本，保留必要换行，不要使用Markdown代码块。"},
+            {"type": "text", "text": "只返回一行可直接放入科学计算器的纯文本算式，不要使用Markdown。"},
         ]},
     ]
     request = ark_text_request(messages, False)

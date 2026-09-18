@@ -645,7 +645,7 @@ class PlatformTest(unittest.TestCase):
             request = urlopen.call_args.args[0]
             payload = json.loads(request.data)
             self.assertTrue(payload["stream"])
-            self.assertEqual(payload["speed"], app.ARK_TEXT_SPEED)
+            self.assertNotIn("speed", payload)
             self.assertEqual(urlopen.call_args.kwargs["timeout"], app.ARK_TEXT_TIMEOUT_SECONDS)
         finally:
             if original_key is None:
@@ -763,7 +763,7 @@ class PlatformTest(unittest.TestCase):
             self.assertEqual(text_request.full_url, app.ARK_TEXT_URL)
             text_body = json.loads(text_request.data)
             self.assertEqual(text_body["model"], app.ARK_TEXT_MODEL)
-            self.assertEqual(text_body["speed"], app.ARK_TEXT_SPEED)
+            self.assertNotIn("speed", text_body)
             self.assertEqual(text_body["messages"][0]["role"], "system")
             self.assertIn("数学项目式学习小组协作场景", text_body["messages"][0]["content"])
             self.assertEqual(text_body["messages"][-1]["content"], "请检查一元一次不等式")
