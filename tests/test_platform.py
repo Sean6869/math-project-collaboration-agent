@@ -167,7 +167,7 @@ class PlatformTest(unittest.TestCase):
         for path in ("/student/math-tools.html", "/student/stage3-graph.html"):
             with self.client().open(self.base + path, timeout=8) as response:
                 policy = response.headers["Content-Security-Policy"]
-            self.assertIn("script-src 'self' 'unsafe-inline' https://www.desmos.com https://*.desmos.com", policy)
+            self.assertIn("script-src 'self' 'unsafe-inline' 'unsafe-eval' https://www.desmos.com https://*.desmos.com", policy)
             self.assertIn("style-src 'self' 'unsafe-inline' https://www.desmos.com https://*.desmos.com", policy)
             self.assertIn("font-src 'self' data: https://www.desmos.com https://*.desmos.com", policy)
 

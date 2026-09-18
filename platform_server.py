@@ -1368,7 +1368,9 @@ class Handler(SimpleHTTPRequestHandler):
         self.send_header("Referrer-Policy", "same-origin")
         self.send_header("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
         if path in {"/student/math-tools.html", "/student/stage3-graph.html"}:
-            content_policy = "default-src 'self'; script-src 'self' 'unsafe-inline' https://www.desmos.com https://*.desmos.com; style-src 'self' 'unsafe-inline' https://www.desmos.com https://*.desmos.com; font-src 'self' data: https://www.desmos.com https://*.desmos.com; img-src 'self' data: blob: https://www.desmos.com https://*.desmos.com; connect-src 'self' https://www.desmos.com https://*.desmos.com; worker-src 'self' blob:"
+            # Desmos v1.12 contains generated Function/eval code. Scope unsafe-eval
+            # to the two calculator pages instead of weakening the whole site.
+            content_policy = "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://www.desmos.com https://*.desmos.com; style-src 'self' 'unsafe-inline' https://www.desmos.com https://*.desmos.com; font-src 'self' data: https://www.desmos.com https://*.desmos.com; img-src 'self' data: blob: https://www.desmos.com https://*.desmos.com; connect-src 'self' https://www.desmos.com https://*.desmos.com; worker-src 'self' blob:"
         else:
             content_policy = "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'"
         self.send_header("Content-Security-Policy", content_policy)
