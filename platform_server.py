@@ -111,7 +111,7 @@ CLASS_KEYS = {
 GROUP_KEYS = {
     "groupId", "roles", "roleRound", "stageSubmitted", "stageTimes",
     "workspace", "versions", "evidence", "viewpoints", "comparisonAi", "firstThoughts",
-    "debate", "product", "events", "questionTree", "graphConfig", "checklist", "preparationChecks", "freeAi", "mathTools", "mathLab",
+    "debate", "product", "events", "questionTree", "graphConfig", "checklist", "preparationChecks", "freeAi", "mathTools",
 }
 HINT_POLICY_DEFAULT = {"L1": 20, "L2": 10, "L3": 5, "L4": 3}
 HINT_LEVEL_NAMES = {1: "定位", 2: "拆解", 3: "局部示范", 4: "教师介入"}
@@ -609,8 +609,7 @@ def stage_task_status(group_state: dict) -> list[list[bool]]:
         [len(evidence) >= 1, any(isinstance(item, dict) and item.get("verified") is True for item in evidence),
          sum(isinstance(item, dict) and all(_has_value(item.get(key)) for key in ("claim", "basis", "risk")) for item in viewpoints) >= 2,
          len(versions) >= 2],
-        [all(_has_value(value) for value in (workspace.get("problem"), workspace.get("model"), product.get("claim"), product.get("limitations")))
-         and any(isinstance(item, dict) and item.get("verified") is True for item in evidence),
+        [all(_has_value(value) for value in (workspace.get("problem"), workspace.get("model"), product.get("evidenceValidation"), product.get("claim"))),
          _has_value(product.get("rehearsal")) and len(rehearsal_checks) >= 4 and all(value is True for value in rehearsal_checks[:4]),
          all(_has_value(product.get(key)) for key in ("audience", "claim", "limitations")),
          len(reflection) >= 3 and all(reflection[:3])],
@@ -1157,6 +1156,35 @@ def ark_free_chat(
         if isinstance(exc, TimeoutError) or isinstance(getattr(exc, "reason", None), TimeoutError):
             return None, latency, f"timeout after {ARK_TEXT_TIMEOUT_SECONDS}s", ARK_TEXT_MODEL
         return None, latency, type(exc).__name__, ARK_TEXT_MODEL
+
+
+def ark_recognize_math_image(raw: bytes, mime: str) -> tuple[str | None, int, str]:
+    if not os.environ.get("ARK_API_KEY", ""):
+        return None, 0, "not_configured"
+    messages = [
+        {"role": "system", "content": (
+            "你是面向初中学生的数学图片转写助手。只转写图片中清楚可见的算式、方程、数据、单位、"
+            "几何条件或推理步骤，不解题，不补写看不清的内容；无法辨认处写[看不清]。"
+        )},
+        {"role": "user", "content": [
+            {"type": "image_url", "image_url": {
+                "url": f"data:{mime};base64,{base64.b64encode(raw).decode('ascii')}", "detail": "high",
+            }},
+            {"type": "text", "text": "请按原有顺序转成可编辑纯文本，保留必要换行，不要使用Markdown代码块。"},
+        ]},
+    ]
+    request = ark_text_request(messages, False)
+    started = time.perf_counter()
+    try:
+        with urllib.request.urlopen(request, timeout=ARK_TEXT_TIMEOUT_SECONDS) as response:
+            body = json.loads(response.read())
+        answer = str(body["choices"][0]["message"]["content"]).strip()
+        answer = re.sub(r"^```(?:text)?\s*|\s*```$", "", answer, flags=re.I).strip()
+        return (answer[:5000] if answer else None), round((time.perf_counter() - started) * 1000), "ok"
+    except urllib.error.HTTPError as exc:
+        return None, round((time.perf_counter() - started) * 1000), f"HTTP {exc.code}"
+    except (urllib.error.URLError, TimeoutError, KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
+        return None, round((time.perf_counter() - started) * 1000), type(exc).__name__
 
 
 def sse_payloads(response):
@@ -1710,6 +1738,10 @@ class Handler(SimpleHTTPRequestHandler):
                 session = self.require_session("student")
                 if session:
                     self.compare_solutions(session, self.read_json())
+            elif route == "/api/ai/recognize-math":
+                session = self.require_session("student")
+                if session:
+                    self.recognize_math_image(session, self.read_json())
             elif route == "/api/stages/submit":
                 session = self.require_session("student")
                 if session:
@@ -1783,9 +1815,6 @@ class Handler(SimpleHTTPRequestHandler):
                     and item["file"].get("id") == file_id
                 )
             ]
-            math_lab = group.get("mathLab")
-            if isinstance(math_lab, dict) and isinstance(math_lab.get("attachment"), dict) and math_lab["attachment"].get("id") == file_id:
-                math_lab["attachment"] = None
             state_put(f"group:{session['groupId']}", group)
         else:
             class_state = state_get("class")
@@ -2450,6 +2479,32 @@ class Handler(SimpleHTTPRequestHandler):
             raise UpstreamServiceError("方案比较AI暂时不可用，请稍后重试", HTTPStatus.BAD_GATEWAY)
         record_event("student", group, "ai_compare", stage, "方案A/B")
         self.json_response({"ok": True, "answer": answer, "model": model, "latencyMs": latency})
+
+    def recognize_math_image(self, session: dict, body: dict) -> None:
+        group = int(session["groupId"])
+        state = merged_state(group)
+        if not state.get("aiOpen", True):
+            raise UpstreamServiceError("AI已由教师暂停，请手动输入数学内容", HTTPStatus.CONFLICT)
+        match = re.fullmatch(r"data:(image/(?:jpeg|png|webp));base64,([A-Za-z0-9+/=]+)", str(body.get("image", "")))
+        if not match:
+            raise ValueError("图片数据无效")
+        try:
+            raw = base64.b64decode(match.group(2), validate=True)
+        except ValueError as exc:
+            raise ValueError("图片数据无效") from exc
+        if not raw or len(raw) > 3 * 1024 * 1024:
+            raise ValueError("图片压缩后仍过大，请只拍需要识别的区域")
+        answer, latency, status = ark_recognize_math_image(raw, match.group(1))
+        with database() as db:
+            db.execute(
+                "INSERT INTO ai_calls(ts,group_no,level,model,latency_ms,status,detail) VALUES(?,?,?,?,?,?,?)",
+                (utc_now(), group, "MATH_OCR", ARK_TEXT_MODEL, latency, "returned" if answer else "failed", status[:1000]),
+            )
+        if not answer:
+            if status == "not_configured":
+                raise UpstreamServiceError("图片识别服务尚未配置，请手动输入数学内容", HTTPStatus.SERVICE_UNAVAILABLE)
+            raise UpstreamServiceError("图片暂时无法识别，请重新拍摄或手动输入", HTTPStatus.BAD_GATEWAY)
+        self.json_response({"ok": True, "text": answer, "latencyMs": latency})
 
     def free_ai_chat(self, session: dict, body: dict) -> None:
         context = self.prepare_free_ai_chat(session, body)

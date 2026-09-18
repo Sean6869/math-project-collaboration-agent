@@ -1,3 +1,4 @@
+import base64
 import http.cookiejar
 import io
 import json
@@ -412,6 +413,8 @@ class PlatformTest(unittest.TestCase):
         self.assertIn('<form id="teacherAuthForm">', script)
         self.assertIn("const setAuthRole=role=>", script)
         self.assertIn("event.preventDefault()", script)
+        self.assertIn("teacher?'进入教师端':'进入学生端'", script)
+        self.assertNotIn("进入工作端", script)
         self.assertNotIn('class="auth-options"', script)
         self.assertIn('.auth-card:has(.auth-role-switch)', styles)
         self.assertIn('.auth-card .toolbar{justify-content:flex-end}', styles)
@@ -563,12 +566,18 @@ class PlatformTest(unittest.TestCase):
             uploaded = json.loads(response.read())
         self.assertEqual(uploaded["file"]["name"], "现场证据.jpg")
         self.assertEqual(uploaded["file"]["size"], len(raw))
+        with mock.patch.object(app, "ark_recognize_math_image", return_value=("2x+5=17", 8, "ok")):
+            status, recognized = self.json_request(
+                student, "/api/ai/recognize-math", "POST",
+                {"image": "data:image/jpeg;base64," + base64.b64encode(raw).decode("ascii")},
+            )
+        self.assertEqual(status, 200)
+        self.assertEqual(recognized["text"], "2x+5=17")
         group_state = app.state_get("group:2")
         group_state["evidence"] = [
             {"text": "现场证据", "file": uploaded["file"]},
             {"text": "无附件计算", "file": None},
         ]
-        group_state["mathLab"] = {"attachment": uploaded["file"]}
         app.state_put("group:2", group_state)
         delete_request = urllib.request.Request(
             self.base + "/api/files/" + uploaded["file"]["id"], method="DELETE"
@@ -577,7 +586,6 @@ class PlatformTest(unittest.TestCase):
             self.assertEqual(response.status, 200)
         group_state = app.state_get("group:2")
         self.assertEqual([item["text"] for item in group_state["evidence"]], ["无附件计算"])
-        self.assertIsNone(group_state["mathLab"]["attachment"])
 
         class_state = app.state_get("class")
         class_state.update({"aiOpen": True, "currentStage": 4})

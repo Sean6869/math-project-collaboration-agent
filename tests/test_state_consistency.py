@@ -24,7 +24,7 @@ def complete_state():
         "graphConfig": dict(a=0, b=1, c=0, min=0, max=10, note="已核验边界"),
         "viewpoints": [dict(claim="A", basis="计算", risk="单价变化"), dict(claim="B", basis="测量", risk="误差")],
         "evidence": [dict(text="计算过程", verified=True)],
-        "product": dict(audience="同学", claim="结论", limitations="范围", rehearsal="预演记录", rehearsalChecks=[True]*4, reflection="数学工作\n提示帮助\n迁移计划"),
+        "product": dict(audience="同学", claim="结论", limitations="范围", evidenceValidation="计算与实测一致", rehearsal="预演记录", rehearsalChecks=[True]*4, reflection="数学工作\n提示帮助\n迁移计划"),
         "stageSubmitted": {str(n): True for n in range(1, 6)},
     }
 
