@@ -1048,6 +1048,20 @@ def ark_file_status(file_id: str) -> dict:
         return json.loads(response.read())
 
 
+KNOWLEDGE_PROGRESS_LOCK = threading.Lock()
+KNOWLEDGE_PROGRESS: dict[str, dict] = {}
+
+
+def knowledge_progress(file_id: str, phase: str = "", *, api: str = "", pages: str = "") -> None:
+    """Track the operation actually executing, separately from queued records."""
+    with KNOWLEDGE_PROGRESS_LOCK:
+        if phase:
+            KNOWLEDGE_PROGRESS[file_id] = {"phase": phase, "api": api, "pages": pages,
+                                           "startedAt": utc_now(), "startedEpoch": time.time()}
+        else:
+            KNOWLEDGE_PROGRESS.pop(file_id, None)
+
+
 def sync_ark_knowledge_files() -> None:
     """Keep scanned built-in PDFs available to the multimodal document model."""
     if not os.environ.get("ARK_API_KEY"):
@@ -1067,11 +1081,13 @@ def sync_ark_knowledge_files() -> None:
         try:
             provider_id = row["provider_file_id"]
             if provider_id and int(row["expires_at"] or 0) > refresh_before:
+                knowledge_progress(row["id"], "查询云端文件状态", api="Files API")
                 meta = ark_file_status(provider_id)
             else:
                 target = UPLOAD_DIR / row["stored_name"]
                 if not target.is_file():
                     continue
+                knowledge_progress(row["id"], "正在上传文档", api="Files API")
                 meta = ark_upload_document(target, row["original_name"])
             status = str(meta.get("status", "processing"))
             expires_at = int(meta.get("expire_at") or int(time.time()) + 7 * 24 * 60 * 60)
@@ -1088,6 +1104,8 @@ def sync_ark_knowledge_files() -> None:
                     "VALUES(?,?,?,?,?,?)",
                     (row["id"], row["provider_file_id"] or "", "failed", 0, utc_now(), str(exc)[:500]),
                 )
+        finally:
+            knowledge_progress(row["id"])
     for _ in range(30):
         with database() as db:
             pending = db.execute(
@@ -1098,6 +1116,7 @@ def sync_ark_knowledge_files() -> None:
         time.sleep(10)
         for item in pending:
             try:
+                knowledge_progress(item["local_file_id"], "查询云端解析结果", api="Files API")
                 meta = ark_file_status(item["provider_file_id"])
                 with database() as db:
                     db.execute(
@@ -1110,6 +1129,8 @@ def sync_ark_knowledge_files() -> None:
                         "UPDATE knowledge_provider_files SET error=?,updated_at=? WHERE local_file_id=?",
                         (str(exc)[:500], utc_now(), item["local_file_id"]),
                     )
+            finally:
+                knowledge_progress(item["local_file_id"])
 
 
 KNOWLEDGE_SYNC_RUNNING = threading.Event()
@@ -1127,6 +1148,8 @@ def start_ark_knowledge_sync() -> None:
                 sync_ark_knowledge_chunks()
             finally:
                 KNOWLEDGE_SYNC_RUNNING.clear()
+                with KNOWLEDGE_PROGRESS_LOCK:
+                    KNOWLEDGE_PROGRESS.clear()
         KNOWLEDGE_SYNC_RUNNING.set()
         threading.Thread(target=worker, name="knowledge-file-sync", daemon=True).start()
 
@@ -1680,9 +1703,13 @@ def sync_ark_knowledge_chunks() -> None:
                 )
             chunk_path = None
             try:
+                page_range = f"第{start}-{end}页"
+                knowledge_progress(document["id"], "正在本地切分PDF", pages=page_range)
                 chunk_path = create_pdf_chunk(path, start, end)
+                knowledge_progress(document["id"], "正在上传分块", api="Files API", pages=page_range)
                 meta = ark_upload_document(chunk_path, f"{Path(document['original_name']).stem}-第{start}-{end}页.pdf")
                 provider_id = meta["id"]
+                knowledge_progress(document["id"], "等待云端解析分块", api="Files API（轮询）", pages=page_range)
                 for _ in range(45):
                     meta = ark_file_status(provider_id)
                     if meta.get("status") != "processing":
@@ -1690,6 +1717,7 @@ def sync_ark_knowledge_chunks() -> None:
                     time.sleep(2)
                 if meta.get("status") != "active":
                     raise ValueError(f"切片文件状态：{meta.get('status', 'unknown')}")
+                knowledge_progress(document["id"], "正在调用模型生成摘要", api="Responses API", pages=page_range)
                 summary = summarize_ark_chunk(provider_id, document["original_name"], start, end)
                 if not summary:
                     raise ValueError("切片未返回可检索摘要")
@@ -1698,6 +1726,7 @@ def sync_ark_knowledge_chunks() -> None:
                         "UPDATE knowledge_chunks SET provider_file_id=?,status='active',summary=?,expires_at=?,updated_at=?,error='' WHERE id=?",
                         (provider_id, summary, int(meta.get("expire_at") or int(time.time()) + 7 * 86400), utc_now(), chunk_id),
                     )
+                knowledge_progress(document["id"])
                 time.sleep(2)
             except urllib.error.HTTPError as exc:
                 with database() as db:
@@ -1711,6 +1740,7 @@ def sync_ark_knowledge_chunks() -> None:
                 with database() as db:
                     db.execute("UPDATE knowledge_chunks SET status='failed',updated_at=?,error=? WHERE id=?", (utc_now(), str(exc)[:500], chunk_id))
             finally:
+                knowledge_progress(document["id"])
                 if chunk_path:
                     chunk_path.unlink(missing_ok=True)
 
@@ -1930,6 +1960,8 @@ def knowledge_snapshot() -> dict:
     """Report stored evidence and actual retrieval eligibility without calling AI."""
     now = int(time.time())
     running = KNOWLEDGE_SYNC_RUNNING.is_set()
+    with KNOWLEDGE_PROGRESS_LOCK:
+        progress = {key: dict(value) for key, value in KNOWLEDGE_PROGRESS.items()}
     configured = bool(os.environ.get("ARK_API_KEY", "").strip())
     with database() as db:
         rows = db.execute(
@@ -1953,6 +1985,7 @@ def knowledge_snapshot() -> dict:
         stored = item.pop("stored_name")
         provider_id = item.pop("providerId")
         records = by_file.get(item["id"], [])
+        action = progress.get(item["id"], {}) if running else {}
         ready = [c for c in records if c["status"] == "active" and c["summary"].strip()]
         cloud_chunks = [c for c in records if c["status"] == "active" and c["provider_file_id"] and c["expires_at"] > now]
         present = (UPLOAD_DIR / stored).is_file()
@@ -1971,6 +2004,9 @@ def knowledge_snapshot() -> dict:
             "localSearchable": local, "cloudReadable": direct or bool(configured and cloud_chunks),
             "searchable": local or direct or bool(configured and cloud_chunks),
             "statusUpdatedAt": max([item["providerUpdatedAt"]] + [c["updated_at"] for c in records]),
+            "currentAction": action.get("phase", ""), "currentApi": action.get("api", ""),
+            "actionStartedAt": action.get("startedAt", ""),
+            "actionElapsedSeconds": max(0, now - int(action["startedEpoch"])) if action else 0,
         })
         if item["indexedChars"]:
             label = "文字很少，部分可检索" if item["mime"] == "application/pdf" and item["indexedChars"] < 1000 else "有文字可检索"
@@ -1989,15 +2025,22 @@ def knowledge_snapshot() -> dict:
             task = "未配置云端识别"
         elif item["uploadedBy"] != "builtin-knowledge":
             task = "补充材料仅使用本地文字"
+        elif action:
+            task = action["phase"]
         elif item["chunkFailed"] or (item["providerStatus"] == "failed" and not expected):
             task = "部分识别失败" if local else "识别失败"
         elif expected and len(ready) < expected:
-            task = "正在处理" if running else "识别未完成，后台任务已停止"
+            task = "排队等待分块识别" if running else "识别未完成，后台任务已停止"
         elif not expected and not direct:
-            task = "正在处理" if running else "云端未就绪，后台任务已停止"
+            task = ("等待云端解析结果" if item["providerStatus"] == "processing" else "排队等待识别") if running else "云端未就绪，后台任务已停止"
         else:
             task = "本轮处理完成"
         details.append(task)
+        if action:
+            if action["pages"]:
+                details.append(action["pages"])
+            details.append(action["api"] or "本地操作，不调用API")
+            details.append(f"此步骤已用时 {item['actionElapsedSeconds']} 秒（不代表成功）")
         if item["providerStatus"] == "active" and item["providerExpiresAt"] <= now:
             details.append("云端整文件已过期")
         if expected and not item["cloudChunkCount"] and ready:

@@ -24,19 +24,22 @@ const root=path.resolve(__dirname,'..');
     calls++;
     if(fail){await route.fulfill({status:503,contentType:'application/json',body:JSON.stringify({error:'test unavailable'})});return}
     body={checkedAt:new Date().toISOString(),syncRunning:!ready,summary:{total:1,indexed:ready?1:0,bytes:12},files:[{id:'fixture',name:'扫描教材.pdf',size:12,mime:'application/pdf',uploadedBy:'builtin-knowledge',searchable:ready,statusLabel:ready?'部分摘要可检索':'尚无可检索内容',statusDetail:ready?'本地文字 0 字符；摘要分块 1/5；部分识别失败':'本地文字 0 字符；摘要分块 0/5；正在处理'}]};
+    body.files.push({...body.files[0],id:'short',name:'短文件.pdf',statusLabel:'尚无可检索内容',statusDetail:'排队等待识别'});
    }
    await route.fulfill({status:200,contentType:'application/json',body:JSON.stringify(body)});
   });
   await page.goto(`http://127.0.0.1:${server.address().port}/teacher/knowledge.html`);
-  await page.getByText('尚无可检索内容',{exact:true}).waitFor();
+  await page.getByText('尚无可检索内容',{exact:true}).first().waitFor();
   await page.locator('#knowledgeFile').evaluate(node=>node.dataset.retained='yes');
   ready=true;
   await page.getByText('部分摘要可检索',{exact:true}).waitFor({timeout:20000});
   assert(calls>=2);
   assert.equal(await page.locator('#knowledgeFile').getAttribute('data-retained'),'yes');
-  assert.equal(await page.getByRole('link',{name:'预览',exact:true}).getAttribute('href'),'/api/files/fixture');
+  assert.equal(await page.getByRole('link',{name:'预览',exact:true}).first().getAttribute('href'),'/api/files/fixture');
   for(const width of [390,768,1280]){
    await page.setViewportSize({width,height:900});
+   const lefts=await page.locator('.knowledge-file-status').evaluateAll(nodes=>nodes.map(node=>node.getBoundingClientRect().left));
+   assert(Math.abs(lefts[0]-lefts[1])<1,`status columns not aligned at ${width}`);
    assert(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth+1),`overflow at ${width}`);
   }
   fail=true;

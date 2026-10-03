@@ -25,6 +25,7 @@ class KnowledgeStatusTest(unittest.TestCase):
         self.addCleanup(patch.stop)
         app.init_database()
         self.addCleanup(app.KNOWLEDGE_SYNC_RUNNING.clear)
+        self.addCleanup(app.KNOWLEDGE_PROGRESS.clear)
         self.now = int(time.time())
 
     def document(self, name="scan", text="", expires=None):
@@ -57,7 +58,8 @@ class KnowledgeStatusTest(unittest.TestCase):
         app.KNOWLEDGE_SYNC_RUNNING.set()
         self.chunk("processing", "")
         item = app.knowledge_snapshot()["files"][0]
-        self.assertEqual(item["taskStatus"], "正在处理")
+        self.assertEqual(item["taskStatus"], "排队等待分块识别")
+        self.assertEqual(item["currentApi"], "")
         self.assertFalse(item["searchable"])
         self.chunk()
         item = app.knowledge_snapshot()["files"][0]
@@ -114,21 +116,40 @@ class KnowledgeStatusTest(unittest.TestCase):
         upload.assert_not_called()
         status.assert_not_called()
 
+    @mock.patch.object(app, "pdf_page_count", return_value=100)
+    def test_only_executing_file_reports_api_operation(self, pages):
+        self.document()
+        self.document("queued")
+        app.KNOWLEDGE_SYNC_RUNNING.set()
+        app.knowledge_progress("scan", "正在调用模型生成摘要", api="Responses API", pages="第1-20页")
+        files = {f["id"]: f for f in app.knowledge_snapshot()["files"]}
+        self.assertEqual(files["scan"]["currentApi"], "Responses API")
+        self.assertIn("第1-20页", files["scan"]["statusDetail"])
+        self.assertEqual(files["queued"]["taskStatus"], "排队等待分块识别")
+        self.assertEqual(files["queued"]["currentApi"], "")
+        app.KNOWLEDGE_SYNC_RUNNING.clear()
+        self.assertEqual(app.knowledge_snapshot()["files"][0]["currentApi"], "")
+
     def test_curriculum_chunks_first_and_quota_error_stops_the_batch(self):
         self.document("textbook")
         self.document("课程标准")
         chunk_path = app.UPLOAD_DIR / "temporary-chunk.pdf"
         chunk_path.write_bytes(b"fixture")
+        app.KNOWLEDGE_SYNC_RUNNING.set()
+        def check_summary_call(*args):
+            with app.KNOWLEDGE_PROGRESS_LOCK:
+                self.assertEqual(app.KNOWLEDGE_PROGRESS["课程标准"]["api"], "Responses API")
+            raise urllib.error.HTTPError("https://example.test", 429, "quota", None, None)
         with mock.patch("pypdf.PdfReader") as reader, \
              mock.patch.object(app, "create_pdf_chunk", return_value=chunk_path), \
              mock.patch.object(app, "ark_upload_document", return_value={"id": "test"}), \
              mock.patch.object(app, "ark_file_status", return_value={"status": "active"}), \
-             mock.patch.object(app, "summarize_ark_chunk", side_effect=urllib.error.HTTPError(
-                 "https://example.test", 429, "quota", None, None)) as summarize:
+             mock.patch.object(app, "summarize_ark_chunk", side_effect=check_summary_call) as summarize:
             reader.return_value.pages = [None] * 60
             app.sync_ark_knowledge_chunks()
         self.assertEqual(summarize.call_count, 1)
         self.assertEqual(summarize.call_args.args[1], "课程标准.pdf")
+        self.assertEqual(app.KNOWLEDGE_PROGRESS, {})
 
 
 if __name__ == "__main__":
