@@ -186,3 +186,41 @@ html:has(.auth-shell),body:has(.auth-shell){height:100%;overflow:hidden}.auth-sh
 .product-layout,.rehearsal-layout{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;align-items:stretch}.rehearsal-issue-fields{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}.rehearsal-issue-fields textarea{min-height:102px}.rehearsal-check-card{grid-column:1/-1}.rehearsal-issue{display:flex;align-items:center;justify-content:space-between;gap:12px}.rehearsal-issue small{display:block;margin-top:4px;color:var(--muted)}
 @media(max-width:900px){.product-layout,.rehearsal-layout{grid-template-columns:1fr}.rehearsal-check-card{grid-column:auto}.desmos-calculator,.desmos-project .desmos-calculator{height:720px}}
 @media(max-width:600px){.desmos-standalone,.desmos-project{margin-left:-8px;margin-right:-8px;border-radius:0}.desmos-project>.field,.desmos-project>.toolbar{margin-left:12px;margin-right:12px}.desmos-calculator,.desmos-project .desmos-calculator{height:calc(100dvh - 150px);min-height:620px}.desmos-tool-switch{padding-left:12px;padding-right:12px}.desmos-tool-description{padding-left:12px;padding-right:12px}.math-lab-actions,.math-shots{margin-left:12px;margin-right:12px;padding-left:0;padding-right:0}.math-shot{grid-template-columns:72px 1fr}.math-shot>img{width:72px;height:56px}.math-viz-shell{height:calc(100dvh - 150px);min-height:560px;margin-left:-8px;margin-right:-8px;border-radius:0}.rehearsal-issue-fields{grid-template-columns:1fr}.rehearsal-issue{align-items:flex-start}.rehearsal-issue .btn{flex:none}}
+
+/* Student classroom surfaces use one status palette, larger touch targets, and a focused navigation. */
+:root{--ink:#172033;--muted:#667085;--bg:#f6f8fb;--blue:#2563eb;--teal:#0f766e;--green:#16a34a;--orange:#d97706;--red:#dc2626;--soft-blue:#eff6ff;--soft-green:#f0fdf4;--soft-orange:#fff7ed;--soft-red:#fef2f2}
+.student-app .main{font-size:17px;line-height:1.7}
+.student-app .page-head h1{font-size:28px}
+.student-app .page-head p,.student-app .task small,.student-app .muted{font-size:15px}
+.student-app .card h2{font-size:21px}
+.student-app .card h3{font-size:18px}
+.student-app .btn{min-height:44px;padding:9px 16px;font-size:17px}
+.student-app .btn.sm{min-height:44px;padding:8px 12px;font-size:15px}
+.student-app .field>label{font-size:15px}
+.student-app .field input:not([type="file"]):not([type="checkbox"]),.student-app .field textarea,.student-app .field select{min-height:44px;padding:9px 11px;font-size:17px}
+.student-app .nav a,.student-app .nav-stage-locked{min-height:44px;font-size:16px}
+.nav-more{margin-top:8px;border-top:1px solid var(--line);padding-top:8px}
+.nav-more summary{display:flex;align-items:center;min-height:44px;padding:9px 12px;border-radius:6px;color:#40546b;font-size:16px;font-weight:700;cursor:pointer;list-style:none}
+.nav-more summary::-webkit-details-marker{display:none}
+.nav-more summary::before{content:'▸';margin-right:9px;transition:transform .15s}
+.nav-more[open] summary::before{transform:rotate(90deg)}
+.nav-more-links{display:block}
+.operator-picker{display:flex;align-items:center;gap:7px;padding:4px 7px 4px 11px;border:1px solid var(--line);border-radius:999px;color:var(--muted);font-size:13px;background:#fff}
+.operator-picker select{max-width:140px;min-height:32px;border:0;background:transparent;color:var(--ink);font-weight:700;outline:none}
+.mobile-operator{display:none}
+input[readonly],textarea[readonly]{background:#f6f8fb!important;color:#475467}
+.teacher-feedback{border-color:#a7d7c8;background:#f0fdf8}
+@media(max-width:800px){
+ .student-app .main{font-size:17px}
+ .student-app .page-head h1{font-size:26px}
+ .student-app .top-actions .operator-picker{display:none}
+ .mobile-operator{display:flex;align-items:center;justify-content:space-between;gap:8px;margin:0 4px 8px;padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:#fff;color:var(--muted);font-size:14px}
+ .mobile-operator select{min-width:0;min-height:36px;border:0;background:transparent;color:var(--ink);font-weight:700}
+ .student-app .sidebar{overflow:visible}
+ .student-app .nav{display:grid;width:auto;grid-template-columns:repeat(2,minmax(0,1fr))}
+ .student-app .nav>a,.student-app .nav>.nav-stage-locked{white-space:normal}
+ .student-app .nav-more{grid-column:1/-1}
+ .student-app .nav-more-links{display:grid;grid-template-columns:repeat(2,minmax(0,1fr))}
+ .student-app .nav-more-links .sep{grid-column:1/-1}
+}
+@media(max-width:520px){.student-app .nav,.student-app .nav-more-links{grid-template-columns:1fr}.student-app .page-head h1{font-size:25px}}

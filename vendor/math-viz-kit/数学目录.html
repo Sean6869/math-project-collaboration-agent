@@ -41,6 +41,8 @@
     .sort-btn{padding:4px 10px;border:2px solid var(--border);border-radius:20px;font-size:11px;font-family:inherit;cursor:pointer;background:var(--surface);color:var(--ink2);transition:all .2s;}
     .sort-btn.active{background:var(--ink);color:#fff;border-color:var(--ink);}
     .results-info{font-size:11px;color:var(--ink3);margin-left:auto;}
+    .more-tools{min-height:36px;padding:6px 12px;border:1px solid var(--blue);border-radius:8px;background:var(--surface);color:var(--blue);font:600 12px inherit;cursor:pointer;}
+    .more-tools[hidden]{display:none;}
     .grid{padding:10px 12px;display:grid;grid-template-columns:1fr;gap:10px;flex:1;}
     .card{background:var(--surface);border:2px solid var(--border);border-radius:var(--radius-sm);display:flex;flex-direction:column;cursor:pointer;transition:border-color .15s,box-shadow .15s;position:relative;overflow:hidden;}
     .card:hover{border-color:#b8cfe8;box-shadow:0 2px 10px rgba(42,92,143,.1);}
@@ -164,6 +166,7 @@
       <button class="sort-btn" data-sort="cogn">认知</button>
       <button class="sort-btn" data-sort="name">名称</button>
       <span class="results-info" id="resultsInfo"></span>
+      <button class="more-tools" id="moreTools" type="button">更多工具</button>
       <div class="view-toggle">
         <button class="view-btn active" data-view="grid" onclick="setView('grid')" title="网格视图">⊞ 网格</button>
         <button class="view-btn" data-view="sidebar" onclick="setView('sidebar')" title="侧栏视图">▤ 侧栏</button>
@@ -341,6 +344,10 @@ const GRADE_ORDER = {'小学':0,'初中':1,'高中':2,'大学':3};
 const COGN_ORDER = {'变换':0,'比较':1,'分解':2,'逼近':3,'累积':4,'缩放':5,'投影':6,'模拟':7};
 const DIFF_ORDER = {'低':0,'中':1,'高':2};
 
+const query = new URLSearchParams(location.search);
+const focusTerms = (query.get('focus')||'').split(/[、，,\s]+/).map(x=>x.trim()).filter(Boolean);
+const focusMode = query.get('embedded') === '1';
+let showAll = !focusMode;
 let filters = {grade:'', diff:'', cogn:''};
 let sortBy = 'grade';
 let searchQuery = '';
@@ -404,6 +411,13 @@ function render(){
     return true;
   });
 
+  // 课堂内嵌时先给出少量与当前项目最接近的初中工具，完整目录按需展开。
+  if(focusMode && !showAll && !searchQuery && !filters.grade && !filters.diff && !filters.cogn){
+    const score=t=>(t.grade==='初中'?20:0)+(t.prio==='A'?4:t.prio==='B'?2:0)+focusTerms.reduce((sum,term)=>sum+(`${t.title}${t.topic}${t.desc}`.includes(term)?10:0),0);
+    items.sort((a,b)=>score(b)-score(a)||a.title.localeCompare(b.title,'zh'));
+    items=items.slice(0,5);
+  }
+
   // Sort
   if(sortBy === 'grade'){
     items.sort((a,b)=>(GRADE_ORDER[a.grade]||0)-(GRADE_ORDER[b.grade]||0) || a.title.localeCompare(b.title,'zh'));
@@ -418,8 +432,9 @@ function render(){
   const grid = document.getElementById('grid');
   const noRes = document.getElementById('noResults');
   const info = document.getElementById('resultsInfo');
-  info.textContent = `显示 ${items.length} / ${TOOLS.length} 个工具`;
-  document.getElementById('countBadge').textContent = TOOLS.length + '个工具';
+  info.textContent = focusMode&&!showAll?`当前项目推荐 ${items.length} 个`:`显示 ${items.length} / ${TOOLS.length} 个工具`;
+  document.getElementById('countBadge').textContent = focusMode&&!showAll?`推荐${items.length}个`:`${TOOLS.length}个工具`;
+  document.getElementById('moreTools').hidden = !focusMode || showAll;
 
   if(items.length === 0){
     grid.innerHTML = '';
@@ -505,6 +520,7 @@ window.addEventListener('resize', updateThumbScales);
 // Filter buttons
 document.querySelectorAll('.filter-btn').forEach(btn=>{
   btn.addEventListener('click',()=>{
+    showAll = true;
     const group = btn.dataset.group;
     const value = btn.dataset.value;
     document.querySelectorAll(`.filter-btn[data-group="${group}"]`).forEach(b=>b.classList.remove('active'));
@@ -526,9 +542,12 @@ document.querySelectorAll('.sort-btn').forEach(btn=>{
 
 // Search
 document.getElementById('searchInput').addEventListener('input',e=>{
+  showAll = true;
   searchQuery = e.target.value.trim();
   render();
 });
+
+document.getElementById('moreTools').addEventListener('click',()=>{showAll=true;render();});
 
 render();
 requestAnimationFrame(()=>{ updateThumbScales(); initThumbObserver(); });

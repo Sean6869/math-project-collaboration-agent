@@ -917,43 +917,23 @@ def extract_document(name: str, raw: bytes) -> str:
 
 def static_hint(config: dict, level_no: int) -> str:
     defaults = [
-        "先标出题目中的已知量、未知量和限制条件，再指出当前缺少哪一个关系。",
-        "把卡点拆成一个可检验的子问题，并选择表格、图形或式子中的一种表示方式。",
-        "只完成下一步核验：代入一个边界值或反例，检查当前关系是否仍满足题目条件。",
+        "打开“阶段2—任务理解表”，补充“已知信息、未知信息、现实约束”，再点击“保存小组理解”。",
+        "打开“阶段3—数学方案构建”，先补充“变量”和“数量关系”，保存后再检查单位与范围。",
+        "打开“阶段3—模型表征与检验”，用一个边界值或反例检验当前关系，并在“检验说明”中记录结果。",
     ]
     hints = config.get("staticHints") if isinstance(config, dict) else None
     source = hints if isinstance(hints, list) and hints else defaults
     scaffold = str(source[min(level_no - 1, len(source) - 1)]).strip().rstrip("。.!！？；; ")[:180]
-    diagnosis = (
-        "你们已经愿意记录尝试并把卡点交给教师支架继续核对，这说明小组在依据过程调整思路，而不是直接等待结论。"
-        "当前需要补足的是对对象、条件和依据的对应检查，也便于后续复盘。"
-    )
-    guidance = (
-        f"教师预设支架是：{scaffold}。请先判断这条支架具体帮助你们检查哪个量、哪个关系或哪条证据，"
-        "再由一名组员向另一名组员追问：如果删去一项条件，当前判断还成立吗？请说出判断依据。"
-    )
-    if level_no <= 1:
-        next_action = (
-            "下一步请把题目中的一个目标量和至少两个相关条件写在同一处，并用自己的话说明它们为什么有关。"
-            "完成后由组员互相核对：是否漏掉了范围、单位或现实限制；暂时不要跳到后续计算。"
-        )
-    elif level_no == 2:
-        next_action = (
-            "下一步请把当前卡点拆成一个最小可检查的问题，分别写出它的已知、未知和需要连接的两个对象。"
-            "然后选择表格、草图或关系式中的一种表示，并由小组说明这一步如何支持下一步判断。"
-        )
-    else:
-        next_action = (
-            "下一步请由小组完成一次局部核验：选择一个边界值、单位检查或反例，记录输入、观察和依据。"
-            "先不要替教师补出最终结论，请你们说明核验结果支持了哪一处关系，以及还剩哪一步需要自己判断。"
-        )
-    return f"诊断：{diagnosis}\n支架：{guidance}\n下一步：{next_action}"
+    diagnosis = "已记录本组尝试；现在只补齐一个最关键的条件或核验步骤。"
+    return f"诊断：{diagnosis}\n怎么做：{scaffold}\n完成标志：页面保存成功，并能用一句话说明新增内容如何支持判断。"
 
 
 def validate_hint(text: str, level: str = "L1") -> str | None:
     clean = re.sub(r"\s+", " ", text or "").strip()
+    clean = re.sub(r"\bunknown\b", "‘未知信息’", clean, flags=re.IGNORECASE)
+    clean = re.sub(r"\bevidence\b", "‘证据与验证’", clean, flags=re.IGNORECASE)
     blocked = ("最终答案", "答案是", "完整证明", "完整模型", "故最大值为", "直接得到最优", "最终结论为")
-    limits = {"L1": 760, "L2": 900, "L3": 1100}
+    limits = {"L1": 360, "L2": 440, "L3": 520}
     if not clean or len(clean) > limits.get(level, 360) or any(item in clean for item in blocked):
         return None
     return clean
@@ -974,9 +954,9 @@ def parse_model_hint(text: str, level: str) -> str | None:
         return None
     # Keep the three-part contract meaningful even when the model returns
     # syntactically valid JSON with very short, generic content.
-    if any(len(part) < 80 for part in (diagnosis, guidance, next_action)):
+    if any(len(part) < 20 for part in (diagnosis, guidance, next_action)):
         return None
-    minimum = {"L1": 240, "L2": 240, "L3": 240}.get(level, 240)
+    minimum = {"L1": 80, "L2": 90, "L3": 100}.get(level, 80)
     combined = f"诊断：{diagnosis}\n支架：{guidance}\n下一步：{next_action}"
     clean = validate_hint(combined, level) if len(combined) >= minimum else None
     if not clean:
@@ -1018,8 +998,9 @@ def deepseek_hint(
         + MATH_FORMAT_RULE
         + f"当前严格执行{level}：{contracts[level]}"
         "不得重复历史提示；信息不足时先澄清，不得猜测。材料冲突、数学结论不可靠或需要教师判断时，在nextAction中写明请教师核验。"
-        "项目流程或协作类提问应直接回答项目是什么、当前做到哪一步、接下来做什么；数学类提问继续体现苏格拉底式引导：诊断开头先具体肯定学生已经完成的有效工作，再指出一个可改进点；支架至少提出一个能让学生自己判断的追问；下一步给出一个可在当前材料上执行的动作，并保留学生作出数学判断的责任。"
-        "diagnosis、guidance、nextAction三个字段都不少于80个中文字符，目标各100字左右，不能用空话凑字数。"
+        "项目流程或协作类提问应直接回答当前做到哪一步、接下来做什么。回答必须控制在2—4行，并写成‘打开哪个中文页面—填写哪个中文字段—点击哪个中文按钮’。"
+        "只能使用界面真实名称：阶段2任务理解表中的‘已知信息、未知信息、现实约束’，阶段3数学方案构建中的‘变量、数量关系、当前模型’，阶段4过程证据包中的‘证据内容’，阶段5成果整理中的‘证据与验证’。禁止输出unknown、evidence等代码字段名。"
+        "diagnosis、guidance、nextAction各20—60个中文字符，不能用空话凑字数。"
         "只输出一个JSON对象，不要Markdown和额外文字，格式为："
         '{"diagnosis":"针对本次尝试的简短诊断","guidance":"符合当前层级的支架","nextAction":"学生下一步可执行动作；L3必须明确留下由学生完成的剩余一步"}'
     )
@@ -1940,6 +1921,20 @@ class Handler(SimpleHTTPRequestHandler):
             if incoming_roles != current_roles or incoming_round != current_round:
                 self.json_response({"error": "角色由教师统一轮换，请刷新获取最新分工"}, HTTPStatus.CONFLICT)
                 return
+            saved_submissions = group_state.get("stageSubmitted", {}) if isinstance(group_state.get("stageSubmitted"), dict) else {}
+            if bool(saved_submissions.get("5", saved_submissions.get(5, False))):
+                saved_product = group_state.get("product", {}) if isinstance(group_state.get("product"), dict) else {}
+                incoming_product = incoming.get("product", saved_product)
+                saved_workspace = group_state.get("workspace", {}) if isinstance(group_state.get("workspace"), dict) else {}
+                incoming_workspace = incoming.get("workspace", saved_workspace)
+                product_changed = incoming_product != saved_product
+                outcome_changed = any(
+                    str(incoming_workspace.get(key, saved_workspace.get(key, ""))) != str(saved_workspace.get(key, ""))
+                    for key in ("problem", "model")
+                ) if isinstance(incoming_workspace, dict) else True
+                if product_changed or outcome_changed:
+                    self.json_response({"error": "阶段5已提交，成果内容已经锁定"}, HTTPStatus.CONFLICT)
+                    return
         candidate = dict(group_state)
         candidate.update({key: incoming[key] for key in GROUP_KEYS if key in incoming})
         # Version history is append-only and derived from the model actually saved.
@@ -2001,15 +1996,41 @@ class Handler(SimpleHTTPRequestHandler):
             incoming_queue = incoming.get("queue")
             if isinstance(incoming_queue, list):
                 existing = {str(item.get("id")): item for item in class_state.get("queue", []) if isinstance(item, dict)}
+                handled = []
                 for item in incoming_queue:
                     if not isinstance(item, dict):
                         continue
                     key = str(item.get("id"))
                     if key in existing:
+                        was_resolved = bool(existing[key].get("resolved"))
                         existing[key]["resolved"] = bool(item.get("resolved"))
+                        if existing[key]["resolved"]:
+                            existing[key]["feedback"] = str(item.get("feedback", "")).strip()[:800]
+                            existing[key]["resolvedAt"] = str(item.get("resolvedAt") or utc_now())
+                            existing[key]["resolvedBy"] = str(session.get("username", "教师"))[:80]
+                            if not was_resolved:
+                                handled.append(existing[key])
                     else:
                         existing[key] = item
                 class_state["queue"] = list(existing.values())[-100:]
+                for item in handled:
+                    item_group = int(item.get("group", 0) or 0)
+                    thread_id = str(item.get("threadId", ""))
+                    if not item_group or not thread_id:
+                        continue
+                    item_state = state_get(f"group:{item_group}")
+                    threads = item_state.get("helpThreads", []) if isinstance(item_state.get("helpThreads"), list) else []
+                    thread = next((row for row in threads if isinstance(row, dict) and str(row.get("id")) == thread_id), None)
+                    if thread:
+                        thread["status"] = "resolved"
+                        thread["resolvedAt"] = item["resolvedAt"]
+                        thread["teacherFeedback"] = item["feedback"] or "教师已处理，请根据课堂中的反馈继续完成。"
+                        thread["resolvedBy"] = item["resolvedBy"]
+                        if item_state.get("activeHelpThreadId") == thread_id:
+                            item_state["activeHelpThreadId"] = ""
+                        item_state["helpThreads"] = threads
+                        state_put(f"group:{item_group}", item_state)
+                        self.sync_group_summary(item_group, item_state)
             state_put("class", class_state)
         self.sync_group_summary(group, group_state)
         record_event(session["role"], group, "state_save", incoming.get("currentStage"), "workspace")

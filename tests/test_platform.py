@@ -231,8 +231,8 @@ class PlatformTest(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(hint["source"], "teacher_fallback")
         self.assertTrue(hint["reply"].startswith("诊断："))
-        self.assertIn("支架：教师预设支架是：先画出已知关系。", hint["reply"])
-        self.assertIn("下一步：", hint["reply"])
+        self.assertIn("先画出已知关系", hint["reply"])
+        self.assertIn("完成标志：", hint["reply"])
 
         status, overview = self.json_request(teacher, "/api/state")
         self.assertEqual(status, 200)
