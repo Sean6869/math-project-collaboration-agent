@@ -1060,6 +1060,10 @@ def sync_ark_knowledge_files() -> None:
         ).fetchall()
     refresh_before = int(time.time()) + 24 * 60 * 60
     for row in rows:
+        # Large PDFs are consumed through chunks, never as whole-file inputs.
+        # Do not block their indexing behind redundant uploads of every textbook.
+        if pdf_page_count(row["stored_name"]) > 24:
+            continue
         try:
             provider_id = row["provider_file_id"]
             if provider_id and int(row["expires_at"] or 0) > refresh_before:
@@ -1108,11 +1112,22 @@ def sync_ark_knowledge_files() -> None:
                     )
 
 
+KNOWLEDGE_SYNC_RUNNING = threading.Event()
+
+
 def start_ark_knowledge_sync() -> None:
     if os.environ.get("ARK_API_KEY") and KNOWLEDGE_SOURCE_DIR.is_dir():
         def worker() -> None:
-            sync_ark_knowledge_files()
-            sync_ark_knowledge_chunks()
+            try:
+                # A previous process may have stopped mid-chunk. Those rows are
+                # not running jobs in this process and must be eligible again.
+                with database() as db:
+                    db.execute("UPDATE knowledge_chunks SET status='queued' WHERE status='processing'")
+                sync_ark_knowledge_files()
+                sync_ark_knowledge_chunks()
+            finally:
+                KNOWLEDGE_SYNC_RUNNING.clear()
+        KNOWLEDGE_SYNC_RUNNING.set()
         threading.Thread(target=worker, name="knowledge-file-sync", daemon=True).start()
 
 
@@ -1318,17 +1333,18 @@ def ark_knowledge_documents(state: dict, query: str, limit: int = 2) -> list[dic
             "SELECT f.original_name AS name,p.provider_file_id AS fileId,f.stored_name AS storedName,"
             "f.extracted_text AS searchable,0 AS isChunk "
             "FROM files f JOIN knowledge_provider_files p ON p.local_file_id=f.id "
-            "WHERE f.uploaded_by='builtin-knowledge' AND p.status='active' "
+            "WHERE f.uploaded_by='builtin-knowledge' AND p.status='active' AND p.provider_file_id<>'' AND p.expires_at>? "
             "AND NOT EXISTS (SELECT 1 FROM knowledge_chunks x WHERE x.local_file_id=f.id) "
             "UNION ALL SELECT f.original_name || '（第' || c.page_start || '-' || c.page_end || '页）' AS name,"
             "c.provider_file_id AS fileId,'' AS storedName,c.summary AS searchable,1 AS isChunk "
             "FROM knowledge_chunks c JOIN files f ON f.id=c.local_file_id "
-            "WHERE c.status='active' AND c.provider_file_id<>''"
+            "WHERE c.status='active' AND c.provider_file_id<>'' AND c.expires_at>?",
+            (int(time.time()), int(time.time())),
         ).fetchall()
     ranked = []
     for row in rows:
         name = row["name"]
-        if not row["isChunk"] and pdf_page_count(row["storedName"]) > 24:
+        if not row["isChunk"] and not 0 < pdf_page_count(row["storedName"]) <= 24:
             continue
         searchable = (name + "\n" + (row["searchable"] or "")).lower()
         score = sum((8 if term in name.lower() else 2) for term in terms if term in searchable)
@@ -1625,7 +1641,9 @@ def sync_ark_knowledge_chunks() -> None:
     from pypdf import PdfReader
     with database() as db:
         documents = db.execute(
-            "SELECT id,original_name,stored_name FROM files WHERE uploaded_by='builtin-knowledge' AND mime='application/pdf'"
+            "SELECT id,original_name,stored_name FROM files WHERE uploaded_by='builtin-knowledge' AND mime='application/pdf' "
+            "ORDER BY CASE WHEN original_name LIKE '%课程标准%' THEN 0 "
+            "WHEN original_name LIKE '%课程方案%' THEN 1 ELSE 2 END,original_name"
         ).fetchall()
     for document in documents:
         path = UPLOAD_DIR / document["stored_name"]
@@ -1688,8 +1706,7 @@ def sync_ark_knowledge_chunks() -> None:
                         (utc_now(), f"HTTP {exc.code}: {exc.reason}"[:500], chunk_id),
                     )
                 if exc.code == 429:
-                    time.sleep(20)
-                    break
+                    return
             except Exception as exc:
                 with database() as db:
                     db.execute("UPDATE knowledge_chunks SET status='failed',updated_at=?,error=? WHERE id=?", (utc_now(), str(exc)[:500], chunk_id))
@@ -1907,6 +1924,99 @@ def ark_generate_image(group: int, prompt: str) -> tuple[dict, int]:
     except (AttributeError, IndexError, KeyError, TypeError, ValueError) as exc:
         raise UpstreamServiceError(f"图片生成结果解析失败：{exc}", HTTPStatus.BAD_GATEWAY) from exc
     return metadata, round((time.perf_counter() - started) * 1000)
+
+
+def knowledge_snapshot() -> dict:
+    """Report stored evidence and actual retrieval eligibility without calling AI."""
+    now = int(time.time())
+    running = KNOWLEDGE_SYNC_RUNNING.is_set()
+    configured = bool(os.environ.get("ARK_API_KEY", "").strip())
+    with database() as db:
+        rows = db.execute(
+            "SELECT f.id,f.original_name AS name,f.stored_name,f.mime,f.size,"
+            "f.uploaded_at AS uploadedAt,f.uploaded_by AS uploadedBy,"
+            "length(trim(f.extracted_text)) AS indexedChars,"
+            "coalesce(p.status,'') AS providerStatus,coalesce(p.provider_file_id,'') AS providerId,"
+            "coalesce(p.expires_at,0) AS providerExpiresAt,coalesce(p.updated_at,'') AS providerUpdatedAt,"
+            "coalesce(p.error,'') AS providerError "
+            "FROM files f LEFT JOIN knowledge_provider_files p ON p.local_file_id=f.id "
+            "WHERE f.uploaded_by IN ('teacher','builtin-knowledge') "
+            "ORDER BY f.uploaded_by='builtin-knowledge' DESC,f.original_name"
+        ).fetchall()
+        chunks = db.execute("SELECT * FROM knowledge_chunks").fetchall()
+    by_file = {}
+    for chunk in chunks:
+        by_file.setdefault(chunk["local_file_id"], []).append(chunk)
+    files = []
+    for row in rows:
+        item = dict(row)
+        stored = item.pop("stored_name")
+        provider_id = item.pop("providerId")
+        records = by_file.get(item["id"], [])
+        ready = [c for c in records if c["status"] == "active" and c["summary"].strip()]
+        cloud_chunks = [c for c in records if c["status"] == "active" and c["provider_file_id"] and c["expires_at"] > now]
+        present = (UPLOAD_DIR / stored).is_file()
+        pages = pdf_page_count(stored) if present and item["mime"] == "application/pdf" else 0
+        expected = math.ceil(pages / 20) if pages > 24 else 0
+        direct = bool(present and configured and item["uploadedBy"] == "builtin-knowledge"
+                      and item["providerStatus"] == "active" and provider_id
+                      and item["providerExpiresAt"] > now and 0 < pages <= 24 and not records)
+        # Local excerpts/summaries remain usable even if the cloud file expires.
+        local = bool(item["indexedChars"] or ready)
+        item.update({
+            "filePresent": present, "pageCount": pages, "chunkCount": len(ready),
+            "chunkTotal": expected, "chunkFailed": sum(c["status"] == "failed" for c in records),
+            "chunkProcessing": sum(c["status"] == "processing" for c in records),
+            "cloudChunkCount": len(cloud_chunks) if configured else 0,
+            "localSearchable": local, "cloudReadable": direct or bool(configured and cloud_chunks),
+            "searchable": local or direct or bool(configured and cloud_chunks),
+            "statusUpdatedAt": max([item["providerUpdatedAt"]] + [c["updated_at"] for c in records]),
+        })
+        if item["indexedChars"]:
+            label = "文字很少，部分可检索" if item["mime"] == "application/pdf" and item["indexedChars"] < 1000 else "有文字可检索"
+        elif ready:
+            label = "分块摘要可检索" if len(ready) >= expected > 0 else "部分摘要可检索"
+        elif item["cloudReadable"]:
+            label = "云端文档可调用"
+        else:
+            label = "尚无可检索内容"
+        details = [f"本地文字 {item['indexedChars']} 字符"]
+        if expected:
+            details.append(f"摘要分块 {len(ready)}/{expected}；云端有效分块 {item['cloudChunkCount']}")
+        if not present:
+            task = "原文件缺失"
+        elif not configured:
+            task = "未配置云端识别"
+        elif item["uploadedBy"] != "builtin-knowledge":
+            task = "补充材料仅使用本地文字"
+        elif item["chunkFailed"] or (item["providerStatus"] == "failed" and not expected):
+            task = "部分识别失败" if local else "识别失败"
+        elif expected and len(ready) < expected:
+            task = "正在处理" if running else "识别未完成，后台任务已停止"
+        elif not expected and not direct:
+            task = "正在处理" if running else "云端未就绪，后台任务已停止"
+        else:
+            task = "本轮处理完成"
+        details.append(task)
+        if item["providerStatus"] == "active" and item["providerExpiresAt"] <= now:
+            details.append("云端整文件已过期")
+        if expected and not item["cloudChunkCount"] and ready:
+            details.append("云端分块不可调用，仍可检索本地摘要")
+        errors = [c["error"] for c in records if c["error"]] + [item.pop("providerError")]
+        errors = [error for error in errors if error]
+        # Provider exception strings can contain signed URLs; expose a safe diagnosis only.
+        if errors:
+            error_text = " ".join(errors).lower()
+            reason = ("服务限流或额度不足" if "429" in error_text else
+                      "云端认证或权限失败" if any(code in error_text for code in ("401", "403")) else
+                      "云端请求超时" if "timed out" in error_text or "timeout" in error_text else
+                      "文档处理失败，请查看部署日志")
+            details.append(reason)
+        item.update({"statusLabel": label, "taskStatus": task, "statusDetail": "；".join(details)})
+        files.append(item)
+    return {"files": files, "checkedAt": utc_now(), "syncRunning": running,
+            "summary": {"total": len(files), "indexed": sum(f["searchable"] for f in files),
+                        "bytes": sum(int(f["size"]) for f in files)}}
 
 
 class Handler(SimpleHTTPRequestHandler):
@@ -2167,28 +2277,7 @@ class Handler(SimpleHTTPRequestHandler):
             session = self.require_teacher()
             if not session:
                 return
-            with database() as db:
-                rows = db.execute(
-                    "SELECT f.id,f.original_name AS name,f.mime,f.size,f.uploaded_at AS uploadedAt,"
-                    "f.uploaded_by AS uploadedBy,length(f.extracted_text) AS indexedChars,"
-                    "coalesce(p.status,'') AS providerStatus,coalesce(p.error,'') AS providerError,"
-                    "(SELECT count(*) FROM knowledge_chunks c WHERE c.local_file_id=f.id AND c.status='active') AS chunkCount "
-                    "FROM files f LEFT JOIN knowledge_provider_files p ON p.local_file_id=f.id "
-                    "WHERE f.uploaded_by IN ('teacher','builtin-knowledge') "
-                    "ORDER BY uploaded_by='builtin-knowledge' DESC, original_name"
-                ).fetchall()
-            files = [dict(row) for row in rows]
-            self.json_response({
-                "files": files,
-                "summary": {
-                    "total": len(files),
-                    "indexed": sum(
-                        bool(item["indexedChars"]) or item["providerStatus"] == "active" or item["chunkCount"] > 0
-                        for item in files
-                    ),
-                    "bytes": sum(int(item["size"]) for item in files),
-                },
-            })
+            self.json_response(knowledge_snapshot())
             return
         if route.path == "/api/files":
             session = self.require_session()
