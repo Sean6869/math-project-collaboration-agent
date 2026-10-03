@@ -2046,6 +2046,10 @@ class Handler(SimpleHTTPRequestHandler):
             return None
         return session
 
+    def require_teacher(self) -> dict | None:
+        """Require an authenticated teacher for teacher-only endpoints."""
+        return self.require_session("teacher")
+
     def check_origin(self) -> bool:
         origin = self.headers.get("Origin")
         host = self.headers.get("Host", "")
