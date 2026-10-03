@@ -163,6 +163,42 @@ class PlatformTest(unittest.TestCase):
         with client.open(request, timeout=8) as response:
             return response.status, json.loads(response.read())
 
+    def test_knowledge_listing_requires_teacher_and_returns_index_status(self):
+        with self.assertRaises(urllib.error.HTTPError) as denied:
+            self.json_request(self.client(), "/api/knowledge")
+        self.assertEqual(denied.exception.code, 401)
+
+        student = self.client()
+        self.json_request(student, "/api/login", "POST", {
+            "role": "student", "classCode": "CLASS2026", "groupId": 1, "groupCode": "TEAM01",
+        })
+        with self.assertRaises(urllib.error.HTTPError) as denied:
+            self.json_request(student, "/api/knowledge")
+        self.assertEqual(denied.exception.code, 403)
+
+        teacher = self.client()
+        self.json_request(teacher, "/api/login", "POST", {
+            "role": "teacher", "username": "test_teacher", "password": "StrongTeacher#2026",
+        })
+        with app.database() as db:
+            db.execute(
+                "INSERT INTO files(id,original_name,stored_name,mime,size,extracted_text,uploaded_at,uploaded_by,group_no) "
+                "VALUES(?,?,?,?,?,?,?,?,NULL)",
+                ("kb-regression", "reference.pdf", "kb-regression.pdf", "application/pdf", 10,
+                 "indexed reference", app.utc_now(), "builtin-knowledge"),
+            )
+        try:
+            status, listing = self.json_request(teacher, "/api/knowledge")
+            self.assertEqual(status, 200)
+            reference = next(item for item in listing["files"] if item["id"] == "kb-regression")
+            self.assertEqual(reference["name"], "reference.pdf")
+            self.assertGreater(reference["indexedChars"], 0)
+            self.assertEqual(reference["chunkCount"], 0)
+            self.assertGreaterEqual(listing["summary"]["indexed"], 1)
+        finally:
+            with app.database() as db:
+                db.execute("DELETE FROM files WHERE id=?", ("kb-regression",))
+
     def test_desmos_pages_allow_required_official_assets(self):
         for path in ("/student/math-tools.html", "/student/stage3-graph.html"):
             with self.client().open(self.base + path, timeout=8) as response:
