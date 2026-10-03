@@ -840,8 +840,13 @@ def merged_state(group_no: int, monitoring: bool = True) -> dict:
     value["hintUsed"] = sum(value["hintUsage"].values())
     value["hintQuota"] = sum(value["hintPolicy"].values())
     value["maxHintLevel"] = 3
-    value["activeHelpThread"] = active_help_thread(group_state)
-    value["helpThreads"] = group_state.get("helpThreads", []) if isinstance(group_state.get("helpThreads", []), list) else []
+    raw_active_thread = active_help_thread(group_state)
+    visible_stage = class_current_stage({"currentStage": value.get("currentStage", 1)})
+    value["helpHistory"] = visible_help_entries(group_state.get("helpHistory"), visible_stage)
+    value["helpThreads"] = visible_help_threads(group_state.get("helpThreads"), visible_stage)
+    value["activeHelpThread"] = next(
+        (item for item in value["helpThreads"] if item.get("id") == raw_active_thread.get("id")), None,
+    ) if isinstance(raw_active_thread, dict) else None
     value["freeAi"] = free_ai_state(group_state)
     # Student pages only need the persisted summaries. Recomputing every group
     # on each poll multiplied one small request into up to 20 state reads.
@@ -915,15 +920,84 @@ def extract_document(name: str, raw: bytes) -> str:
     return ""
 
 
-def static_hint(config: dict, level_no: int) -> str:
-    defaults = [
+STAGE_HINT_ROUTES = {
+    1: [
+        "打开“阶段1—项目材料与课堂规则”，核对项目目标和成果对象，再点击“保存确认”。",
+        "打开“阶段1—成员与角色确认”，填写本组成员与角色，再点击“保存成员与角色”。",
+        "回到“阶段1—项目材料与课堂规则”，逐项检查目标、材料和课堂规则是否都已确认。",
+    ],
+    2: [
         "打开“阶段2—任务理解表”，补充“已知信息、未知信息、现实约束”，再点击“保存小组理解”。",
-        "打开“阶段3—数学方案构建”，先补充“变量”和“数量关系”，保存后再检查单位与范围。",
-        "打开“阶段3—模型表征与检验”，用一个边界值或反例检验当前关系，并在“检验说明”中记录结果。",
-    ]
+        "打开“阶段2—问题树”，写出核心问题和两个子问题，再点击“保存问题树”。",
+        "回到“阶段2—任务理解表”，检查项目问题、已知信息和现实约束是否互相对应。",
+    ],
+    3: [
+        "打开“阶段3—数学方案构建”，补充“变量”和“数量关系”，再点击“保存方案”。",
+        "打开“阶段3—模型表征与检验”，选择合适工具表示当前模型，并填写“检验说明”。",
+        "打开“阶段3—数学核验清单”，检查单位、范围和边界情况，再点击“保存检查结果”。",
+    ],
+    4: [
+        "打开“阶段4—过程证据包”，填写“证据内容”或上传附件，再点击“加入证据包”。",
+        "打开“阶段4—观点协商”，选择协商者并填写协商观点，再点击“加入讨论记录”。",
+        "回到“阶段4—过程证据包”，选择一条证据完成核验，并说明它支持哪一处模型关系。",
+    ],
+    5: [
+        "打开“阶段5—成果整理”，补充“证据与验证”和“核心结论”，再点击“保存成果草稿”。",
+        "打开“阶段5—展示预演”，填写成员展示分工和发现的问题，再点击“保存预演与检查”。",
+        "打开“阶段5—反思评价”，完成三项小组反思，再点击“保存反思”。",
+    ],
+}
+
+HINT_PAGE_STAGES = {
+    "项目材料与课堂规则": 1, "成员与角色确认": 1,
+    "任务理解表": 2, "问题树": 2,
+    "数学方案构建": 3, "模型表征与检验": 3, "数学核验清单": 3,
+    "过程证据包": 4, "观点协商": 4,
+    "成果整理": 5, "展示预演": 5, "反思评价": 5,
+}
+
+
+def hint_within_open_stage(text: str, current_stage: int) -> bool:
+    """Reject navigation advice that points students beyond the teacher-opened stage."""
+    stage = max(1, min(5, int(current_stage or 1)))
+    if any(int(number) > stage for number in re.findall(r"阶段\s*([1-5])", str(text or ""))):
+        return False
+    return not any(required > stage and label in str(text or "") for label, required in HINT_PAGE_STAGES.items())
+
+
+def visible_help_entries(entries: object, current_stage: int) -> list[dict]:
+    result = []
+    for item in entries if isinstance(entries, list) else []:
+        if not isinstance(item, dict):
+            continue
+        visible = dict(item)
+        if visible.get("reply") and not hint_within_open_stage(str(visible["reply"]), current_stage):
+            visible["reply"] = "这条历史提示指向尚未开放的阶段，现已停用。请点击“新对话”，系统会按当前阶段重新提示。"
+            visible["source"] = "stage_guard"
+        result.append(visible)
+    return result
+
+
+def visible_help_threads(threads: object, current_stage: int) -> list[dict]:
+    result = []
+    for item in threads if isinstance(threads, list) else []:
+        if not isinstance(item, dict):
+            continue
+        visible = dict(item)
+        visible["messages"] = visible_help_entries(item.get("messages"), current_stage)
+        result.append(visible)
+    return result
+
+
+def static_hint(state: dict, level_no: int) -> str:
+    stage = class_current_stage({"currentStage": state.get("currentStage", 1)})
+    defaults = STAGE_HINT_ROUTES[stage]
+    config = state.get("teacherConfig", {}) if isinstance(state.get("teacherConfig"), dict) else {}
     hints = config.get("staticHints") if isinstance(config, dict) else None
     source = hints if isinstance(hints, list) and hints else defaults
     scaffold = str(source[min(level_no - 1, len(source) - 1)]).strip().rstrip("。.!！？；; ")[:180]
+    if not scaffold or not hint_within_open_stage(scaffold, stage):
+        scaffold = defaults[min(level_no - 1, len(defaults) - 1)].rstrip("。")
     diagnosis = "已记录本组尝试；现在只补齐一个最关键的条件或核验步骤。"
     return f"诊断：{diagnosis}\n怎么做：{scaffold}\n完成标志：页面保存成功，并能用一句话说明新增内容如何支持判断。"
 
@@ -992,20 +1066,24 @@ def deepseek_hint(
         "L2": "结构支架：把卡点拆成2—3个子问题，建议变量、图表或数量关系的组织方式和处理顺序；下一步只让学生做第一个整理动作。不得完成全部建模或推导。",
         "L3": "局部示范：只给一个类比小例子或一步局部推导，说明核验方法；必须明确写‘请你完成/由学生完成’的剩余一步。不得要求学生最后化简、求最大值、完成全部推导，不得给最终模型、证明、最优值或成品答案。",
     }
+    current_stage = class_current_stage({"currentStage": state.get("currentStage", 1)})
+    current_routes = "；".join(STAGE_HINT_ROUTES[current_stage])
+    stage_boundary = f"阶段{current_stage + 1}及之后" if current_stage < 5 else "当前阶段之后"
     system = (
         "你是服务于中国初中数学项目式学习小组的教学支架。必须依据学生当前尝试和历史提示生成有推进作用、但保留学生思考责任的反馈。"
         + student_math_scope(state)
         + MATH_FORMAT_RULE
         + f"当前严格执行{level}：{contracts[level]}"
         "不得重复历史提示；信息不足时先澄清，不得猜测。材料冲突、数学结论不可靠或需要教师判断时，在nextAction中写明请教师核验。"
-        "项目流程或协作类提问应直接回答当前做到哪一步、接下来做什么。回答必须控制在2—4行，并写成‘打开哪个中文页面—填写哪个中文字段—点击哪个中文按钮’。"
-        "只能使用界面真实名称：阶段2任务理解表中的‘已知信息、未知信息、现实约束’，阶段3数学方案构建中的‘变量、数量关系、当前模型’，阶段4过程证据包中的‘证据内容’，阶段5成果整理中的‘证据与验证’。禁止输出unknown、evidence等代码字段名。"
+        f"教师当前只开放到阶段{current_stage}，严禁建议学生进入{stage_boundary}的页面，也不得使用尚未开放页面的名称。"
+        f"当前阶段可执行路径为：{current_routes}。项目流程或协作类提问必须从这些路径中选择一个，回答控制在2—4行，并写成‘打开哪个中文页面—填写哪个中文字段—点击哪个中文按钮’。"
+        "禁止输出unknown、evidence等代码字段名。"
         "diagnosis、guidance、nextAction各20—60个中文字符，不能用空话凑字数。"
         "只输出一个JSON对象，不要Markdown和额外文字，格式为："
         '{"diagnosis":"针对本次尝试的简短诊断","guidance":"符合当前层级的支架","nextAction":"学生下一步可执行动作；L3必须明确留下由学生完成的剩余一步"}'
     )
     recent = []
-    for item in (history or [])[-6:]:
+    for item in visible_help_entries(history, current_stage)[-6:]:
         if isinstance(item, dict):
             recent.append({
                 "层级": item.get("level", ""), "学生提问": item.get("question", item.get("prompt", "")),
@@ -1037,7 +1115,10 @@ def deepseek_hint(
         with urllib.request.urlopen(request, timeout=20) as response:
             body = json.loads(response.read())
         latency = round((time.perf_counter() - started) * 1000)
-        return parse_model_hint(body["choices"][0]["message"]["content"], level), latency, "ok"
+        parsed = parse_model_hint(body["choices"][0]["message"]["content"], level)
+        if parsed and not hint_within_open_stage(parsed, current_stage):
+            return None, latency, "future_stage"
+        return parsed, latency, "ok"
     except urllib.error.HTTPError as exc:
         latency = round((time.perf_counter() - started) * 1000)
         try:
@@ -1122,12 +1203,16 @@ def free_ai_context(state: dict, group: int) -> str:
 
 
 def ark_free_messages(state: dict, group: int, prompt: str, history: list[dict]) -> list[dict]:
+    current_stage = class_current_stage({"currentStage": state.get("currentStage", 1)})
+    stage_boundary = f"阶段{current_stage + 1}及之后" if current_stage < 5 else "当前阶段之后"
     system = (
         "你是‘迈谱 Maple’学生小组自由工作区的初中数学助手。"
         + student_math_scope(state)
         + "你的任务是帮助学生减少机械性整理，把更多时间留给小组协作和高阶思考。"
         "你可以回答项目是什么、接下来做什么，解释概念、检查思路和书写数学表达，但不要替学生完成未经讨论的整个项目，"
         "不要伪造数据；缺少信息时明确列出需要补充的内容。"
+        f"教师当前只开放到阶段{current_stage}。若学生询问平台操作，只能引用当前阶段路径：{'；'.join(STAGE_HINT_ROUTES[current_stage])}。"
+        f"不得建议进入{stage_boundary}的页面，也不得使用尚未开放页面的名称。"
         + MATH_FORMAT_RULE
         + "回答使用清晰的Markdown。"
         f"当前项目上下文：{free_ai_context(state, group)}"
@@ -2712,7 +2797,7 @@ class Handler(SimpleHTTPRequestHandler):
             )
             result = "returned" if reply else "fallback"
             if not reply:
-                reply = static_hint(state.get("teacherConfig", {}), next_level_no)
+                reply = static_hint(state, next_level_no)
             entry = {
                 "time": datetime.now().strftime("%H:%M"), "ts": utc_now(), "threadId": thread["id"],
                 "level": next_level, "type": issue_type,
@@ -2821,7 +2906,7 @@ class Handler(SimpleHTTPRequestHandler):
             bool(body.get("checkedWork")),
         )
         if not reply:
-            reply = static_hint(state.get("teacherConfig", {}), level_no)
+            reply = static_hint(state, level_no)
             result = "fallback" if status != "ok" else "rejected"
         else:
             result = "returned"

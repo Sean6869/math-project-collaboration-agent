@@ -417,6 +417,38 @@ class PlatformTest(unittest.TestCase):
         self.assertTrue(app.is_math_question("比较两件装备的价格和性价比"))
         self.assertTrue(app.is_math_question("为什么？", [{"content": "先解一元一次方程"}]))
 
+        stage_one = {"currentStage": 1, "teacherConfig": {"staticHints": ["打开任务理解表填写已知信息"]}}
+        fallback = app.static_hint(stage_one, 1)
+        self.assertIn("阶段1", fallback)
+        self.assertNotIn("阶段2", fallback)
+        self.assertFalse(app.hint_within_open_stage("打开阶段2任务理解表继续填写", 1))
+        guarded = app.visible_help_entries([{"reply": "打开任务理解表填写已知信息", "source": "deepseek"}], 1)
+        self.assertIn("尚未开放", guarded[0]["reply"])
+        self.assertEqual(guarded[0]["source"], "stage_guard")
+
+        model_reply = json.dumps({
+            "diagnosis": "你们已经记录了当前尝试，但还需要先核对教师当前开放的课堂阶段和页面。",
+            "guidance": "请打开阶段2任务理解表，填写已知信息、未知信息和现实约束，再保存小组理解。",
+            "nextAction": "完成后检查三个字段是否对应项目问题，并用一句话说明它们之间的关系。",
+        }, ensure_ascii=False).encode()
+
+        class FakeResponse:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_):
+                return False
+
+            def read(self):
+                return json.dumps({"choices": [{"message": {"content": model_reply.decode()}}]}).encode()
+
+        with mock.patch.dict(os.environ, {"DEEPSEEK_API_KEY": "test-key"}), mock.patch.object(
+            app.urllib.request, "urlopen", return_value=FakeResponse(),
+        ):
+            reply, _, status = app.deepseek_hint(stage_one, "L1", "已查看项目材料", "任务理解", "下一步做什么")
+        self.assertIsNone(reply)
+        self.assertEqual(status, "future_stage")
+
     def test_login_portal_uses_one_selected_role_and_form_submit(self):
         script = (ROOT / "assets" / "app.js").read_text(encoding="utf-8")
         styles = (ROOT / "assets" / "styles.css").read_text(encoding="utf-8")
