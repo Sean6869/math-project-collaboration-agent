@@ -63,7 +63,7 @@ class KnowledgeStatusTest(unittest.TestCase):
         self.assertFalse(item["searchable"])
         self.chunk()
         item = app.knowledge_snapshot()["files"][0]
-        self.assertEqual(item["statusLabel"], "部分摘要可检索")
+        self.assertEqual(item["statusLabel"], "部分内容可供参考")
         self.assertEqual(item["chunkCount"], 1)
         self.assertIn("reference concept", app.knowledge_context({}, "reference")[0])
         self.assertEqual(app.ark_knowledge_documents({}, "scan")[0]["fileId"], "provider-chunk")
@@ -72,7 +72,7 @@ class KnowledgeStatusTest(unittest.TestCase):
                        ("failed", "scan", "", 21, 40, "failed", "", 0, app.utc_now(), "HTTP 429"))
         item = app.knowledge_snapshot()["files"][0]
         self.assertTrue(item["searchable"])
-        self.assertIn("服务限流或额度不足", item["statusDetail"])
+        self.assertIn("识别服务繁忙或额度不足", item["statusDetail"])
         self.assertEqual(item["taskStatus"], "部分识别失败")
 
     @mock.patch.object(app, "pdf_page_count", return_value=10)

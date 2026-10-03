@@ -23,16 +23,16 @@ const root=path.resolve(__dirname,'..');
    if(url.pathname==='/api/knowledge'){
     calls++;
     if(fail){await route.fulfill({status:503,contentType:'application/json',body:JSON.stringify({error:'test unavailable'})});return}
-    body={checkedAt:new Date().toISOString(),syncRunning:!ready,summary:{total:1,indexed:ready?1:0,bytes:12},files:[{id:'fixture',name:'扫描教材.pdf',size:12,mime:'application/pdf',uploadedBy:'builtin-knowledge',searchable:ready,statusLabel:ready?'部分摘要可检索':'尚无可检索内容',statusDetail:ready?'本地文字 0 字符；摘要分块 1/5；部分识别失败':'本地文字 0 字符；摘要分块 0/5；正在处理'}]};
-    body.files.push({...body.files[0],id:'short',name:'短文件.pdf',statusLabel:'尚无可检索内容',statusDetail:'排队等待识别'});
+    body={checkedAt:new Date().toISOString(),syncRunning:!ready,summary:{total:1,indexed:ready?1:0,bytes:12},files:[{id:'fixture',name:'扫描教材.pdf',size:12,mime:'application/pdf',uploadedBy:'builtin-knowledge',searchable:ready,statusLabel:ready?'部分内容可供参考':'暂未识别出可用内容',statusDetail:ready?'已完成 1/5 部分；部分识别失败':'已完成 0/5 部分；排队等待识别'}]};
+    body.files.push({...body.files[0],id:'short',name:'短文件.pdf',statusLabel:'暂未识别出可用内容',statusDetail:'排队等待识别'});
    }
    await route.fulfill({status:200,contentType:'application/json',body:JSON.stringify(body)});
   });
   await page.goto(`http://127.0.0.1:${server.address().port}/teacher/knowledge.html`);
-  await page.getByText('尚无可检索内容',{exact:true}).first().waitFor();
+  await page.getByText('暂未识别出可用内容',{exact:true}).first().waitFor();
   await page.locator('#knowledgeFile').evaluate(node=>node.dataset.retained='yes');
   ready=true;
-  await page.getByText('部分摘要可检索',{exact:true}).waitFor({timeout:20000});
+  await page.getByText('部分内容可供参考',{exact:true}).waitFor({timeout:20000});
   assert(calls>=2);
   assert.equal(await page.locator('#knowledgeFile').getAttribute('data-retained'),'yes');
   assert.equal(await page.getByRole('link',{name:'预览',exact:true}).first().getAttribute('href'),'/api/files/fixture');
@@ -44,7 +44,7 @@ const root=path.resolve(__dirname,'..');
   }
   fail=true;
   await page.getByText(/状态刷新失败，下面为上次结果/).waitFor({timeout:30000});
-  assert(await page.getByText('部分摘要可检索',{exact:true}).isVisible());
+  assert(await page.getByText('部分内容可供参考',{exact:true}).isVisible());
   assert.deepEqual(errors,[]);
   console.log('PASS: live refresh, failure notice, retained upload input, links, mobile/tablet layout');
  }finally{if(browser)await browser.close();server.close()}

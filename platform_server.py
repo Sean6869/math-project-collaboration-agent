@@ -2009,16 +2009,16 @@ def knowledge_snapshot() -> dict:
             "actionElapsedSeconds": max(0, now - int(action["startedEpoch"])) if action else 0,
         })
         if item["indexedChars"]:
-            label = "文字很少，部分可检索" if item["mime"] == "application/pdf" and item["indexedChars"] < 1000 else "有文字可检索"
+            label = "仅少量文字可供参考" if item["mime"] == "application/pdf" and item["indexedChars"] < 1000 else "已提取文字可供参考"
         elif ready:
-            label = "分块摘要可检索" if len(ready) >= expected > 0 else "部分摘要可检索"
+            label = "内容摘要可供参考" if len(ready) >= expected > 0 else "部分内容可供参考"
         elif item["cloudReadable"]:
-            label = "云端文档可调用"
+            label = "可供AI读取"
         else:
-            label = "尚无可检索内容"
-        details = [f"本地文字 {item['indexedChars']} 字符"]
+            label = "暂未识别出可用内容"
+        details = [f"已提取 {item['indexedChars']} 字"] if item["indexedChars"] else []
         if expected:
-            details.append(f"摘要分块 {len(ready)}/{expected}；云端有效分块 {item['cloudChunkCount']}")
+            details.append(f"已完成 {len(ready)}/{expected} 部分")
         if not present:
             task = "原文件缺失"
         elif not configured:
@@ -2035,25 +2035,42 @@ def knowledge_snapshot() -> dict:
             task = ("等待云端解析结果" if item["providerStatus"] == "processing" else "排队等待识别") if running else "云端未就绪，后台任务已停止"
         else:
             task = "本轮处理完成"
-        details.append(task)
+        # Keep diagnostic fields for maintenance; show teachers plain descriptions.
+        teacher_task = {
+            "原文件缺失": "找不到原文件，请联系管理员",
+            "未配置云端识别": "识别服务尚未开通，请联系管理员",
+            "补充材料仅使用本地文字": "AI可参考已提取的文字，图片内容尚未识别",
+            "查询云端文件状态": "正在检查资料是否可以读取",
+            "正在上传文档": "正在发送资料以便识别",
+            "查询云端解析结果": "正在检查资料识别进度",
+            "正在本地切分PDF": "正在按页整理资料",
+            "正在上传分块": "正在发送这些页面以便识别",
+            "等待云端解析分块": "正在等待这些页面的识别结果",
+            "正在调用模型生成摘要": "AI正在阅读并整理这些页面",
+            "排队等待分块识别": "排队等待识别",
+            "识别未完成，后台任务已停止": "识别已停止，尚未完成，请联系管理员",
+            "云端未就绪，后台任务已停止": "识别已停止，资料尚不可读取，请联系管理员",
+            "等待云端解析结果": "等待识别结果",
+            "本轮处理完成": "本次处理已完成",
+        }.get(task, task)
+        details.append(teacher_task)
         if action:
             if action["pages"]:
                 details.append(action["pages"])
-            details.append(action["api"] or "本地操作，不调用API")
-            details.append(f"此步骤已用时 {item['actionElapsedSeconds']} 秒（不代表成功）")
+            details.append(f"当前步骤已用时 {item['actionElapsedSeconds']} 秒")
         if item["providerStatus"] == "active" and item["providerExpiresAt"] <= now:
-            details.append("云端整文件已过期")
+            details.append("原文读取期限已到，需要重新处理")
         if expected and not item["cloudChunkCount"] and ready:
-            details.append("云端分块不可调用，仍可检索本地摘要")
+            details.append("目前仅能参考已保存的摘要，暂不能读取对应原文")
         errors = [c["error"] for c in records if c["error"]] + [item.pop("providerError")]
         errors = [error for error in errors if error]
         # Provider exception strings can contain signed URLs; expose a safe diagnosis only.
         if errors:
             error_text = " ".join(errors).lower()
-            reason = ("服务限流或额度不足" if "429" in error_text else
-                      "云端认证或权限失败" if any(code in error_text for code in ("401", "403")) else
-                      "云端请求超时" if "timed out" in error_text or "timeout" in error_text else
-                      "文档处理失败，请查看部署日志")
+            reason = ("识别服务繁忙或额度不足，请联系管理员" if "429" in error_text else
+                      "识别服务的访问设置有误，请联系管理员" if any(code in error_text for code in ("401", "403")) else
+                      "识别服务长时间未响应" if "timed out" in error_text or "timeout" in error_text else
+                      "资料处理失败，请联系管理员查看原因")
             details.append(reason)
         item.update({"statusLabel": label, "taskStatus": task, "statusDetail": "；".join(details)})
         files.append(item)
