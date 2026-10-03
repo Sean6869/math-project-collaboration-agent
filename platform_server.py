@@ -8,6 +8,7 @@ import functools
 import gzip
 import hashlib
 import hmac
+import http.client
 import io
 import json
 import math
@@ -15,6 +16,7 @@ import mimetypes
 import os
 import re
 import secrets
+import shutil
 import sqlite3
 import sys
 import threading
@@ -76,6 +78,10 @@ def normalize_deepseek_model(model: str | None) -> str:
 DATA_DIR = Path(os.environ.get("MPT_DATA_DIR", ROOT / "data")).resolve()
 UPLOAD_DIR = DATA_DIR / "uploads"
 DB_PATH = DATA_DIR / "platform.db"
+DEFAULT_KNOWLEDGE_SOURCE_DIR = ROOT.parent / "必须要的教材、教师用书和课标"
+KNOWLEDGE_SOURCE_DIR = Path(
+    os.environ.get("MPT_KNOWLEDGE_SOURCE_DIR", "").strip() or str(DEFAULT_KNOWLEDGE_SOURCE_DIR)
+).resolve()
 HOST = os.environ.get("MPT_HOST", "127.0.0.1")
 # Railway injects PORT at runtime; keep MPT_PORT for local compatibility.
 PORT = int(os.environ.get("PORT") or os.environ.get("MPT_PORT", "8000"))
@@ -87,6 +93,7 @@ DEEPSEEK_URL = DEEPSEEK_BASE_URL + "/chat/completions"
 DEEPSEEK_MODEL = normalize_deepseek_model(os.environ.get("DEEPSEEK_MODEL"))
 DEEPSEEK_REASONING_MODEL = os.environ.get("DEEPSEEK_REASONING_MODEL", "deepseek-v4-pro")
 ARK_TEXT_URL = os.environ.get("ARK_TEXT_URL", "https://ark.cn-beijing.volces.com/api/v3/chat/completions")
+ARK_RESPONSES_URL = os.environ.get("ARK_RESPONSES_URL", "https://ark.cn-beijing.volces.com/api/v3/responses")
 ARK_TEXT_MODEL = os.environ.get("ARK_TEXT_MODEL", "doubao-seed-2-0-mini-260428")
 ARK_IMAGE_URL = os.environ.get("ARK_IMAGE_URL", "https://ark.cn-beijing.volces.com/api/v3/images/generations")
 ARK_IMAGE_MODEL = os.environ.get("ARK_IMAGE_MODEL", "doubao-seedream-5-0-260128")
@@ -456,6 +463,19 @@ def init_database() -> None:
               level TEXT NOT NULL, model TEXT NOT NULL, latency_ms INTEGER NOT NULL,
               status TEXT NOT NULL, detail TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS knowledge_provider_files (
+              local_file_id TEXT PRIMARY KEY, provider_file_id TEXT NOT NULL,
+              status TEXT NOT NULL, expires_at INTEGER NOT NULL,
+              updated_at TEXT NOT NULL, error TEXT NOT NULL DEFAULT ''
+            );
+            CREATE TABLE IF NOT EXISTS knowledge_chunks (
+              id TEXT PRIMARY KEY, local_file_id TEXT NOT NULL,
+              provider_file_id TEXT NOT NULL DEFAULT '', page_start INTEGER NOT NULL,
+              page_end INTEGER NOT NULL, status TEXT NOT NULL DEFAULT 'queued',
+              summary TEXT NOT NULL DEFAULT '', expires_at INTEGER NOT NULL DEFAULT 0,
+              updated_at TEXT NOT NULL, error TEXT NOT NULL DEFAULT ''
+            );
+            CREATE INDEX IF NOT EXISTS knowledge_chunks_file ON knowledge_chunks(local_file_id,status);
             """
         )
         teacher_sql = db.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='teachers'").fetchone()
@@ -915,9 +935,175 @@ def extract_document(name: str, raw: bytes) -> str:
                 xml = archive.read("word/document.xml")
             root = ElementTree.fromstring(xml)
             return "\n".join("".join(node.itertext()) for node in root.iter() if node.tag.endswith("}p"))[:120_000]
-    except (OSError, KeyError, zipfile.BadZipFile, ElementTree.ParseError):
+        if suffix == ".pdf":
+            import pdfplumber
+            pages = []
+            total = 0
+            with pdfplumber.open(io.BytesIO(raw)) as pdf:
+                for number, page in enumerate(pdf.pages, 1):
+                    text = re.sub(r"[ \t]+", " ", page.extract_text() or "").strip()
+                    if text:
+                        entry = f"[第{number}页]\n{text}"
+                        pages.append(entry)
+                        total += len(entry)
+                    if total >= 120_000:
+                        break
+            return "\n\n".join(pages)[:120_000]
+    except (OSError, KeyError, zipfile.BadZipFile, ElementTree.ParseError, ValueError):
         return ""
     return ""
+
+
+def sync_builtin_knowledge() -> dict:
+    """Import administrator-provided references without publishing them in Git."""
+    result = {"found": 0, "imported": 0, "indexed": 0}
+    if not KNOWLEDGE_SOURCE_DIR.is_dir():
+        return result
+    for source in sorted(KNOWLEDGE_SOURCE_DIR.iterdir(), key=lambda item: item.name):
+        if not source.is_file() or source.suffix.lower() not in ALLOWED_UPLOADS:
+            continue
+        result["found"] += 1
+        identity = f"{source.name}\0{source.stat().st_size}"
+        file_id = "kb" + hashlib.sha256(identity.encode("utf-8")).hexdigest()[:22]
+        stored = f"{file_id}{source.suffix.lower()}"
+        target = UPLOAD_DIR / stored
+        with database() as db:
+            existing = db.execute("SELECT extracted_text FROM files WHERE id=?", (file_id,)).fetchone()
+        if existing and target.is_file():
+            result["indexed"] += bool(existing["extracted_text"])
+            continue
+        if not target.is_file():
+            try:
+                os.link(source, target)
+            except OSError:
+                shutil.copy2(source, target)
+        raw = target.read_bytes()
+        extracted = extract_document(source.name, raw)
+        with database() as db:
+            db.execute(
+                "INSERT OR REPLACE INTO files(id,original_name,stored_name,mime,size,extracted_text,uploaded_at,uploaded_by,group_no) "
+                "VALUES(?,?,?,?,?,?,?,?,NULL)",
+                (file_id, source.name, stored, mimetypes.guess_type(source.name)[0] or "application/octet-stream",
+                 len(raw), extracted, utc_now(), "builtin-knowledge"),
+            )
+        result["imported"] += 1
+        result["indexed"] += bool(extracted)
+    return result
+
+
+def ark_upload_document(path: Path, name: str) -> dict:
+    """Stream a document to Ark Files API without buffering a large PDF in memory."""
+    api_key = os.environ.get("ARK_API_KEY", "").strip()
+    if not api_key:
+        raise ValueError("ARK_API_KEY 未配置")
+    boundary = "----MapleKnowledge" + secrets.token_hex(12)
+    expires_at = int(time.time()) + 30 * 24 * 60 * 60
+    fields = (
+        f"--{boundary}\r\nContent-Disposition: form-data; name=\"purpose\"\r\n\r\nuser_data\r\n"
+        f"--{boundary}\r\nContent-Disposition: form-data; name=\"expire_at\"\r\n\r\n{expires_at}\r\n"
+        f"--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"{quote(name)}\"\r\n"
+        f"Content-Type: application/pdf\r\n\r\n"
+    ).encode()
+    ending = f"\r\n--{boundary}--\r\n".encode()
+    connection = http.client.HTTPSConnection("ark.cn-beijing.volces.com", timeout=300)
+    try:
+        connection.putrequest("POST", "/api/v3/files")
+        connection.putheader("Authorization", f"Bearer {api_key}")
+        connection.putheader("Content-Type", f"multipart/form-data; boundary={boundary}")
+        connection.putheader("Content-Length", str(len(fields) + path.stat().st_size + len(ending)))
+        connection.endheaders()
+        connection.send(fields)
+        with path.open("rb") as source:
+            while chunk := source.read(1024 * 1024):
+                connection.send(chunk)
+        connection.send(ending)
+        response = connection.getresponse()
+        raw = response.read()
+        if response.status >= 400:
+            raise ValueError(f"Files API HTTP {response.status}: {raw.decode('utf-8', 'replace')[:240]}")
+        result = json.loads(raw)
+        if not result.get("id"):
+            raise ValueError("Files API 未返回文件标识")
+        return result
+    finally:
+        connection.close()
+
+
+def ark_file_status(file_id: str) -> dict:
+    request = urllib.request.Request(
+        f"https://ark.cn-beijing.volces.com/api/v3/files/{quote(file_id)}",
+        headers={"Authorization": f"Bearer {os.environ.get('ARK_API_KEY', '')}"},
+    )
+    with urllib.request.urlopen(request, timeout=30) as response:
+        return json.loads(response.read())
+
+
+def sync_ark_knowledge_files() -> None:
+    """Keep scanned built-in PDFs available to the multimodal document model."""
+    if not os.environ.get("ARK_API_KEY"):
+        return
+    with database() as db:
+        rows = db.execute(
+            "SELECT f.id,f.original_name,f.stored_name,p.provider_file_id,p.status,p.expires_at "
+            "FROM files f LEFT JOIN knowledge_provider_files p ON p.local_file_id=f.id "
+            "WHERE f.uploaded_by='builtin-knowledge' AND f.mime='application/pdf' ORDER BY f.original_name"
+        ).fetchall()
+    refresh_before = int(time.time()) + 24 * 60 * 60
+    for row in rows:
+        try:
+            provider_id = row["provider_file_id"]
+            if provider_id and int(row["expires_at"] or 0) > refresh_before:
+                meta = ark_file_status(provider_id)
+            else:
+                target = UPLOAD_DIR / row["stored_name"]
+                if not target.is_file():
+                    continue
+                meta = ark_upload_document(target, row["original_name"])
+            status = str(meta.get("status", "processing"))
+            expires_at = int(meta.get("expire_at") or int(time.time()) + 7 * 24 * 60 * 60)
+            with database() as db:
+                db.execute(
+                    "INSERT OR REPLACE INTO knowledge_provider_files(local_file_id,provider_file_id,status,expires_at,updated_at,error) "
+                    "VALUES(?,?,?,?,?,?)",
+                    (row["id"], meta["id"], status, expires_at, utc_now(), ""),
+                )
+        except Exception as exc:
+            with database() as db:
+                db.execute(
+                    "INSERT OR REPLACE INTO knowledge_provider_files(local_file_id,provider_file_id,status,expires_at,updated_at,error) "
+                    "VALUES(?,?,?,?,?,?)",
+                    (row["id"], row["provider_file_id"] or "", "failed", 0, utc_now(), str(exc)[:500]),
+                )
+    for _ in range(30):
+        with database() as db:
+            pending = db.execute(
+                "SELECT local_file_id,provider_file_id FROM knowledge_provider_files WHERE status='processing'"
+            ).fetchall()
+        if not pending:
+            break
+        time.sleep(10)
+        for item in pending:
+            try:
+                meta = ark_file_status(item["provider_file_id"])
+                with database() as db:
+                    db.execute(
+                        "UPDATE knowledge_provider_files SET status=?,expires_at=?,updated_at=?,error='' WHERE local_file_id=?",
+                        (str(meta.get("status", "processing")), int(meta.get("expire_at") or 0), utc_now(), item["local_file_id"]),
+                    )
+            except Exception as exc:
+                with database() as db:
+                    db.execute(
+                        "UPDATE knowledge_provider_files SET error=?,updated_at=? WHERE local_file_id=?",
+                        (str(exc)[:500], utc_now(), item["local_file_id"]),
+                    )
+
+
+def start_ark_knowledge_sync() -> None:
+    if os.environ.get("ARK_API_KEY") and KNOWLEDGE_SOURCE_DIR.is_dir():
+        def worker() -> None:
+            sync_ark_knowledge_files()
+            sync_ark_knowledge_chunks()
+        threading.Thread(target=worker, name="knowledge-file-sync", daemon=True).start()
 
 
 STAGE_HINT_ROUTES = {
@@ -1047,6 +1233,108 @@ def parse_model_hint(text: str, level: str) -> str | None:
     return clean
 
 
+def knowledge_query_terms(query: str) -> list[str]:
+    clean = re.sub(r"\s+", "", str(query or "").lower())
+    chinese = re.findall(r"[\u4e00-\u9fff]{2,}", clean)
+    words = re.findall(r"[a-z0-9]{2,}", clean)
+    terms = words[:12]
+    for block in chinese:
+        terms.extend(block[index:index + 2] for index in range(max(0, len(block) - 1)))
+    return list(dict.fromkeys(term for term in terms if len(term) >= 2))[:40]
+
+
+def knowledge_context(state: dict, query: str, *, max_documents: int = 5, max_chars: int = 9000) -> tuple[str, list[str]]:
+    """Select compact, query-relevant excerpts from approved and built-in materials."""
+    config = state.get("teacherConfig", {}) if isinstance(state.get("teacherConfig"), dict) else {}
+    approved = {str(name) for name in config.get("knowledge", []) if isinstance(name, str)}
+    with database() as db:
+        rows = db.execute(
+            "SELECT original_name,extracted_text,uploaded_by FROM files "
+            "WHERE uploaded_by IN ('teacher','builtin-knowledge') AND extracted_text<>'' ORDER BY uploaded_at DESC"
+        ).fetchall()
+        chunk_rows = db.execute(
+            "SELECT f.original_name || '（第' || c.page_start || '-' || c.page_end || '页）' AS original_name,"
+            "c.summary AS extracted_text,'builtin-knowledge' AS uploaded_by FROM knowledge_chunks c "
+            "JOIN files f ON f.id=c.local_file_id WHERE c.status='active' AND c.summary<>''"
+        ).fetchall()
+        rows = list(rows) + list(chunk_rows)
+    terms = knowledge_query_terms(" ".join((query, str(state.get("project", "")), str(config.get("mathTopic", "")),
+                                             str(config.get("standard", "")))))
+    ranked = []
+    for row in rows:
+        if row["uploaded_by"] == "teacher" and approved and row["original_name"] not in approved:
+            continue
+        name, text = row["original_name"], row["extracted_text"]
+        lowered = (name + "\n" + text).lower()
+        hits = [(lowered.count(term), term) for term in terms if term in lowered]
+        score = sum(min(count, 8) * (3 if term in name.lower() else 1) for count, term in hits)
+        ranked.append((score, name, text, [term for _, term in hits]))
+    ranked.sort(key=lambda item: (-item[0], item[1]))
+    excerpts, sources, used = [], [], 0
+    for _, name, text, hits in ranked[:max_documents]:
+        positions = [text.lower().find(term) for term in hits if text.lower().find(term) >= 0]
+        start = max(0, (min(positions) if positions else 0) - 350)
+        excerpt = re.sub(r"\n{3,}", "\n\n", text[start:start + 2200]).strip()
+        if not excerpt:
+            continue
+        block = f"[{name}]\n{excerpt}"
+        if used + len(block) > max_chars:
+            block = block[:max(0, max_chars - used)]
+        if not block:
+            break
+        excerpts.append(block)
+        sources.append(name)
+        used += len(block)
+        if used >= max_chars:
+            break
+    return "\n\n".join(excerpts), sources
+
+
+@functools.lru_cache(maxsize=128)
+def pdf_page_count(stored_name: str) -> int:
+    try:
+        from pypdf import PdfReader
+        return len(PdfReader(str(UPLOAD_DIR / stored_name)).pages)
+    except Exception:
+        return 0
+
+
+def ark_knowledge_documents(state: dict, query: str, limit: int = 2) -> list[dict]:
+    """Choose a small set of processed PDFs so scanned pages can be read by Ark."""
+    grade = student_grade(state)
+    terms = knowledge_query_terms(query)
+    with database() as db:
+        rows = db.execute(
+            "SELECT f.original_name AS name,p.provider_file_id AS fileId,f.stored_name AS storedName,"
+            "f.extracted_text AS searchable,0 AS isChunk "
+            "FROM files f JOIN knowledge_provider_files p ON p.local_file_id=f.id "
+            "WHERE f.uploaded_by='builtin-knowledge' AND p.status='active' "
+            "AND NOT EXISTS (SELECT 1 FROM knowledge_chunks x WHERE x.local_file_id=f.id) "
+            "UNION ALL SELECT f.original_name || '（第' || c.page_start || '-' || c.page_end || '页）' AS name,"
+            "c.provider_file_id AS fileId,'' AS storedName,c.summary AS searchable,1 AS isChunk "
+            "FROM knowledge_chunks c JOIN files f ON f.id=c.local_file_id "
+            "WHERE c.status='active' AND c.provider_file_id<>''"
+        ).fetchall()
+    ranked = []
+    for row in rows:
+        name = row["name"]
+        if not row["isChunk"] and pdf_page_count(row["storedName"]) > 24:
+            continue
+        searchable = (name + "\n" + (row["searchable"] or "")).lower()
+        score = sum((8 if term in name.lower() else 2) for term in terms if term in searchable)
+        if grade and f"{grade}年级" in name:
+            score += 12
+        if any(term in query for term in ("课标", "课程标准", "核心素养", "课程目标")) and "课程标准" in name:
+            score += 20
+        if any(term in query for term in ("教学", "怎么教", "活动设计")) and "教师用书" in name:
+            score += 8
+        if "数学课程标准" in name:
+            score += 2
+        ranked.append((score, name, row["fileId"]))
+    ranked.sort(key=lambda item: (-item[0], item[1]))
+    return [{"name": name, "fileId": file_id} for _, name, file_id in ranked[:limit]]
+
+
 def deepseek_hint(
     state: dict, level: str, done: str, issue_type: str, issue: str,
     history: list[dict] | None = None, checked_work: bool = False,
@@ -1055,12 +1343,8 @@ def deepseek_hint(
     if not api_key:
         return None, 0, "not_configured"
     config = state.get("teacherConfig", {})
-    knowledge_names = config.get("knowledge", []) if isinstance(config, dict) else []
-    with database() as db:
-        texts = db.execute("SELECT original_name,extracted_text FROM files WHERE extracted_text<>'' ORDER BY uploaded_at DESC LIMIT 3").fetchall()
-    # A short, recent evidence window keeps prompt transfer and first-token time
-    # bounded while retaining enough source text for grounded scaffolding.
-    knowledge = "\n".join(f"[{row['original_name']}] {row['extracted_text'][:1600]}" for row in texts)
+    knowledge_query = " ".join((done, issue_type, issue))
+    knowledge, knowledge_names = knowledge_context(state, knowledge_query, max_documents=4, max_chars=7200)
     contracts = {
         "L1": "定位支架：只指出一个尚未明确的目标、条件或检查项；提出一个聚焦问题和一个立即可执行的观察/核对动作。不得让学生写函数、表达式、不等式，不得给完整公式、建模方法或结果。",
         "L2": "结构支架：把卡点拆成2—3个子问题，建议变量、图表或数量关系的组织方式和处理顺序；下一步只让学生做第一个整理动作。不得完成全部建模或推导。",
@@ -1075,6 +1359,7 @@ def deepseek_hint(
         + MATH_FORMAT_RULE
         + f"当前严格执行{level}：{contracts[level]}"
         "不得重复历史提示；信息不足时先澄清，不得猜测。材料冲突、数学结论不可靠或需要教师判断时，在nextAction中写明请教师核验。"
+        "材料摘录存在时必须以其为依据，不得编造摘录中没有的结论；需要指出依据时使用材料文件名。"
         f"教师当前只开放到阶段{current_stage}，严禁建议学生进入{stage_boundary}的页面，也不得使用尚未开放页面的名称。"
         f"当前阶段可执行路径为：{current_routes}。项目流程或协作类提问必须从这些路径中选择一个，回答控制在2—4行，并写成‘打开哪个中文页面—填写哪个中文字段—点击哪个中文按钮’。"
         "禁止输出unknown、evidence等代码字段名。"
@@ -1205,17 +1490,22 @@ def free_ai_context(state: dict, group: int) -> str:
 def ark_free_messages(state: dict, group: int, prompt: str, history: list[dict]) -> list[dict]:
     current_stage = class_current_stage({"currentStage": state.get("currentStage", 1)})
     stage_boundary = f"阶段{current_stage + 1}及之后" if current_stage < 5 else "当前阶段之后"
+    knowledge, sources = knowledge_context(state, prompt)
     system = (
         "你是‘迈谱 Maple’学生小组自由工作区的初中数学助手。"
         + student_math_scope(state)
         + "你的任务是帮助学生减少机械性整理，把更多时间留给小组协作和高阶思考。"
         "你可以回答项目是什么、接下来做什么，解释概念、检查思路和书写数学表达，但不要替学生完成未经讨论的整个项目，"
         "不要伪造数据；缺少信息时明确列出需要补充的内容。"
+        "回答项目知识与数学内容时优先使用下方知识库摘录；使用后在相关段落末尾以[文件名]标注来源。"
+        "知识库没有支持某项结论时明确说明依据不足，不得凭空补写教材或课标内容。"
         f"教师当前只开放到阶段{current_stage}。若学生询问平台操作，只能引用当前阶段路径：{'；'.join(STAGE_HINT_ROUTES[current_stage])}。"
         f"不得建议进入{stage_boundary}的页面，也不得使用尚未开放页面的名称。"
         + MATH_FORMAT_RULE
         + "回答使用清晰的Markdown。"
         f"当前项目上下文：{free_ai_context(state, group)}"
+        f"\n本次检索到的知识库来源：{json.dumps(sources, ensure_ascii=False)}"
+        f"\n知识库摘录：\n{knowledge or '本次没有检索到可用正文摘录。'}"
     )
     messages = [{"role": "system", "content": system}]
     for item in history[-8:]:
@@ -1241,19 +1531,177 @@ def ark_text_request(messages: list[dict], stream: bool) -> urllib.request.Reque
     )
 
 
+def ark_document_request(state: dict, group: int, prompt: str, history: list[dict], stream: bool) -> tuple[urllib.request.Request | None, list[str]]:
+    documents = ark_knowledge_documents(state, prompt)
+    if not documents:
+        return None, []
+    base_messages = ark_free_messages(state, group, prompt, history)
+    system = base_messages[0]["content"]
+    sources = [item["name"] for item in documents]
+    content = [{"type": "input_file", "file_id": item["fileId"]} for item in documents]
+    content.append({
+        "type": "input_text",
+        "text": (
+            f"学生问题：{prompt}\n本轮附带资料：{json.dumps(sources, ensure_ascii=False)}。"
+            "请读取附带PDF（含扫描页）后回答，只引用文件中能够确认的内容，并在对应段落末尾标注[文件名]。"
+        ),
+    })
+    input_items = [{"role": "system", "content": system}]
+    for item in base_messages[1:-1]:
+        input_items.append({"role": item["role"], "content": item["content"]})
+    input_items.append({"role": "user", "content": content})
+    payload = json.dumps({
+        "model": ARK_TEXT_MODEL, "input": input_items, "stream": stream,
+        "max_output_tokens": 1600, "thinking": {"type": "disabled"},
+    }, ensure_ascii=False).encode()
+    return urllib.request.Request(
+        ARK_RESPONSES_URL, data=payload,
+        headers={"Authorization": f"Bearer {os.environ.get('ARK_API_KEY', '')}",
+                 "Content-Type": "application/json", "User-Agent": "Maple-Platform/1"},
+        method="POST",
+    ), sources
+
+
+def ark_response_answer(body: dict) -> str:
+    parts = []
+    for item in body.get("output", []):
+        if item.get("type") != "message":
+            continue
+        for content in item.get("content", []):
+            if content.get("type") == "output_text" and content.get("text"):
+                parts.append(str(content["text"]))
+    return "".join(parts).strip()
+
+
+def create_pdf_chunk(path: Path, page_start: int, page_end: int) -> Path:
+    from pypdf import PdfReader, PdfWriter
+    reader = PdfReader(str(path))
+    writer = PdfWriter()
+    for page in reader.pages[page_start - 1:page_end]:
+        writer.add_page(page)
+    chunk_path = UPLOAD_DIR / f".knowledge-{secrets.token_hex(8)}.pdf"
+    with chunk_path.open("wb") as target:
+        writer.write(target)
+    return chunk_path
+
+
+def summarize_ark_chunk(provider_file_id: str, source_name: str, page_start: int, page_end: int) -> str:
+    payload = json.dumps({
+        "model": ARK_TEXT_MODEL,
+        "input": [{"role": "user", "content": [
+            {"type": "input_file", "file_id": provider_file_id},
+            {"type": "input_text", "text": (
+                "请把这段扫描版数学资料整理成可检索索引，保留原文中的章节标题、概念、公式名称、"
+                "课程目标和关键词，不要补充文件外知识。输出纯文本，控制在1800字以内。"
+                f"文件：{source_name}，页码：{page_start}-{page_end}。"
+            )},
+        ]}],
+        "thinking": {"type": "disabled"}, "max_output_tokens": 2200,
+    }, ensure_ascii=False).encode()
+    request = urllib.request.Request(
+        ARK_RESPONSES_URL, data=payload,
+        headers={"Authorization": f"Bearer {os.environ.get('ARK_API_KEY', '')}", "Content-Type": "application/json"},
+        method="POST",
+    )
+    with urllib.request.urlopen(request, timeout=180) as response:
+        answer = ark_response_answer(json.loads(response.read()))
+    return answer[:9000]
+
+
+def sync_ark_knowledge_chunks() -> None:
+    """Build bounded searchable summaries for scanned PDFs in one background worker."""
+    if not os.environ.get("ARK_API_KEY"):
+        return
+    from pypdf import PdfReader
+    with database() as db:
+        documents = db.execute(
+            "SELECT id,original_name,stored_name FROM files WHERE uploaded_by='builtin-knowledge' AND mime='application/pdf'"
+        ).fetchall()
+    for document in documents:
+        path = UPLOAD_DIR / document["stored_name"]
+        if not path.is_file():
+            continue
+        try:
+            page_count = len(PdfReader(str(path)).pages)
+        except Exception:
+            continue
+        if page_count <= 24:
+            continue
+        for start in range(1, page_count + 1, 20):
+            end = min(page_count, start + 19)
+            chunk_id = "kc" + hashlib.sha256(f"{document['id']}:{start}:{end}".encode()).hexdigest()[:22]
+            with database() as db:
+                row = db.execute(
+                    "SELECT status,summary,expires_at,updated_at FROM knowledge_chunks WHERE id=?", (chunk_id,)
+                ).fetchone()
+                if row and row["status"] == "active" and row["summary"] and int(row["expires_at"] or 0) > int(time.time()) + 86400:
+                    continue
+                if row and row["status"] == "processing":
+                    continue
+                if row and row["status"] == "failed":
+                    try:
+                        age = datetime.now(timezone.utc) - datetime.fromisoformat(row["updated_at"])
+                        if age.total_seconds() < 1800:
+                            continue
+                    except (TypeError, ValueError):
+                        pass
+                db.execute(
+                    "INSERT OR REPLACE INTO knowledge_chunks(id,local_file_id,page_start,page_end,status,summary,expires_at,updated_at,error) "
+                    "VALUES(?,?,?,?,?,?,?,?,?)",
+                    (chunk_id, document["id"], start, end, "processing", "", 0, utc_now(), ""),
+                )
+            chunk_path = None
+            try:
+                chunk_path = create_pdf_chunk(path, start, end)
+                meta = ark_upload_document(chunk_path, f"{Path(document['original_name']).stem}-第{start}-{end}页.pdf")
+                provider_id = meta["id"]
+                for _ in range(45):
+                    meta = ark_file_status(provider_id)
+                    if meta.get("status") != "processing":
+                        break
+                    time.sleep(2)
+                if meta.get("status") != "active":
+                    raise ValueError(f"切片文件状态：{meta.get('status', 'unknown')}")
+                summary = summarize_ark_chunk(provider_id, document["original_name"], start, end)
+                if not summary:
+                    raise ValueError("切片未返回可检索摘要")
+                with database() as db:
+                    db.execute(
+                        "UPDATE knowledge_chunks SET provider_file_id=?,status='active',summary=?,expires_at=?,updated_at=?,error='' WHERE id=?",
+                        (provider_id, summary, int(meta.get("expire_at") or int(time.time()) + 7 * 86400), utc_now(), chunk_id),
+                    )
+                time.sleep(2)
+            except urllib.error.HTTPError as exc:
+                with database() as db:
+                    db.execute(
+                        "UPDATE knowledge_chunks SET status='failed',updated_at=?,error=? WHERE id=?",
+                        (utc_now(), f"HTTP {exc.code}: {exc.reason}"[:500], chunk_id),
+                    )
+                if exc.code == 429:
+                    time.sleep(20)
+                    break
+            except Exception as exc:
+                with database() as db:
+                    db.execute("UPDATE knowledge_chunks SET status='failed',updated_at=?,error=? WHERE id=?", (utc_now(), str(exc)[:500], chunk_id))
+            finally:
+                if chunk_path:
+                    chunk_path.unlink(missing_ok=True)
+
+
 def ark_free_chat(
     state: dict, group: int, prompt: str, history: list[dict],
 ) -> tuple[str | None, int, str, str]:
     api_key = os.environ.get("ARK_API_KEY", "")
     if not api_key:
         return None, 0, "not_configured", ARK_TEXT_MODEL
-    request = ark_text_request(ark_free_messages(state, group, prompt, history), False)
+    request, sources = ark_document_request(state, group, prompt, history, False)
+    request = request or ark_text_request(ark_free_messages(state, group, prompt, history), False)
     started = time.perf_counter()
     try:
         with urllib.request.urlopen(request, timeout=ARK_TEXT_TIMEOUT_SECONDS) as response:
             body = json.loads(response.read())
         latency = round((time.perf_counter() - started) * 1000)
-        answer = str(body["choices"][0]["message"]["content"]).strip()
+        answer = ark_response_answer(body) if sources else str(body["choices"][0]["message"]["content"]).strip()
         return answer[:12000] if answer else None, latency, "ok", ARK_TEXT_MODEL
     except urllib.error.HTTPError as exc:
         latency = round((time.perf_counter() - started) * 1000)
@@ -1291,7 +1739,8 @@ def ark_free_chat_stream(
     api_key = os.environ.get("ARK_API_KEY", "")
     if not api_key:
         return None, 0, "not_configured", ARK_TEXT_MODEL
-    request = ark_text_request(ark_free_messages(state, group, prompt, history), True)
+    request, sources = ark_document_request(state, group, prompt, history, True)
+    request = request or ark_text_request(ark_free_messages(state, group, prompt, history), True)
     started = time.perf_counter()
     answer_parts = []
     try:
@@ -1300,6 +1749,12 @@ def ark_free_chat_stream(
                 if raw_event == "[DONE]":
                     break
                 body = json.loads(raw_event)
+                if sources:
+                    if body.get("type") == "response.output_text.delta" and body.get("delta"):
+                        text = str(body["delta"])
+                        answer_parts.append(text)
+                        on_delta(text)
+                    continue
                 choice = (body.get("choices") or [{}])[0]
                 delta = choice.get("delta") or {}
                 content = delta.get("content")
@@ -1694,6 +2149,33 @@ class Handler(SimpleHTTPRequestHandler):
             group = max(1, min(count, int(group)))
             self.json_response({"state": merged_state(group, monitoring=session["role"] == "teacher"), "role": session["role"]})
             return
+        if route.path == "/api/knowledge":
+            session = self.require_teacher()
+            if not session:
+                return
+            with database() as db:
+                rows = db.execute(
+                    "SELECT f.id,f.original_name AS name,f.mime,f.size,f.uploaded_at AS uploadedAt,"
+                    "f.uploaded_by AS uploadedBy,length(f.extracted_text) AS indexedChars,"
+                    "coalesce(p.status,'') AS providerStatus,coalesce(p.error,'') AS providerError,"
+                    "(SELECT count(*) FROM knowledge_chunks c WHERE c.local_file_id=f.id AND c.status='active') AS chunkCount "
+                    "FROM files f LEFT JOIN knowledge_provider_files p ON p.local_file_id=f.id "
+                    "WHERE f.uploaded_by IN ('teacher','builtin-knowledge') "
+                    "ORDER BY uploaded_by='builtin-knowledge' DESC, original_name"
+                ).fetchall()
+            files = [dict(row) for row in rows]
+            self.json_response({
+                "files": files,
+                "summary": {
+                    "total": len(files),
+                    "indexed": sum(
+                        bool(item["indexedChars"]) or item["providerStatus"] == "active" or item["chunkCount"] > 0
+                        for item in files
+                    ),
+                    "bytes": sum(int(item["size"]) for item in files),
+                },
+            })
+            return
         if route.path == "/api/files":
             session = self.require_session()
             if not session:
@@ -1702,7 +2184,7 @@ class Handler(SimpleHTTPRequestHandler):
                 if session["role"] == "student":
                     rows = db.execute(
                         "SELECT id,original_name AS name,mime,size,uploaded_at,uploaded_by,extracted_text<>'' AS indexed "
-                        "FROM files WHERE group_no=? OR uploaded_by='teacher' ORDER BY uploaded_at DESC",
+                        "FROM files WHERE group_no=? OR uploaded_by IN ('teacher','builtin-knowledge') ORDER BY uploaded_at DESC",
                         (session["groupId"],),
                     ).fetchall()
                 else:
@@ -1724,7 +2206,7 @@ class Handler(SimpleHTTPRequestHandler):
                 if session["role"] == "student":
                     row = db.execute(
                         "SELECT original_name,stored_name,mime,size FROM files "
-                        "WHERE id=? AND (group_no=? OR uploaded_by='teacher')",
+                        "WHERE id=? AND (group_no=? OR uploaded_by IN ('teacher','builtin-knowledge'))",
                         (file_id, session["groupId"]),
                     ).fetchone()
                 else:
@@ -1927,7 +2409,10 @@ class Handler(SimpleHTTPRequestHandler):
                     (file_id, session["groupId"]),
                 ).fetchone()
             else:
-                row = db.execute("SELECT original_name,stored_name FROM files WHERE id=?", (file_id,)).fetchone()
+                row = db.execute(
+                    "SELECT original_name,stored_name FROM files WHERE id=? AND uploaded_by<>'builtin-knowledge'",
+                    (file_id,),
+                ).fetchone()
             if not row:
                 self.json_response({"error": "文件不存在或无权删除"}, HTTPStatus.NOT_FOUND)
                 return
@@ -3111,6 +3596,8 @@ class Handler(SimpleHTTPRequestHandler):
 
 def main() -> None:
     init_database()
+    knowledge_sync = sync_builtin_knowledge()
+    start_ark_knowledge_sync()
     env = os.environ.get("MPT_ENV", "development").lower()
     browser_host = "127.0.0.1" if HOST in {"0.0.0.0", "::"} else HOST
     print(f"迈谱 Maple 已启动：http://{browser_host}:{PORT}/")
@@ -3118,6 +3605,11 @@ def main() -> None:
         print(f"监听地址：{HOST}:{PORT}（浏览器请使用上面的本地地址）")
     print(f"服务根目录：{ROOT}")
     print(f"数据目录：{DATA_DIR}")
+    if knowledge_sync["found"]:
+        print(
+            f"知识库资料：发现{knowledge_sync['found']}份，新增{knowledge_sync['imported']}份，"
+            f"可检索{knowledge_sync['indexed']}份"
+        )
     print(f"运行模式：{env}；DeepSeek：{'已配置' if os.environ.get('DEEPSEEK_API_KEY') else '未配置，将使用教师静态支架'}")
     if not is_initialized():
         print("平台尚未初始化，请在登录页完成首位教师注册。")

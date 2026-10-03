@@ -54,6 +54,8 @@ DEEPSEEK_REASONING_MODEL=deepseek-v4-pro
 ARK_API_KEY=你的火山方舟密钥
 ARK_TEXT_URL=https://ark.cn-beijing.volces.com/api/v3/chat/completions
 ARK_TEXT_MODEL=doubao-seed-2-0-mini-260428
+ARK_RESPONSES_URL=https://ark.cn-beijing.volces.com/api/v3/responses
+MPT_KNOWLEDGE_SOURCE_DIR=/path/to/必须要的教材、教师用书和课标
 ARK_IMAGE_URL=https://ark.cn-beijing.volces.com/api/v3/images/generations
 ARK_IMAGE_MODEL=doubao-seedream-5-0-260128
 ARK_IMAGE_RESPONSE_FORMAT=b64_json
@@ -61,6 +63,8 @@ DESMOS_API_KEY=你的Desmos API Key
 ```
 
 图片生成结果会保存到 `/app/data/uploads`；如果使用 Railway，必须将该目录挂载到持久化 Volume。正式部署前应把 API 密钥只填入部署平台的环境变量，不要提交到 GitHub。
+
+项目知识库会在启动时扫描 `MPT_KNOWLEDGE_SOURCE_DIR`（未设置时使用仓库同级的“必须要的教材、教师用书和课标”目录）。文本型 PDF/DOCX 在本地建立索引；扫描型 PDF 通过火山方舟 Files/Responses API 按 20 页分块识别，避免整本教材超出模型图像上下文限额。学生 AI 会根据问题选取相关分块并在回答中标注文件名；教师可在“项目知识库”查看索引状态、预览或下载原文件。教材原文件不进入 Git ，生产部署需将该目录挂载到服务器并配置 `ARK_API_KEY`。
 
 数学工具区和阶段3“模型表征与检验”共用 [Desmos API v1.12](https://www.desmos.com/api/v1.12/docs/index.html?lang=zh-CN) 的五种中文版工具：图形计算器、科学计算器、四功能计算器、几何工具和 3D 计算器。阶段3会分别保留五种工具状态，保存时同步生成当前画面截图；独立数学工具区也可按需保存截图。截图作为小组文件保存，支持预览、下载和删除。请在 [Desmos API Key 页面](https://www.desmos.com/my-api) 申请客户端 Key，并在本地 `.env` 或 Railway Variables 中设置 `DESMOS_API_KEY`；建议在 Desmos 后台把 Key 限制为平台部署域名。未配置时页面会显示配置提示，不会出现空白嵌入区。
 
