@@ -75,6 +75,16 @@ def normalize_deepseek_model(model: str | None) -> str:
     return aliases.get(configured, configured)
 
 
+def normalize_ark_text_model(model: str | None) -> str:
+    configured = (model or "").strip() or "doubao-seed-2-1-turbo-260628"
+    aliases = {
+        "doubao-seed-2-0-mini-260428": "doubao-seed-2-1-turbo-260628",
+        "doubao-seed-2.0-mini": "doubao-seed-2-1-turbo-260628",
+        "doubao-seed-2-1-turbo": "doubao-seed-2-1-turbo-260628",
+    }
+    return aliases.get(configured, configured)
+
+
 DATA_DIR = Path(os.environ.get("MPT_DATA_DIR", ROOT / "data")).resolve()
 UPLOAD_DIR = DATA_DIR / "uploads"
 DB_PATH = DATA_DIR / "platform.db"
@@ -94,7 +104,7 @@ DEEPSEEK_MODEL = normalize_deepseek_model(os.environ.get("DEEPSEEK_MODEL"))
 DEEPSEEK_REASONING_MODEL = os.environ.get("DEEPSEEK_REASONING_MODEL", "deepseek-v4-pro")
 ARK_TEXT_URL = os.environ.get("ARK_TEXT_URL", "https://ark.cn-beijing.volces.com/api/v3/chat/completions")
 ARK_RESPONSES_URL = os.environ.get("ARK_RESPONSES_URL", "https://ark.cn-beijing.volces.com/api/v3/responses")
-ARK_TEXT_MODEL = os.environ.get("ARK_TEXT_MODEL", "doubao-seed-2-0-mini-260428")
+ARK_TEXT_MODEL = normalize_ark_text_model(os.environ.get("ARK_TEXT_MODEL"))
 ARK_IMAGE_URL = os.environ.get("ARK_IMAGE_URL", "https://ark.cn-beijing.volces.com/api/v3/images/generations")
 ARK_IMAGE_MODEL = os.environ.get("ARK_IMAGE_MODEL", "doubao-seedream-5-0-260128")
 ARK_IMAGE_RESPONSE_FORMAT = os.environ.get("ARK_IMAGE_RESPONSE_FORMAT", "b64_json").strip().lower()
@@ -103,7 +113,7 @@ ARK_TEXT_TIMEOUT_SECONDS = env_seconds("ARK_TEXT_TIMEOUT_SECONDS", 60)
 ARK_IMAGE_TIMEOUT_SECONDS = env_seconds("ARK_IMAGE_TIMEOUT_SECONDS", 120)
 MATH_FORMAT_RULE = "所有数学表达式必须用 $...$、$$...$$、\\(...\\) 或 \\[...\\] 包裹；不得裸露输出LaTex命令。"
 FREE_AI_QUOTA_DEFAULT = 30
-FREE_AI_HISTORY_LIMIT = 40
+FREE_AI_HISTORY_LIMIT = 24
 FREE_AI_CONVERSATION_LIMIT = 20
 COOKIE_NAME = "mpt_session"
 LOGIN_FAILURES: dict[str, list[float]] = {}
@@ -1243,7 +1253,7 @@ def knowledge_query_terms(query: str) -> list[str]:
     return list(dict.fromkeys(term for term in terms if len(term) >= 2))[:40]
 
 
-def knowledge_context(state: dict, query: str, *, max_documents: int = 5, max_chars: int = 9000) -> tuple[str, list[str]]:
+def knowledge_context(state: dict, query: str, *, max_documents: int = 4, max_chars: int = 6000) -> tuple[str, list[str]]:
     """Select compact, query-relevant excerpts from approved and built-in materials."""
     config = state.get("teacherConfig", {}) if isinstance(state.get("teacherConfig"), dict) else {}
     approved = {str(name) for name in config.get("knowledge", []) if isinstance(name, str)}
@@ -1508,10 +1518,10 @@ def ark_free_messages(state: dict, group: int, prompt: str, history: list[dict])
         f"\n知识库摘录：\n{knowledge or '本次没有检索到可用正文摘录。'}"
     )
     messages = [{"role": "system", "content": system}]
-    for item in history[-8:]:
+    for item in history[-6:]:
         if not isinstance(item, dict) or item.get("role") not in {"user", "assistant"}:
             continue
-        content = str(item.get("content", "")).strip()[:2000]
+        content = str(item.get("content", "")).strip()[:1200]
         if content:
             messages.append({"role": item["role"], "content": content})
     messages.append({"role": "user", "content": prompt})
@@ -1522,7 +1532,7 @@ def ark_text_request(messages: list[dict], stream: bool) -> urllib.request.Reque
     api_key = os.environ.get("ARK_API_KEY", "")
     payload = json.dumps({
         "model": ARK_TEXT_MODEL, "messages": messages, "stream": stream,
-        "temperature": 0.2, "max_tokens": 1600,
+        "temperature": 0.2, "max_tokens": 1000,
     }, ensure_ascii=False).encode()
     return urllib.request.Request(
         ARK_TEXT_URL, data=payload,
@@ -1552,7 +1562,7 @@ def ark_document_request(state: dict, group: int, prompt: str, history: list[dic
     input_items.append({"role": "user", "content": content})
     payload = json.dumps({
         "model": ARK_TEXT_MODEL, "input": input_items, "stream": stream,
-        "max_output_tokens": 1600, "thinking": {"type": "disabled"},
+        "max_output_tokens": 1000, "thinking": {"type": "disabled"},
     }, ensure_ascii=False).encode()
     return urllib.request.Request(
         ARK_RESPONSES_URL, data=payload,
@@ -1596,7 +1606,7 @@ def summarize_ark_chunk(provider_file_id: str, source_name: str, page_start: int
                 f"文件：{source_name}，页码：{page_start}-{page_end}。"
             )},
         ]}],
-        "thinking": {"type": "disabled"}, "max_output_tokens": 2200,
+        "thinking": {"type": "disabled"}, "max_output_tokens": 1800,
     }, ensure_ascii=False).encode()
     request = urllib.request.Request(
         ARK_RESPONSES_URL, data=payload,
@@ -3010,7 +3020,7 @@ class Handler(SimpleHTTPRequestHandler):
         enabled, quota = free_ai_settings(state)
         if not enabled or not state.get("aiOpen", True):
             raise UpstreamServiceError("自由工作区已由教师暂停", HTTPStatus.CONFLICT)
-        prompt = str(body.get("prompt", "")).strip()[:2400]
+        prompt = str(body.get("prompt", "")).strip()[:1800]
         if not prompt:
             raise ValueError("请输入要讨论的内容")
         group_state = state_get(f"group:{group}")
