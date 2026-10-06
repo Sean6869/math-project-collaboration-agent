@@ -14,12 +14,13 @@ const root=path.resolve(__dirname,'..');
   browser=await chromium.launch({headless:true,...(fs.existsSync(chromium.executablePath())?{}:{channel:'msedge'})});
   const page=await browser.newPage({viewport:{width:1280,height:900}}),errors=[];
   page.on('pageerror',e=>errors.push(e.message));
-  let calls=0,fail=false,ready=false;
+  let calls=0,retryCalls=0,fail=false,ready=false;
   await page.route('**/api/**',async route=>{
    const url=new URL(route.request().url());
    let body={};
-   if(url.pathname==='/api/session')body={authenticated:true,role:'teacher'};
+   if(url.pathname==='/api/session')body={authenticated:true,role:'teacher',isAdmin:true};
    if(url.pathname==='/api/state')body={state:{currentStage:1}};
+   if(url.pathname==='/api/knowledge/retry'){retryCalls++;body={ok:true,message:'已开始重新识别未完成资料'};}
    if(url.pathname==='/api/knowledge'){
     calls++;
     if(fail){await route.fulfill({status:503,contentType:'application/json',body:JSON.stringify({error:'test unavailable'})});return}
@@ -30,6 +31,8 @@ const root=path.resolve(__dirname,'..');
   });
   await page.goto(`http://127.0.0.1:${server.address().port}/teacher/knowledge.html`);
   await page.getByText('暂未识别出可用内容',{exact:true}).first().waitFor();
+  await page.getByRole('button',{name:'重新识别未完成资料'}).click();
+  assert.equal(retryCalls,1);
   await page.locator('#knowledgeFile').evaluate(node=>node.dataset.retained='yes');
   ready=true;
   await page.getByText('部分内容可供参考',{exact:true}).waitFor({timeout:20000});

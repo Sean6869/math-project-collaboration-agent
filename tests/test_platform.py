@@ -199,6 +199,43 @@ class PlatformTest(unittest.TestCase):
             with app.database() as db:
                 db.execute("DELETE FROM files WHERE id=?", ("kb-regression",))
 
+    def test_admin_can_restart_incomplete_knowledge_processing(self):
+        teacher = self.client()
+        self.json_request(teacher, "/api/login", "POST", {
+            "role": "teacher", "username": "test_teacher", "password": "StrongTeacher#2026",
+        })
+        with app.database() as db:
+            db.execute(
+                "INSERT INTO knowledge_chunks VALUES(?,?,?,?,?,?,?,?,?,?)",
+                ("retry-chunk", "retry-file", "provider-old", 1, 20, "failed", "", 0, app.utc_now(), "HTTP 429"),
+            )
+            db.execute(
+                "INSERT INTO knowledge_provider_files VALUES(?,?,?,?,?,?)",
+                ("retry-file", "provider-old", "failed", 0, app.utc_now(), "HTTP 429"),
+            )
+        original_source, original_key = app.KNOWLEDGE_SOURCE_DIR, os.environ.get("ARK_API_KEY")
+        app.KNOWLEDGE_SOURCE_DIR = Path(self.temp.name)
+        os.environ["ARK_API_KEY"] = "test-key"
+        try:
+            with mock.patch.object(app, "start_ark_knowledge_sync", return_value=True):
+                status, response = self.json_request(teacher, "/api/knowledge/retry", "POST", {})
+            self.assertEqual(status, 200)
+            self.assertEqual(response["queuedChunks"], 1)
+            with app.database() as db:
+                chunk = db.execute("SELECT status,error FROM knowledge_chunks WHERE id='retry-chunk'").fetchone()
+                provider = db.execute("SELECT provider_file_id,status,error FROM knowledge_provider_files WHERE local_file_id='retry-file'").fetchone()
+            self.assertEqual(tuple(chunk), ("queued", ""))
+            self.assertEqual(tuple(provider), ("", "", ""))
+        finally:
+            app.KNOWLEDGE_SOURCE_DIR = original_source
+            if original_key is None:
+                os.environ.pop("ARK_API_KEY", None)
+            else:
+                os.environ["ARK_API_KEY"] = original_key
+            with app.database() as db:
+                db.execute("DELETE FROM knowledge_chunks WHERE id='retry-chunk'")
+                db.execute("DELETE FROM knowledge_provider_files WHERE local_file_id='retry-file'")
+
     def test_desmos_pages_allow_required_official_assets(self):
         for path in ("/student/math-tools.html", "/student/stage3-graph.html"):
             with self.client().open(self.base + path, timeout=8) as response:

@@ -1134,10 +1134,16 @@ def sync_ark_knowledge_files() -> None:
 
 
 KNOWLEDGE_SYNC_RUNNING = threading.Event()
+KNOWLEDGE_SYNC_START_LOCK = threading.Lock()
 
 
-def start_ark_knowledge_sync() -> None:
-    if os.environ.get("ARK_API_KEY") and KNOWLEDGE_SOURCE_DIR.is_dir():
+def start_ark_knowledge_sync() -> bool:
+    """Start one knowledge refresh worker; return whether a new worker started."""
+    with KNOWLEDGE_SYNC_START_LOCK:
+        if KNOWLEDGE_SYNC_RUNNING.is_set():
+            return False
+        if not os.environ.get("ARK_API_KEY") or not KNOWLEDGE_SOURCE_DIR.is_dir():
+            return False
         def worker() -> None:
             try:
                 # A previous process may have stopped mid-chunk. Those rows are
@@ -1152,6 +1158,7 @@ def start_ark_knowledge_sync() -> None:
                     KNOWLEDGE_PROGRESS.clear()
         KNOWLEDGE_SYNC_RUNNING.set()
         threading.Thread(target=worker, name="knowledge-file-sync", daemon=True).start()
+        return True
 
 
 STAGE_HINT_ROUTES = {
@@ -2522,6 +2529,31 @@ class Handler(SimpleHTTPRequestHandler):
                 session = self.require_session("teacher")
                 if session:
                     self.remove_knowledge_material(session, self.read_json())
+            elif route == "/api/knowledge/retry":
+                session = self.require_session("teacher")
+                if session and not session.get("isAdmin"):
+                    self.json_response({"error": "只有管理员教师可以重新识别资料"}, HTTPStatus.FORBIDDEN)
+                elif session:
+                    if KNOWLEDGE_SYNC_RUNNING.is_set():
+                        self.json_response({"error": "资料正在识别，请等待本次处理完成"}, HTTPStatus.CONFLICT)
+                    elif not os.environ.get("ARK_API_KEY") or not KNOWLEDGE_SOURCE_DIR.is_dir():
+                        self.json_response({"error": "识别服务尚未开通或资料目录不可用"}, HTTPStatus.SERVICE_UNAVAILABLE)
+                    else:
+                        with database() as db:
+                            chunks = db.execute(
+                                "UPDATE knowledge_chunks SET status='queued',error='',updated_at=? "
+                                "WHERE status='failed'", (utc_now(),)
+                            ).rowcount
+                            db.execute(
+                                "UPDATE knowledge_provider_files SET provider_file_id='',status='',expires_at=0,error='' "
+                                "WHERE status='failed'"
+                            )
+                        started = start_ark_knowledge_sync()
+                        if not started:
+                            self.json_response({"error": "识别服务尚未开通或资料目录不可用"}, HTTPStatus.SERVICE_UNAVAILABLE)
+                        else:
+                            record_event("teacher", None, "knowledge_retry", None, f"failed_chunks={chunks}")
+                            self.json_response({"ok": True, "queuedChunks": chunks, "message": "已开始重新识别未完成资料"})
             elif route == "/api/files":
                 session = self.require_session()
                 if session:
