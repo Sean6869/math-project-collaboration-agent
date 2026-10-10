@@ -91,6 +91,21 @@ class KnowledgeStatusTest(unittest.TestCase):
         self.assertEqual(app.ark_knowledge_documents({}, "scan"), [])
         self.assertIn("reference concept", app.knowledge_context({}, "reference")[0])
 
+    @mock.patch.object(app, "pdf_page_count", return_value=100)
+    def test_completed_chunk_summary_overrides_sparse_pdf_text_label(self, pages):
+        self.document(text="少量文字")
+        with app.database() as db:
+            for index in range(5):
+                db.execute(
+                    "INSERT INTO knowledge_chunks VALUES(?,?,?,?,?,?,?,?,?,?)",
+                    (f"chunk-{index}", "scan", f"provider-{index}", index * 20 + 1,
+                     min(100, index * 20 + 20), "active", f"summary {index}",
+                     self.now + 86400, app.utc_now(), ""),
+                )
+        item = app.knowledge_snapshot()["files"][0]
+        self.assertEqual(item["chunkCount"], 5)
+        self.assertEqual(item["statusLabel"], "内容摘要可供参考")
+
     @mock.patch.object(app, "pdf_page_count", return_value=10)
     def test_ready_short_document_and_missing_key(self, pages):
         self.document()

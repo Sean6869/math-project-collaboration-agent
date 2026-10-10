@@ -2015,10 +2015,13 @@ def knowledge_snapshot() -> dict:
             "actionStartedAt": action.get("startedAt", ""),
             "actionElapsedSeconds": max(0, now - int(action["startedEpoch"])) if action else 0,
         })
-        if item["indexedChars"]:
-            label = "仅少量文字可供参考" if item["mime"] == "application/pdf" and item["indexedChars"] < 1000 else "已提取文字可供参考"
-        elif ready:
+        # Chunk summaries are the useful result for scanned PDFs. Prefer their
+        # readiness over the small local text layer, which is often only a few
+        # characters even when every page has already been read.
+        if ready:
             label = "内容摘要可供参考" if len(ready) >= expected > 0 else "部分内容可供参考"
+        elif item["indexedChars"]:
+            label = "仅少量文字可供参考" if item["mime"] == "application/pdf" and item["indexedChars"] < 1000 else "已提取文字可供参考"
         elif item["cloudReadable"]:
             label = "可供AI读取"
         else:
