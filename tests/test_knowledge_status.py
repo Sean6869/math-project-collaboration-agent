@@ -106,6 +106,18 @@ class KnowledgeStatusTest(unittest.TestCase):
         self.assertEqual(item["chunkCount"], 5)
         self.assertEqual(item["statusLabel"], "内容摘要可供参考")
 
+    def test_somark_markdown_images_are_selected_only_for_visual_questions(self):
+        image = "https://example.com/math-figure.jpg"
+        markdown = f"# 例题\n![]({image})\n这是图形说明。"
+        with app.database() as db:
+            db.execute(
+                "INSERT INTO files VALUES(?,?,?,?,?,?,?,?,NULL)",
+                ("somark", "数学笔记.md", "somark.md", "text/markdown", len(markdown),
+                 markdown, app.utc_now(), "teacher"),
+            )
+        self.assertEqual(app.knowledge_image_urls({}, "请看图分析这个几何图形"), [image])
+        self.assertEqual(app.knowledge_image_urls({}, "请解释什么是同类项"), [])
+
     @mock.patch.object(app, "pdf_page_count", return_value=10)
     def test_ready_short_document_and_missing_key(self, pages):
         self.document()

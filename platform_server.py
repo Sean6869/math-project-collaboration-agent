@@ -1298,6 +1298,52 @@ def knowledge_query_terms(query: str) -> list[str]:
     return list(dict.fromkeys(term for term in terms if len(term) >= 2))[:40]
 
 
+MARKDOWN_IMAGE_RE = re.compile(r"!\[[^\]]*\]\((https?://[^)\s]+)\)", re.IGNORECASE)
+
+
+def markdown_image_urls(text: str, limit: int = 2) -> list[str]:
+    """Return a small, safe set of remote images embedded in Markdown."""
+    urls = []
+    for raw in MARKDOWN_IMAGE_RE.findall(text or ""):
+        url = raw.rstrip('.,;')
+        parsed = urlparse(url)
+        if parsed.scheme != "https" or not parsed.netloc:
+            continue
+        if url not in urls:
+            urls.append(url)
+        if len(urls) >= limit:
+            break
+    return urls
+
+
+def knowledge_image_urls(state: dict, query: str, limit: int = 2) -> list[str]:
+    """Select Markdown images only when the question is clearly visual."""
+    if not re.search(r"图|图片|图像|看图|下图|如图|几何体|图形|表格|柱状图|函数图象", str(query or "")):
+        return []
+    config = state.get("teacherConfig", {}) if isinstance(state.get("teacherConfig"), dict) else {}
+    approved = {str(name) for name in config.get("knowledge", []) if isinstance(name, str)}
+    terms = knowledge_query_terms(query)
+    with database() as db:
+        rows = db.execute(
+            "SELECT original_name,extracted_text,uploaded_by FROM files "
+            "WHERE uploaded_by IN ('teacher','builtin-knowledge') AND extracted_text<>'' "
+            "AND lower(original_name) LIKE '%.md' ORDER BY uploaded_at DESC"
+        ).fetchall()
+    ranked = []
+    for row in rows:
+        if row["uploaded_by"] == "teacher" and approved and row["original_name"] not in approved:
+            continue
+        text = row["extracted_text"] or ""
+        urls = markdown_image_urls(text, limit=limit)
+        if not urls:
+            continue
+        lowered = (row["original_name"] + "\n" + text).lower()
+        score = sum(min(lowered.count(term), 8) for term in terms)
+        ranked.append((score, row["original_name"], urls))
+    ranked.sort(key=lambda item: (-item[0], item[1]))
+    return ranked[0][2][:limit] if ranked else []
+
+
 def knowledge_context(state: dict, query: str, *, max_documents: int = 4, max_chars: int = 6000) -> tuple[str, list[str]]:
     """Select compact, query-relevant excerpts from approved and built-in materials."""
     config = state.get("teacherConfig", {}) if isinstance(state.get("teacherConfig"), dict) else {}
@@ -1547,6 +1593,7 @@ def ark_free_messages(state: dict, group: int, prompt: str, history: list[dict])
     current_stage = class_current_stage({"currentStage": state.get("currentStage", 1)})
     stage_boundary = f"阶段{current_stage + 1}及之后" if current_stage < 5 else "当前阶段之后"
     knowledge, sources = knowledge_context(state, prompt)
+    image_urls = knowledge_image_urls(state, prompt)
     system = (
         "你是‘迈谱 Maple’学生小组自由工作区的初中数学助手。"
         + student_math_scope(state)
@@ -1570,7 +1617,13 @@ def ark_free_messages(state: dict, group: int, prompt: str, history: list[dict])
         content = str(item.get("content", "")).strip()[:1200]
         if content:
             messages.append({"role": item["role"], "content": content})
-    messages.append({"role": "user", "content": prompt})
+    if image_urls:
+        messages.append({"role": "user", "content": [
+            {"type": "text", "text": prompt},
+            *({"type": "image_url", "image_url": {"url": url}} for url in image_urls),
+        ]})
+    else:
+        messages.append({"role": "user", "content": prompt})
     return messages
 
 
@@ -1595,11 +1648,13 @@ def ark_document_request(state: dict, group: int, prompt: str, history: list[dic
     system = base_messages[0]["content"]
     sources = [item["name"] for item in documents]
     content = [{"type": "input_file", "file_id": item["fileId"]} for item in documents]
+    image_urls = knowledge_image_urls(state, prompt)
+    content.extend({"type": "input_image", "image_url": url} for url in image_urls)
     content.append({
         "type": "input_text",
         "text": (
             f"学生问题：{prompt}\n本轮附带资料：{json.dumps(sources, ensure_ascii=False)}。"
-            "请读取附带PDF（含扫描页）后回答，只引用文件中能够确认的内容，并在对应段落末尾标注[文件名]。"
+            "请读取附带资料（含扫描页和相关图片）后回答，只引用文件中能够确认的内容，并在对应段落末尾标注[文件名]。"
         ),
     })
     input_items = [{"role": "system", "content": system}]
@@ -1974,7 +2029,7 @@ def knowledge_snapshot() -> dict:
         rows = db.execute(
             "SELECT f.id,f.original_name AS name,f.stored_name,f.mime,f.size,"
             "f.uploaded_at AS uploadedAt,f.uploaded_by AS uploadedBy,"
-            "length(trim(f.extracted_text)) AS indexedChars,"
+            "length(trim(f.extracted_text)) AS indexedChars,f.extracted_text AS extractedText,"
             "coalesce(p.status,'') AS providerStatus,coalesce(p.provider_file_id,'') AS providerId,"
             "coalesce(p.expires_at,0) AS providerExpiresAt,coalesce(p.updated_at,'') AS providerUpdatedAt,"
             "coalesce(p.error,'') AS providerError "
@@ -1990,6 +2045,7 @@ def knowledge_snapshot() -> dict:
     for row in rows:
         item = dict(row)
         stored = item.pop("stored_name")
+        extracted_text = item.pop("extractedText") or ""
         provider_id = item.pop("providerId")
         records = by_file.get(item["id"], [])
         action = progress.get(item["id"], {}) if running else {}
@@ -1998,6 +2054,7 @@ def knowledge_snapshot() -> dict:
         present = (UPLOAD_DIR / stored).is_file()
         pages = pdf_page_count(stored) if present and item["mime"] == "application/pdf" else 0
         expected = math.ceil(pages / 20) if pages > 24 else 0
+        image_count = len(MARKDOWN_IMAGE_RE.findall(extracted_text)) if str(item["name"]).lower().endswith(".md") else 0
         direct = bool(present and configured and item["uploadedBy"] == "builtin-knowledge"
                       and item["providerStatus"] == "active" and provider_id
                       and item["providerExpiresAt"] > now and 0 < pages <= 24 and not records)
@@ -2007,6 +2064,7 @@ def knowledge_snapshot() -> dict:
             "filePresent": present, "pageCount": pages, "chunkCount": len(ready),
             "chunkTotal": expected, "chunkFailed": sum(c["status"] == "failed" for c in records),
             "chunkProcessing": sum(c["status"] == "processing" for c in records),
+            "imageCount": image_count,
             "cloudChunkCount": len(cloud_chunks) if configured else 0,
             "localSearchable": local, "cloudReadable": direct or bool(configured and cloud_chunks),
             "searchable": local or direct or bool(configured and cloud_chunks),
@@ -2020,6 +2078,8 @@ def knowledge_snapshot() -> dict:
         # characters even when every page has already been read.
         if ready:
             label = "内容摘要可供参考" if len(ready) >= expected > 0 else "部分内容可供参考"
+        elif image_count and item["indexedChars"] and configured:
+            label = "文字和图片可供参考"
         elif item["indexedChars"]:
             label = "仅少量文字可供参考" if item["mime"] == "application/pdf" and item["indexedChars"] < 1000 else "已提取文字可供参考"
         elif item["cloudReadable"]:
@@ -2027,6 +2087,8 @@ def knowledge_snapshot() -> dict:
         else:
             label = "暂未识别出可用内容"
         details = [f"已提取 {item['indexedChars']} 字"] if item["indexedChars"] else []
+        if image_count:
+            details.append(f"包含 {image_count} 张图片，提问图片相关内容时会读取相关图片")
         if expected:
             details.append(f"已完成 {len(ready)}/{expected} 部分")
         if not present:
