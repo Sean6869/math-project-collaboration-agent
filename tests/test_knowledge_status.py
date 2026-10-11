@@ -118,6 +118,21 @@ class KnowledgeStatusTest(unittest.TestCase):
         self.assertEqual(app.knowledge_image_urls({}, "请看图分析这个几何图形"), [image])
         self.assertEqual(app.knowledge_image_urls({}, "请解释什么是同类项"), [])
 
+    def test_builtin_markdown_is_ready_without_cloud_recognition(self):
+        markdown = "# 七年级数学\n这是已经由 SoMark 提取的教材文字。"
+        (app.UPLOAD_DIR / "somark-ready.md").write_text(markdown, encoding="utf-8")
+        with app.database() as db:
+            db.execute(
+                "INSERT INTO files VALUES(?,?,?,?,?,?,?,?,NULL)",
+                ("somark-ready", "数学教材.md", "somark-ready.md", "text/markdown", len(markdown),
+                 markdown, app.utc_now(), "builtin-knowledge"),
+            )
+        item = app.knowledge_snapshot()["files"][0]
+        self.assertEqual(item["statusLabel"], "已提取文字可供参考")
+        self.assertEqual(item["taskStatus"], "文字内容已就绪")
+        self.assertIn("已提取文字，可供AI参考", item["statusDetail"])
+        self.assertTrue(item["searchable"])
+
     @mock.patch.object(app, "pdf_page_count", return_value=10)
     def test_ready_short_document_and_missing_key(self, pages):
         self.document()

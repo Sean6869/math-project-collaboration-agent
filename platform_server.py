@@ -146,6 +146,7 @@ ROLE_NAMES = ["建模者", "质疑者", "记录者", "解释者", "验证者", "
 ALLOWED_UPLOADS = {
     ".pdf", ".docx", ".txt", ".md", ".csv", ".png", ".jpg", ".jpeg", ".webp",
 }
+TEACHER_KNOWLEDGE_UPLOADS = {".pdf", ".docx", ".md"}
 
 
 def utc_now() -> str:
@@ -2055,6 +2056,7 @@ def knowledge_snapshot() -> dict:
         pages = pdf_page_count(stored) if present and item["mime"] == "application/pdf" else 0
         expected = math.ceil(pages / 20) if pages > 24 else 0
         image_count = len(MARKDOWN_IMAGE_RE.findall(extracted_text)) if str(item["name"]).lower().endswith(".md") else 0
+        is_markdown = str(item["name"]).lower().endswith(".md")
         direct = bool(present and configured and item["uploadedBy"] == "builtin-knowledge"
                       and item["providerStatus"] == "active" and provider_id
                       and item["providerExpiresAt"] > now and 0 < pages <= 24 and not records)
@@ -2101,6 +2103,12 @@ def knowledge_snapshot() -> dict:
             task = action["phase"]
         elif item["chunkFailed"] or (item["providerStatus"] == "failed" and not expected):
             task = "部分识别失败" if local else "识别失败"
+        elif is_markdown and local:
+            # Markdown converted by SoMark is already the searchable source.
+            # It does not need the PDF cloud-recognition pipeline; treating it
+            # as a stopped cloud job makes a successfully imported file look
+            # unavailable to teachers.
+            task = "文字和图片已就绪" if image_count else "文字内容已就绪"
         elif expected and len(ready) < expected:
             task = "排队等待分块识别" if running else "识别未完成，后台任务已停止"
         elif not expected and not direct:
@@ -2123,6 +2131,8 @@ def knowledge_snapshot() -> dict:
             "识别未完成，后台任务已停止": "识别已停止，尚未完成，请联系管理员",
             "云端未就绪，后台任务已停止": "识别已停止，资料尚不可读取，请联系管理员",
             "等待云端解析结果": "等待识别结果",
+            "文字内容已就绪": "已提取文字，可供AI参考",
+            "文字和图片已就绪": "已提取文字和图片，可供AI参考",
             "本轮处理完成": "本次处理已完成",
         }.get(task, task)
         details.append(teacher_task)
@@ -3799,7 +3809,10 @@ class Handler(SimpleHTTPRequestHandler):
 
     def store_upload(self, session: dict, name: str, raw: bytes) -> None:
         suffix = Path(name).suffix.lower()
-        if not name or suffix not in ALLOWED_UPLOADS:
+        allowed = TEACHER_KNOWLEDGE_UPLOADS if session["role"] == "teacher" else ALLOWED_UPLOADS
+        if not name or suffix not in allowed:
+            if session["role"] == "teacher":
+                raise ValueError("教师补充材料仅支持 PDF、Word（.docx）和 Markdown（.md）文件")
             raise ValueError("不支持此文件类型")
         if not raw or len(raw) > MAX_UPLOAD_BYTES:
             raise ValueError("文件为空或超过上传限制")
