@@ -1606,7 +1606,7 @@ def ark_free_messages(state: dict, group: int, prompt: str, history: list[dict])
         f"教师当前只开放到阶段{current_stage}。若学生询问平台操作，只能引用当前阶段路径：{'；'.join(STAGE_HINT_ROUTES[current_stage])}。"
         f"不得建议进入{stage_boundary}的页面，也不得使用尚未开放页面的名称。"
         + MATH_FORMAT_RULE
-        + "回答使用清晰的Markdown。"
+        + "回答使用清晰的Markdown。默认直接回答核心问题，控制在2至4个要点、约300至500个汉字内；学生明确要求详细说明时再展开。"
         f"当前项目上下文：{free_ai_context(state, group)}"
         f"\n本次检索到的知识库来源：{json.dumps(sources, ensure_ascii=False)}"
         f"\n知识库摘录：\n{knowledge or '本次没有检索到可用正文摘录。'}"
@@ -1632,7 +1632,7 @@ def ark_text_request(messages: list[dict], stream: bool) -> urllib.request.Reque
     api_key = os.environ.get("ARK_API_KEY", "")
     payload = json.dumps({
         "model": ARK_TEXT_MODEL, "messages": messages, "stream": stream,
-        "temperature": 0.2, "max_tokens": 1000,
+        "temperature": 0.2, "max_tokens": 600,
     }, ensure_ascii=False).encode()
     return urllib.request.Request(
         ARK_TEXT_URL, data=payload,
@@ -1664,7 +1664,7 @@ def ark_document_request(state: dict, group: int, prompt: str, history: list[dic
     input_items.append({"role": "user", "content": content})
     payload = json.dumps({
         "model": ARK_TEXT_MODEL, "input": input_items, "stream": stream,
-        "max_output_tokens": 1000, "thinking": {"type": "disabled"},
+        "max_output_tokens": 600, "thinking": {"type": "disabled"},
     }, ensure_ascii=False).encode()
     return urllib.request.Request(
         ARK_RESPONSES_URL, data=payload,
@@ -3437,6 +3437,7 @@ class Handler(SimpleHTTPRequestHandler):
         self.send_response(HTTPStatus.OK)
         self.send_header("Content-Type", "text/event-stream; charset=utf-8")
         self.send_header("Cache-Control", "no-cache, no-store")
+        self.send_header("X-Accel-Buffering", "no")
         self.send_header("Connection", "close")
         self.end_headers()
         self.close_connection = True
