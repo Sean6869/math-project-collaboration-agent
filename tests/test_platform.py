@@ -775,6 +775,7 @@ class PlatformTest(unittest.TestCase):
             request = urlopen.call_args.args[0]
             payload = json.loads(request.data)
             self.assertTrue(payload["stream"])
+            self.assertEqual(payload["thinking"], {"type": "disabled"})
             self.assertNotIn("speed", payload)
             self.assertEqual(urlopen.call_args.kwargs["timeout"], app.ARK_TEXT_TIMEOUT_SECONDS)
         finally:

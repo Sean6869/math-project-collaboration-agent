@@ -1345,7 +1345,7 @@ def knowledge_image_urls(state: dict, query: str, limit: int = 2) -> list[str]:
     return ranked[0][2][:limit] if ranked else []
 
 
-def knowledge_context(state: dict, query: str, *, max_documents: int = 4, max_chars: int = 6000) -> tuple[str, list[str]]:
+def knowledge_context(state: dict, query: str, *, max_documents: int = 3, max_chars: int = 4200) -> tuple[str, list[str]]:
     """Select compact, query-relevant excerpts from approved and built-in materials."""
     config = state.get("teacherConfig", {}) if isinstance(state.get("teacherConfig"), dict) else {}
     approved = {str(name) for name in config.get("knowledge", []) if isinstance(name, str)}
@@ -1612,10 +1612,10 @@ def ark_free_messages(state: dict, group: int, prompt: str, history: list[dict])
         f"\n知识库摘录：\n{knowledge or '本次没有检索到可用正文摘录。'}"
     )
     messages = [{"role": "system", "content": system}]
-    for item in history[-6:]:
+    for item in history[-4:]:
         if not isinstance(item, dict) or item.get("role") not in {"user", "assistant"}:
             continue
-        content = str(item.get("content", "")).strip()[:1200]
+        content = str(item.get("content", "")).strip()[:800]
         if content:
             messages.append({"role": item["role"], "content": content})
     if image_urls:
@@ -1633,6 +1633,7 @@ def ark_text_request(messages: list[dict], stream: bool) -> urllib.request.Reque
     payload = json.dumps({
         "model": ARK_TEXT_MODEL, "messages": messages, "stream": stream,
         "temperature": 0.2, "max_tokens": 600,
+        "thinking": {"type": "disabled"},
     }, ensure_ascii=False).encode()
     return urllib.request.Request(
         ARK_TEXT_URL, data=payload,
