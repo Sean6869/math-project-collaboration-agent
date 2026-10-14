@@ -247,63 +247,6 @@ input[readonly],textarea[readonly]{background:#f6f8fb!important;color:#475467}
 .knowledge-file-status{width:100%;max-width:240px;text-align:left;justify-self:start}.knowledge-file-status p{margin:6px 0 0;line-height:1.5;overflow-wrap:anywhere}
 @media(max-width:700px){.knowledge-summary{grid-template-columns:1fr}.knowledge-section-head{display:block}.knowledge-upload{margin-top:12px}.knowledge-file{grid-template-columns:40px minmax(0,1fr)}.knowledge-file-icon{width:40px;height:40px}.knowledge-file-status,.knowledge-file-actions{grid-column:2}.knowledge-file-status{max-width:none}.knowledge-file-meta{gap:6px;flex-wrap:wrap}.knowledge-file-actions .btn{flex:1;justify-content:center}}
 
-/* Claymorphism design system: one shared visual source for every platform surface. */
-:root{
- --ink:#23324a;--ink2:#314765;--muted:#6d7d95;--line:rgba(130,154,187,.22);--bg:#edf3fb;--card:#f8fbff;
- --blue:#4f7df3;--blue2:#78a1ff;--teal:#43a99a;--green:#42a879;--orange:#c98a35;--red:#c96672;--purple:#8a78d7;
- --soft-blue:#e3edff;--soft-green:#e2f5ee;--soft-orange:#fff0d4;--soft-red:#fbe6ea;
- --radius:24px;
- --shadow:9px 9px 20px rgba(63,84,119,.13),inset 4px 4px 9px rgba(255,255,255,.88),inset -3px -3px 7px rgba(73,96,130,.08);
- --clay-raised:9px 9px 20px rgba(63,84,119,.13),inset 4px 4px 9px rgba(255,255,255,.88),inset -3px -3px 7px rgba(73,96,130,.08);
- --clay-soft:5px 5px 12px rgba(63,84,119,.1),inset 3px 3px 7px rgba(255,255,255,.82),inset -2px -2px 5px rgba(73,96,130,.07);
- --clay-inset:inset 4px 4px 9px rgba(72,94,126,.12),inset -4px -4px 9px rgba(255,255,255,.9);
- --clay-pressed:2px 2px 5px rgba(63,84,119,.08),inset 8px 8px 16px rgba(72,94,126,.16),inset -4px -4px 9px rgba(255,255,255,.62);
- --clay-ease:cubic-bezier(.34,1.56,.64,1)
-}
-html,body{background:linear-gradient(145deg,#eaf1fb 0%,#f7faff 48%,#e9f2fb 100%)}
-.topbar{background:rgba(248,251,255,.94);border-color:rgba(255,255,255,.72);box-shadow:0 7px 18px rgba(64,85,119,.09),inset 0 -2px 5px rgba(80,104,139,.05)}
-.sidebar{background:linear-gradient(180deg,#f5f9ff,#edf4fd);border-color:rgba(255,255,255,.78);box-shadow:7px 0 18px rgba(64,85,119,.08),inset -3px 0 7px rgba(87,108,140,.05)}
-.nav a,.nav-stage-locked,.nav-more summary{border-radius:16px;transition:transform .3s var(--clay-ease),box-shadow .3s var(--clay-ease),background .2s ease}
-.nav a:hover,.nav a.active{background:linear-gradient(145deg,#dce9ff,#eef4ff);box-shadow:var(--clay-soft)}
-.nav a.active{box-shadow:var(--clay-soft),inset 4px 0 #5e88f4}
-.main{padding-top:28px}
-.card,.stage-card,.task,.decision-card,.req-card,.help-level,.math-shot,.knowledge-file,.locked-rule,.project-choice,.dashboard-status,.learning-focus,.modal{
- border:1px solid rgba(255,255,255,.78);border-radius:var(--radius);background:linear-gradient(145deg,#fbfdff,#edf4fd);box-shadow:var(--clay-raised)
-}
-.card.flat{box-shadow:var(--clay-soft)}
-.stage-card,.task,.decision-card,.req-card,.help-level,.math-shot,.knowledge-file,.locked-rule,.project-choice{border-radius:18px;box-shadow:var(--clay-soft)}
-.btn,.auth-role-tab,.desmos-tool-tab{
- border:1px solid rgba(255,255,255,.7);border-radius:16px;background:linear-gradient(145deg,#ffffff,#e8eff8);box-shadow:var(--clay-soft);transition:transform .3s var(--clay-ease),box-shadow .3s var(--clay-ease),filter .2s ease
-}
-.btn:hover,.auth-role-tab:hover,.desmos-tool-tab:hover{transform:translateY(-3px);box-shadow:11px 11px 22px rgba(63,84,119,.14),inset 4px 4px 9px rgba(255,255,255,.9),inset -3px -3px 7px rgba(73,96,130,.08)}
-.btn:active,.auth-role-tab:active,.desmos-tool-tab:active,.project-choice:active{transform:scaleX(1.04) scaleY(.92);box-shadow:var(--clay-pressed)}
-.btn.primary{border-color:rgba(255,255,255,.36);background:linear-gradient(145deg,#78a1ff,#4f7df3);box-shadow:8px 8px 18px rgba(52,92,183,.24),inset 4px 4px 8px rgba(255,255,255,.38),inset -3px -3px 7px rgba(32,65,145,.2)}
-.btn.green{border-color:rgba(255,255,255,.38);background:linear-gradient(145deg,#6bc9ba,#339d8e);box-shadow:8px 8px 18px rgba(40,130,117,.2),inset 4px 4px 8px rgba(255,255,255,.4),inset -3px -3px 7px rgba(28,102,92,.18)}
-.btn.warn{background:linear-gradient(145deg,#fff6df,#ffe4ad)}.btn.danger{background:linear-gradient(145deg,#fff1f3,#f8d7dd)}
-.btn:disabled{box-shadow:var(--clay-inset);filter:saturate(.55)}
-.pill,.badge,.chip,.kpi,.operator-picker{border-color:rgba(255,255,255,.7);border-radius:999px;background:linear-gradient(145deg,#fbfdff,#e9f1fa);box-shadow:3px 3px 8px rgba(63,84,119,.09),inset 2px 2px 5px rgba(255,255,255,.82)}
-.field input:not([type="file"]):not([type="checkbox"]),.field textarea,.field select,.quota-input,.copy-field,.ai-composer textarea{
- border:1px solid rgba(255,255,255,.7);border-radius:16px;background:#edf3fa;box-shadow:var(--clay-inset);transition:box-shadow .2s ease,border-color .2s ease
-}
-.field input:not([type="file"]):not([type="checkbox"]):focus,.field textarea:focus,.field select:focus,.copy-field:focus-within,.ai-composer textarea:focus{border-color:rgba(90,133,239,.46);box-shadow:var(--clay-inset),0 0 0 4px rgba(79,125,243,.11)}
-.table-wrap,.matrix,.canvas-wrap{border-color:rgba(255,255,255,.76);border-radius:20px;box-shadow:var(--clay-inset);background:#eef4fb}
-.table{background:transparent}.table th{background:#e8f0fa}.table tr:hover td,.table .selected td{background:rgba(222,235,255,.72)}
-.progress{padding:2px;height:12px;background:#e4ebf5;box-shadow:var(--clay-inset)}.progress>i{background:linear-gradient(90deg,#6f98fa,#65c7b8);box-shadow:inset 2px 2px 4px rgba(255,255,255,.42)}
-.tabs{padding:5px;border:0;border-radius:18px;background:#e9f0f8;box-shadow:var(--clay-inset)}.tab{border:0;border-radius:13px}.tab.active{background:linear-gradient(145deg,#fff,#e4edfa);box-shadow:var(--clay-soft)}
-.toggle{box-shadow:var(--clay-inset)}.toggle::after{box-shadow:var(--clay-soft)}
-.callout,.success,.danger-box,.hint-reply,.ai-message-body blockquote{border-radius:16px}
-.ai-recent-item{border-radius:15px}.ai-recent-item:hover,.ai-recent-item.current{background:linear-gradient(145deg,#e1ebff,#eef4ff);box-shadow:var(--clay-soft)}
-.ai-message{border-color:rgba(255,255,255,.72);border-radius:8px 22px 22px;background:linear-gradient(145deg,#fbfdff,#edf4fb);box-shadow:var(--clay-soft)}
-.ai-message.user{border-color:rgba(255,255,255,.58);border-radius:22px 8px 22px 22px;background:linear-gradient(145deg,#e8f0ff,#dce9ff)}
-.ai-composer{border-color:rgba(255,255,255,.8);background:linear-gradient(180deg,#f9fcff,#eef5fd)}
-.modal-mask{background:rgba(37,52,75,.3);backdrop-filter:blur(8px)}.modal{border-radius:28px}
-.toast{border:1px solid rgba(255,255,255,.24);border-radius:18px;background:linear-gradient(145deg,#354a68,#24354e);box-shadow:12px 12px 28px rgba(27,42,65,.25),inset 3px 3px 7px rgba(255,255,255,.13)}
-.auth-main{background:linear-gradient(145deg,#eaf1fb,#f8fbff)}
-.auth-card{border-color:rgba(255,255,255,.85);border-radius:28px;background:linear-gradient(145deg,#fbfdff,#ecf3fb);box-shadow:14px 14px 32px rgba(63,84,119,.14),inset 5px 5px 11px rgba(255,255,255,.9),inset -4px -4px 9px rgba(73,96,130,.08)}
-.auth-role-switch{padding:6px;border-radius:18px;background:#e7eef7;box-shadow:var(--clay-inset)}.auth-role-tab{border-radius:13px;box-shadow:none}.auth-role-tab.active{background:linear-gradient(145deg,#fff,#e8f0fa);box-shadow:var(--clay-soft)}
+/* Keep both login roles on one shared card size. */
 .auth-forms{display:grid}.auth-form{grid-area:1/1}.auth-form[hidden]{display:block!important;visibility:hidden;pointer-events:none}
-.project-choice:hover,.project-choice.selected{border-color:rgba(111,152,250,.42);background:linear-gradient(145deg,#e4edff,#f1f5ff);transform:translateY(-2px)}
-.knowledge-file-icon,.stage1-material-icon,.ai-empty-mark{border-radius:18px;box-shadow:var(--clay-soft)}
-@media(prefers-reduced-motion:reduce){.btn,.auth-role-tab,.desmos-tool-tab,.project-choice,.nav a{transition:none}}
-@media(max-width:800px){.card,.dashboard-status,.learning-focus,.modal,.auth-card{border-radius:22px}.sidebar{box-shadow:0 7px 16px rgba(64,85,119,.08)}}
 
