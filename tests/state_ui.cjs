@@ -12,6 +12,8 @@ const root=path.resolve(__dirname,'..');
   const student=await browser.newContext(),teacher=await browser.newContext();
   assert((await student.request.post(base+'/api/login',{data:{role:'student',classCode:'STATECLASS',groupId:1,groupCode:'TEAM01'}})).ok());
   assert((await teacher.request.post(base+'/api/login',{data:{role:'teacher',username:'state_teacher',password:'StateTeacher#2026'}})).ok());
+  const createdProject=await (await teacher.request.post(base+'/api/projects',{data:{action:'create',name:'状态测试项目'}})).json();
+  assert((await student.request.post(base+'/api/projects',{data:{action:'select',projectId:createdProject.projectId}})).ok());
   const page=await student.newPage(),errors=[];page.on('pageerror',error=>errors.push(error.message));
   const getState=async request=>(await (await request.get(base+'/api/state')).json()).state;
   const putState=async(request,state)=>{const response=await request.put(base+'/api/state',{data:{state}});assert(response.ok(),await response.text());return (await response.json()).state};
@@ -73,7 +75,7 @@ const root=path.resolve(__dirname,'..');
 
   for(const viewport of [{width:390,height:844},{width:820,height:1180}]){await page.setViewportSize(viewport);for(const file of ['stage4-evidence.html','math-tools.html','math-visualizations.html','stage5-rehearsal.html']){await page.goto(base+'/student/'+file);await page.locator('.shell').waitFor();assert(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth+2),`${file} overflows at ${viewport.width}px`)}}
   await page.setViewportSize({width:1440,height:900});
-  await page.goto(base+'/?current');await page.getByText('进入学生端',{exact:true}).waitFor();const teacherPortal=await teacher.newPage();await teacherPortal.goto(base+'/?current');await teacherPortal.getByText('进入教师端',{exact:true}).waitFor();await teacherPortal.close();
+  await page.goto(base+'/?current');await page.getByText('选择项目',{exact:true}).waitFor();await page.getByText(/\d{4}-\d{2}-\d{2} - 状态测试项目/).waitFor();const teacherPortal=await teacher.newPage();await teacherPortal.goto(base+'/?current');await teacherPortal.getByText('选择项目',{exact:true}).waitFor();await teacherPortal.close();
   for(const [role,context] of [['student',student],['teacher',teacher]]){const audit=await context.newPage();audit.on('pageerror',error=>errors.push(error.message));for(const file of fs.readdirSync(path.join(root,role)).filter(name=>name.endsWith('.html'))){await audit.goto(base+'/'+role+'/'+file);await audit.waitForFunction(()=>document.querySelector('#root')?.innerHTML.length>0);assert.equal(await audit.getByText('平台暂时不可用',{exact:true}).count(),0,role+'/'+file)}await audit.close()}
   assert.deepEqual(errors,[]);console.log('PASS: atomic teacher sync, stage 4 context, speaker records, no save redirects, compressed multi-photo upload, independent math tools, rehearsal records, process review, phone/tablet layout');
  }finally{if(browser)await browser.close();const exited=once(child,'exit');child.stdin.end();await exited}

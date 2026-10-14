@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import csv
+import contextvars
 import functools
 import gzip
 import hashlib
@@ -34,6 +35,7 @@ from urllib.parse import parse_qs, quote, unquote, urlparse
 from xml.etree import ElementTree
 
 ROOT = Path(__file__).resolve().parent
+PROJECT_CONTEXT = contextvars.ContextVar("mpt_project_id", default="")
 
 
 def load_env_file(path: Path) -> None:
@@ -112,6 +114,10 @@ DESMOS_API_KEY = os.environ.get("DESMOS_API_KEY", "").strip()
 ARK_TEXT_TIMEOUT_SECONDS = env_seconds("ARK_TEXT_TIMEOUT_SECONDS", 60)
 ARK_IMAGE_TIMEOUT_SECONDS = env_seconds("ARK_IMAGE_TIMEOUT_SECONDS", 120)
 MATH_FORMAT_RULE = "所有数学表达式必须用 $...$、$$...$$、\\(...\\) 或 \\[...\\] 包裹；不得裸露输出LaTex命令。"
+FREE_AI_STYLE_RULE = (
+    "回答采用适合学生阅读的简洁结构。需要突出关键示例或重要提醒时，最多选择一段并以Markdown引用符号‘> ’开头；"
+    "最后另起一行，用加粗文字给出学生接下来可以立即执行的一步。"
+)
 FREE_AI_QUOTA_DEFAULT = 30
 FREE_AI_HISTORY_LIMIT = 24
 FREE_AI_CONVERSATION_LIMIT = 20
@@ -457,6 +463,10 @@ def init_database() -> None:
               token_hash TEXT PRIMARY KEY, role TEXT NOT NULL, teacher_id INTEGER, group_no INTEGER,
               expires_at INTEGER NOT NULL, created_at TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS projects (
+              id TEXT PRIMARY KEY, name TEXT NOT NULL, created_at TEXT NOT NULL,
+              created_by INTEGER
+            );
             CREATE TABLE IF NOT EXISTS states (
               scope TEXT PRIMARY KEY, data TEXT NOT NULL, updated_at TEXT NOT NULL
             );
@@ -515,10 +525,27 @@ def init_database() -> None:
         session_columns = {row[1] for row in db.execute("PRAGMA table_info(sessions)").fetchall()}
         if "teacher_id" not in session_columns:
             db.execute("ALTER TABLE sessions ADD COLUMN teacher_id INTEGER")
+        if "project_id" not in session_columns:
+            db.execute("ALTER TABLE sessions ADD COLUMN project_id TEXT")
         file_columns = {row[1] for row in db.execute("PRAGMA table_info(files)").fetchall()}
         if "group_no" not in file_columns:
             db.execute("ALTER TABLE files ADD COLUMN group_no INTEGER")
         db.execute("DELETE FROM sessions WHERE expires_at < ?", (int(time.time()),))
+        if not db.execute("SELECT 1 FROM projects LIMIT 1").fetchone():
+            legacy = db.execute("SELECT data FROM states WHERE scope='class'").fetchone()
+            legacy_state = json.loads(legacy["data"]) if legacy else {}
+            legacy_name = str(legacy_state.get("project", "")).strip()
+            if legacy_name:
+                project_id = "legacy"
+                db.execute(
+                    "INSERT INTO projects(id,name,created_at,created_by) VALUES(?,?,?,NULL)",
+                    (project_id, legacy_name[:80], utc_now()),
+                )
+                for row in db.execute("SELECT scope,data,updated_at FROM states WHERE scope NOT LIKE 'project:%'").fetchall():
+                    db.execute(
+                        "INSERT OR IGNORE INTO states(scope,data,updated_at) VALUES(?,?,?)",
+                        (f"project:{project_id}:{row['scope']}", row["data"], row["updated_at"]),
+                    )
     lesson_plans.initialize(sys.modules[__name__])
     env = os.environ.get("MPT_ENV", "development").lower()
     supplied = {
@@ -550,7 +577,13 @@ def init_database() -> None:
                 SETUP_TOKEN_DISPLAY = SETUP_TOKEN_FILE.read_text(encoding="utf-8").strip()
 
 
+def state_scope(scope: str, project_id: str | None = None) -> str:
+    selected = PROJECT_CONTEXT.get() if project_id is None else project_id
+    return f"project:{selected}:{scope}" if selected else scope
+
+
 def state_get(scope: str) -> dict:
+    scope = state_scope(scope)
     with database() as db:
         row = db.execute("SELECT data,updated_at FROM states WHERE scope=?", (scope,)).fetchone()
     if not row:
@@ -559,7 +592,7 @@ def state_get(scope: str) -> dict:
         value = json.loads(row["data"])
         if not isinstance(value, dict):
             return {}
-        if scope.startswith("group:"):
+        if re.search(r"(?:^|:)group:\d+$", scope):
             # Recover only the saved model, never invent past revisions or submissions.
             ensure_model_version(value, row["updated_at"], recover_only=True)
         return value
@@ -568,10 +601,15 @@ def state_get(scope: str) -> dict:
 
 
 def state_put(scope: str, value: dict, preserve_roles: bool = False) -> None:
+    scope = state_scope(scope)
     with database() as db:
-        if scope == 'class':
+        if scope.endswith(':class') or scope == 'class':
             db.execute('BEGIN IMMEDIATE')
-            lesson_plans.preserve_published_project(db, value)
+            lesson_plans.preserve_published_project(
+                db, value,
+                scope,
+                scope.rsplit(':', 1)[0] + ':project-plan' if ':' in scope else 'project-plan',
+            )
         if preserve_roles:
             db.execute("BEGIN IMMEDIATE")
             row = db.execute("SELECT data FROM states WHERE scope=?", (scope,)).fetchone()
@@ -806,7 +844,8 @@ def acknowledge_broadcast(group_no: int, broadcast_id: str) -> dict:
         raise ValueError("广播标识无效，请刷新页面后重试")
     with database() as db:
         db.execute("BEGIN IMMEDIATE")
-        row = db.execute("SELECT data FROM states WHERE scope='broadcast'").fetchone()
+        scope = state_scope("broadcast")
+        row = db.execute("SELECT data FROM states WHERE scope=?", (scope,)).fetchone()
         message = json.loads(row[0]) if row else {}
         if not message.get("broadcast") or message.get("broadcastId") != broadcast_id:
             raise ValueError("广播已更新或撤下，请刷新后查看最新内容")
@@ -815,9 +854,9 @@ def acknowledge_broadcast(group_no: int, broadcast_id: str) -> dict:
         seen.add(group_no)
         message["seenGroups"] = sorted(seen)
         db.execute(
-            "INSERT INTO states(scope,data,updated_at) VALUES('broadcast',?,?) "
+            "INSERT INTO states(scope,data,updated_at) VALUES(?,?,?) "
             "ON CONFLICT(scope) DO UPDATE SET data=excluded.data,updated_at=excluded.updated_at",
-            (json.dumps(message, ensure_ascii=False, separators=(",", ":")), utc_now()),
+            (scope, json.dumps(message, ensure_ascii=False, separators=(",", ":")), utc_now()),
         )
     if first_view:
         record_event("student", group_no, "broadcast_view", None, broadcast_id)
@@ -920,7 +959,9 @@ def session_from_cookie(raw_cookie: str | None) -> dict | None:
         return None
     with database() as db:
         row = db.execute(
-            "SELECT role,teacher_id,group_no,expires_at FROM sessions WHERE token_hash=?", (token_hash(token),)
+            "SELECT s.role,s.teacher_id,s.group_no,s.expires_at,s.project_id,p.name AS project_name,p.created_at AS project_created_at "
+            "FROM sessions s LEFT JOIN projects p ON p.id=s.project_id WHERE s.token_hash=?",
+            (token_hash(token),),
         ).fetchone()
     if not row or row["expires_at"] < int(time.time()):
         return None
@@ -928,11 +969,17 @@ def session_from_cookie(raw_cookie: str | None) -> dict | None:
     if row["role"] == "teacher":
         with database() as db:
             teacher = db.execute("SELECT username,is_admin FROM teachers WHERE id=?", (row["teacher_id"] or 1,)).fetchone()
+    PROJECT_CONTEXT.set(str(row["project_id"] or ""))
+    project_label = ""
+    if row["project_id"] and row["project_name"]:
+        project_label = f"{str(row['project_created_at'])[:10]} - {row['project_name']}"
     return {
         "role": row["role"], "groupId": row["group_no"],
         "teacherId": row["teacher_id"],
         "username": teacher["username"] if teacher else None,
         "isAdmin": bool(teacher and teacher["is_admin"]),
+        "projectId": row["project_id"], "projectName": row["project_name"],
+        "projectLabel": project_label,
     }
 
 
@@ -1606,6 +1653,7 @@ def ark_free_messages(state: dict, group: int, prompt: str, history: list[dict])
         f"教师当前只开放到阶段{current_stage}。若学生询问平台操作，只能引用当前阶段路径：{'；'.join(STAGE_HINT_ROUTES[current_stage])}。"
         f"不得建议进入{stage_boundary}的页面，也不得使用尚未开放页面的名称。"
         + MATH_FORMAT_RULE
+        + FREE_AI_STYLE_RULE
         + "回答使用清晰的Markdown。默认直接回答核心问题，控制在2至4个要点、约300至500个汉字内；学生明确要求详细说明时再展开。"
         f"当前项目上下文：{free_ai_context(state, group)}"
         f"\n本次检索到的知识库来源：{json.dumps(sources, ensure_ascii=False)}"
@@ -2283,6 +2331,14 @@ class Handler(SimpleHTTPRequestHandler):
     def current_session(self) -> dict | None:
         return session_from_cookie(self.headers.get("Cookie"))
 
+    def session_token_hash(self) -> str | None:
+        cookie = SimpleCookie()
+        try:
+            cookie.load(self.headers.get("Cookie") or "")
+            return token_hash(cookie[COOKIE_NAME].value)
+        except (KeyError, AttributeError, TypeError):
+            return None
+
     def secure_cookie_enabled(self) -> bool:
         if os.environ.get("MPT_COOKIE_SECURE", "0") != "1":
             return False
@@ -2312,6 +2368,7 @@ class Handler(SimpleHTTPRequestHandler):
         return True
 
     def do_GET(self) -> None:
+        PROJECT_CONTEXT.set("")
         route = urlparse(self.path)
         if lesson_plans.handle(sys.modules[__name__], self, 'GET', route.path):
             return
@@ -2339,7 +2396,20 @@ class Handler(SimpleHTTPRequestHandler):
             return
         if route.path == "/api/session":
             session = self.current_session()
-            self.json_response({"initialized": is_initialized(), "groupCount": group_count(), "authenticated": bool(session), **(session or {})})
+            self.json_response({"initialized": is_initialized(), "groupCount": group_count(), "authenticated": bool(session),
+                                "projectSelectionRequired": bool(session), **(session or {})})
+            return
+        if route.path == "/api/projects":
+            session = self.require_session()
+            if session:
+                with database() as db:
+                    rows = db.execute("SELECT id,name,created_at FROM projects ORDER BY created_at DESC,rowid DESC").fetchall()
+                self.json_response({
+                    "projects": [{"id": row["id"], "name": row["name"], "createdAt": row["created_at"],
+                                  "label": f"{str(row['created_at'])[:10]} - {row['name']}"} for row in rows],
+                    "selectedProjectId": session.get("projectId"),
+                    "canCreate": session["role"] == "teacher",
+                })
             return
         if route.path == "/api/broadcast":
             session = self.require_session()
@@ -2522,6 +2592,7 @@ class Handler(SimpleHTTPRequestHandler):
         super().do_GET()
 
     def do_POST(self) -> None:
+        PROJECT_CONTEXT.set("")
         if not self.check_origin():
             return
         route = urlparse(self.path).path
@@ -2534,6 +2605,10 @@ class Handler(SimpleHTTPRequestHandler):
                 self.register_teacher(self.read_json())
             elif route == "/api/login":
                 self.login(self.read_json())
+            elif route == "/api/projects":
+                session = self.require_session()
+                if session:
+                    self.choose_project(session, self.read_json())
             elif route == "/api/admin/recover":
                 self.recover_teacher(self.read_json())
             elif route == "/api/admin/factory-reset":
@@ -2644,11 +2719,14 @@ class Handler(SimpleHTTPRequestHandler):
                     body = self.read_json()
                     self.hint(session, {"action": "teacher", "issue": str(body.get("reason", "需要教师介入"))[:300], "type": "教师求助"})
             elif route == "/api/state/reset":
-                if self.require_session("teacher"):
+                session = self.require_session("teacher")
+                if session:
                     with database() as db:
-                        db.execute("DELETE FROM states")
-                        db.execute("DELETE FROM events")
-                        db.execute("DELETE FROM ai_calls")
+                        selected = str(session.get("projectId") or "")
+                        if selected:
+                            db.execute("DELETE FROM states WHERE scope LIKE ?", (f"project:{selected}:%",))
+                        else:
+                            db.execute("DELETE FROM states WHERE scope NOT LIKE 'project:%'")
                     self.json_response({"ok": True})
             else:
                 self.json_response({"error": "接口不存在"}, HTTPStatus.NOT_FOUND)
@@ -2658,6 +2736,7 @@ class Handler(SimpleHTTPRequestHandler):
             self.json_response({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
 
     def do_DELETE(self) -> None:
+        PROJECT_CONTEXT.set("")
         if not self.check_origin():
             return
         route = urlparse(self.path).path
@@ -2724,6 +2803,7 @@ class Handler(SimpleHTTPRequestHandler):
         self.json_response({"ok": True})
 
     def do_PUT(self) -> None:
+        PROJECT_CONTEXT.set("")
         if not self.check_origin():
             return
         if urlparse(self.path).path != "/api/state":
@@ -2899,6 +2979,55 @@ class Handler(SimpleHTTPRequestHandler):
         record_event("system", None, "platform_initialized", None, f"groups={count}")
         self.json_response({"ok": True, "groupCount": count}, HTTPStatus.CREATED)
 
+    def choose_project(self, session: dict, body: dict) -> None:
+        action = str(body.get("action", "select"))
+        session_hash = self.session_token_hash()
+        if not session_hash:
+            self.json_response({"error": "登录状态已失效，请重新登录"}, HTTPStatus.UNAUTHORIZED)
+            return
+        created = False
+        with database() as db:
+            if action == "create":
+                if session["role"] != "teacher":
+                    self.json_response({"error": "新项目由教师创建，学生请选择教师已经建立的项目"}, HTTPStatus.FORBIDDEN)
+                    return
+                name = re.sub(r"\s+", " ", str(body.get("name", "")).strip())
+                if not 1 <= len(name) <= 80:
+                    raise ValueError("请填写1—80字的项目名称")
+                project_id = secrets.token_hex(12)
+                created_at = utc_now()
+                db.execute(
+                    "INSERT INTO projects(id,name,created_at,created_by) VALUES(?,?,?,?)",
+                    (project_id, name, created_at, session.get("teacherId")),
+                )
+                summaries = [
+                    {"id": number, "stage": 1, "status": "准备中", "help": 0, "maxHint": 0,
+                     "teacher": False, "latest": "尚未保存", "issue": "", "progress": 0}
+                    for number in range(1, group_count() + 1)
+                ]
+                initial = {"project": name, "groupCount": group_count(), "groups": summaries,
+                           "currentStage": 1, "aiOpen": True, "freeAiEnabled": True}
+                db.execute(
+                    "INSERT INTO states(scope,data,updated_at) VALUES(?,?,?)",
+                    (state_scope("class", project_id), json.dumps(initial, ensure_ascii=False, separators=(",", ":")), created_at),
+                )
+                created = True
+            elif action == "select":
+                project_id = str(body.get("projectId", ""))
+                row = db.execute("SELECT id FROM projects WHERE id=?", (project_id,)).fetchone()
+                if not row:
+                    raise ValueError("项目不存在，请刷新项目列表后重试")
+            else:
+                raise ValueError("项目操作无效")
+            db.execute("UPDATE sessions SET project_id=? WHERE token_hash=?", (project_id, session_hash))
+            project = db.execute("SELECT id,name,created_at FROM projects WHERE id=?", (project_id,)).fetchone()
+        PROJECT_CONTEXT.set(project_id)
+        record_event(session["role"], session.get("groupId"), "project_create" if created else "project_select", None, project["name"])
+        self.json_response({
+            "ok": True, "created": created, "projectId": project["id"], "projectName": project["name"],
+            "projectLabel": f"{str(project['created_at'])[:10]} - {project['name']}",
+        }, HTTPStatus.CREATED if created else HTTPStatus.OK)
+
     def login(self, body: dict) -> None:
         if not is_initialized():
             self.json_response({"error": "平台尚未初始化"}, HTTPStatus.CONFLICT)
@@ -2939,7 +3068,10 @@ class Handler(SimpleHTTPRequestHandler):
                 return
             token = secrets.token_urlsafe(32)
             expires = int(time.time()) + SESSION_SECONDS
-            db.execute("INSERT INTO sessions(token_hash,role,teacher_id,group_no,expires_at,created_at) VALUES(?,?,?,?,?,?)", (token_hash(token), role, teacher_id, group_no, expires, utc_now()))
+            projects = db.execute("SELECT id FROM projects ORDER BY created_at DESC,rowid DESC LIMIT 2").fetchall()
+            selected_project = projects[0]["id"] if len(projects) == 1 else None
+            db.execute("INSERT INTO sessions(token_hash,role,teacher_id,group_no,expires_at,created_at,project_id) VALUES(?,?,?,?,?,?,?)",
+                       (token_hash(token), role, teacher_id, group_no, expires, utc_now(), selected_project))
         if role == "student" and login_grade:
             persist_class_grade(f"{login_grade}年级")
         with LOGIN_LOCK:
@@ -2947,7 +3079,7 @@ class Handler(SimpleHTTPRequestHandler):
         secure = "; Secure" if self.secure_cookie_enabled() else ""
         cookie = f"{COOKIE_NAME}={token}; Path=/; HttpOnly; SameSite=Strict; Max-Age={SESSION_SECONDS}{secure}"
         record_event(role, group_no, "login", None, "")
-        self.json_response({"ok": True, "role": role, "groupId": group_no}, cookie=cookie)
+        self.json_response({"ok": True, "role": role, "groupId": group_no, "projectId": selected_project}, cookie=cookie)
 
     def recover_teacher(self, body: dict) -> None:
         if not is_initialized():
@@ -3087,6 +3219,7 @@ class Handler(SimpleHTTPRequestHandler):
             db.execute("DELETE FROM teachers WHERE is_admin=0")
             db.execute("DELETE FROM sessions")
             db.execute("DELETE FROM settings WHERE key='teacher_invite_hash'")
+            db.execute("DELETE FROM projects")
         for path in UPLOAD_DIR.iterdir():
             if path.is_file():
                 try:
@@ -3120,7 +3253,17 @@ class Handler(SimpleHTTPRequestHandler):
             else:
                 db.execute("DELETE FROM sessions WHERE role='student' AND group_no>?", (count,))
                 db.execute("DELETE FROM groups WHERE group_no>?", (count,))
-                db.execute("DELETE FROM states WHERE scope LIKE 'group:%' AND CAST(substr(scope,7) AS INTEGER)>?", (count,))
+                stale_group_scopes = []
+                for row in db.execute(
+                    "SELECT scope FROM states WHERE scope LIKE 'group:%' OR scope LIKE 'project:%:group:%'"
+                ).fetchall():
+                    try:
+                        group_number = int(str(row["scope"]).rsplit(":group:", 1)[-1].removeprefix("group:"))
+                    except (TypeError, ValueError):
+                        continue
+                    if group_number > count:
+                        stale_group_scopes.append((row["scope"],))
+                db.executemany("DELETE FROM states WHERE scope=?", stale_group_scopes)
                 db.execute("DELETE FROM events WHERE group_no>?", (count,))
                 db.execute("DELETE FROM ai_calls WHERE group_no>?", (count,))
             db.execute("UPDATE settings SET value=? WHERE key='group_count'", (str(count),))
@@ -3143,7 +3286,7 @@ class Handler(SimpleHTTPRequestHandler):
             db.execute("BEGIN IMMEDIATE")
             groups = [row[0] for row in db.execute("SELECT group_no FROM groups")]
             for group in groups:
-                row = db.execute("SELECT data FROM states WHERE scope=?", (f"group:{group}",)).fetchone()
+                row = db.execute("SELECT data FROM states WHERE scope=?", (state_scope(f"group:{group}"),)).fetchone()
                 state = json.loads(row[0]) if row else {}
                 if not state.get("membersLocked"):
                     continue
@@ -3176,7 +3319,7 @@ class Handler(SimpleHTTPRequestHandler):
                 state["roleRound"] = int(state.get("roleRound", 1)) + 1
                 remember_roles(state)
             for group, state in results:
-                db.execute("UPDATE states SET data=?,updated_at=? WHERE scope=?", (json.dumps(state, ensure_ascii=False), utc_now(), f"group:{group}"))
+                db.execute("UPDATE states SET data=?,updated_at=? WHERE scope=?", (json.dumps(state, ensure_ascii=False), utc_now(), state_scope(f"group:{group}")))
         record_event("teacher", None, "role_rotate", None, f"groups={[group for group, _ in results]}")
         self.json_response({"ok": True, "groups": [group for group, _ in results]})
 

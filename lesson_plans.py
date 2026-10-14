@@ -399,11 +399,13 @@ def publish(app, body, owner=None):
         raise ValueError('班级名称无效')
     with app.database() as db:
         db.execute('BEGIN IMMEDIATE')
-        row = db.execute("SELECT data FROM states WHERE scope='project-plan'").fetchone()
+        project_scope = app.state_scope('project-plan')
+        class_scope = app.state_scope('class')
+        row = db.execute("SELECT data FROM states WHERE scope=?", (project_scope,)).fetchone()
         old = json.loads(row['data']) if row else {}
         if body.get('revision') != old.get('revision', 0):
             raise ValueError('项目已被其他页面修改，请刷新并核对后再保存')
-        row = db.execute("SELECT data FROM states WHERE scope='class'").fetchone()
+        row = db.execute("SELECT data FROM states WHERE scope=?", (class_scope,)).fetchone()
         state = json.loads(row['data']) if row else {}
         info = plan['lessons'][number - 1].get('projectInfo', plan)
         state.update(project=info['title'], className=class_name.strip(), projectType=info['projectType'], projectHours=f"{len(plan['lessons'])}课时")
@@ -442,7 +444,7 @@ def publish(app, body, owner=None):
                 raise ValueError('部分课程支持材料不存在，请刷新后重试')
             resources = [{'id': item, 'name': found[item]['name'], 'mime': found[item]['mime']} for item in resource_ids]
         saved['supportResources'] = resources
-        for scope, value in (('class', state), ('project-plan', saved)):
+        for scope, value in ((class_scope, state), (project_scope, saved)):
             db.execute('INSERT INTO states(scope,data,updated_at) VALUES(?,?,?) ON CONFLICT(scope) DO UPDATE SET data=excluded.data,updated_at=excluded.updated_at',
                        (scope, json.dumps(value, ensure_ascii=False), app.utc_now()))
         db.execute('INSERT INTO events(ts,actor,event_type,data) VALUES(?,?,?,?)',
@@ -450,11 +452,11 @@ def publish(app, body, owner=None):
     return saved
 
 
-def preserve_published_project(db, value):
+def preserve_published_project(db, value, class_scope='class', project_scope='project-plan'):
     """Old full-state saves must not undo a newly published lesson/project."""
-    if not db.execute("SELECT 1 FROM states WHERE scope='project-plan'").fetchone():
+    if not db.execute("SELECT 1 FROM states WHERE scope=?", (project_scope,)).fetchone():
         return
-    row = db.execute("SELECT data FROM states WHERE scope='class'").fetchone()
+    row = db.execute("SELECT data FROM states WHERE scope=?", (class_scope,)).fetchone()
     saved = json.loads(row['data']) if row else {}
     for key in ('project', 'className', 'classGrade', 'projectType', 'projectHours'):
         value.pop(key, None)

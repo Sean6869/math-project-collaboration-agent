@@ -530,11 +530,54 @@ class PlatformTest(unittest.TestCase):
         self.assertIn('<form id="teacherAuthForm">', script)
         self.assertIn("const setAuthRole=role=>", script)
         self.assertIn("event.preventDefault()", script)
-        self.assertIn("teacher?'进入教师端':'进入学生端'", script)
+        self.assertIn('<h2>选择项目</h2>', script)
+        self.assertIn('创建并进入', script)
+        self.assertIn("location.href='/?projects'", script)
         self.assertNotIn("进入工作端", script)
         self.assertNotIn('class="auth-options"', script)
         self.assertIn('.auth-card:has(.auth-role-switch)', styles)
         self.assertIn('.auth-card .toolbar{justify-content:flex-end}', styles)
+
+    def test_project_create_select_and_state_are_isolated(self):
+        teacher = self.client()
+        self.json_request(teacher, "/api/login", "POST", {
+            "role": "teacher", "username": "test_teacher", "password": "StrongTeacher#2026",
+        })
+        created_ids = []
+        try:
+            status, first = self.json_request(teacher, "/api/projects", "POST", {
+                "action": "create", "name": "校园节水方案",
+            })
+            self.assertEqual(status, 201)
+            self.assertRegex(first["projectLabel"], r"^\d{4}-\d{2}-\d{2} - 校园节水方案$")
+            created_ids.append(first["projectId"])
+            first_state = self.json_request(teacher, "/api/state")[1]["state"]
+            first_state["className"] = "第一项目班级"
+            self.json_request(teacher, "/api/state", "PUT", {"state": first_state})
+
+            _, second = self.json_request(teacher, "/api/projects", "POST", {
+                "action": "create", "name": "校园测量项目",
+            })
+            created_ids.append(second["projectId"])
+            second_state = self.json_request(teacher, "/api/state")[1]["state"]
+            self.assertNotEqual(second_state.get("className"), "第一项目班级")
+            second_state["className"] = "第二项目班级"
+            self.json_request(teacher, "/api/state", "PUT", {"state": second_state})
+
+            self.json_request(teacher, "/api/projects", "POST", {
+                "action": "select", "projectId": first["projectId"],
+            })
+            restored = self.json_request(teacher, "/api/state")[1]["state"]
+            self.assertEqual(restored["className"], "第一项目班级")
+            listing = self.json_request(teacher, "/api/projects")[1]
+            self.assertEqual(listing["selectedProjectId"], first["projectId"])
+            self.assertEqual(len([item for item in listing["projects"] if item["id"] in created_ids]), 2)
+        finally:
+            with app.database() as db:
+                for project_id in created_ids:
+                    db.execute("DELETE FROM states WHERE scope LIKE ?", (f"project:{project_id}:%",))
+                    db.execute("DELETE FROM projects WHERE id=?", (project_id,))
+                db.execute("UPDATE sessions SET project_id=NULL")
 
     def test_broadcast_publish_permissions_and_stale_state(self):
         teacher, student = self.client(), self.client()
@@ -1156,11 +1199,20 @@ class PlatformTest(unittest.TestCase):
         )
         self.assertEqual(status, 200)
         self.assertEqual(login["groupId"], 5)
+        with app.database() as db:
+            db.execute(
+                "INSERT OR REPLACE INTO states(scope,data,updated_at) VALUES(?,?,?)",
+                ("project:group-resize-test:group:5", "{}", app.utc_now()),
+            )
         status, result = self.json_request(
             teacher, "/api/groups/configure", "POST", {"groupCount": 3},
         )
         self.assertEqual(status, 200)
         self.assertEqual(result["groupCount"], 3)
+        with app.database() as db:
+            self.assertIsNone(db.execute(
+                "SELECT 1 FROM states WHERE scope='project:group-resize-test:group:5'"
+            ).fetchone())
 
     def test_z_admin_access_reset_and_password_recovery(self):
         teacher = self.client()

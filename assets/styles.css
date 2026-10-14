@@ -197,6 +197,56 @@ html:has(.auth-shell),body:has(.auth-shell){height:100%;overflow:hidden}.auth-sh
 @media(max-width:900px){.product-layout,.rehearsal-layout{grid-template-columns:1fr}.rehearsal-check-card{grid-column:auto}.desmos-calculator,.desmos-project .desmos-calculator{height:720px}}
 @media(max-width:600px){.desmos-standalone,.desmos-project{margin-left:-8px;margin-right:-8px;border-radius:0}.desmos-project>.field,.desmos-project>.toolbar{margin-left:12px;margin-right:12px}.desmos-calculator,.desmos-project .desmos-calculator{height:calc(100dvh - 150px);min-height:620px}.desmos-tool-switch{padding-left:12px;padding-right:12px}.desmos-tool-description{padding-left:12px;padding-right:12px}.math-lab-actions,.math-shots{margin-left:12px;margin-right:12px;padding-left:0;padding-right:0}.math-shot{grid-template-columns:72px 1fr}.math-shot>img{width:72px;height:56px}.math-viz-shell{height:calc(100dvh - 150px);min-height:560px;margin-left:-8px;margin-right:-8px;border-radius:0}.rehearsal-issue-fields{grid-template-columns:1fr}.rehearsal-issue{align-items:flex-start}.rehearsal-issue .btn{flex:none}}
 
+/* 2026 visual system: airy dashboard surfaces with clear depth and tactile controls. */
+:root{
+ --bg:#dfe7f4;--card:#fff;--line:#e2e9f3;--ink:#17233b;--ink2:#263653;--muted:#71809a;
+ --blue:#3978ed;--blue2:#5b91f3;--soft-blue:#edf4ff;--radius:11px;
+ --shadow:0 2px 6px rgba(34,57,96,.045),0 12px 30px rgba(49,75,118,.075)
+}
+html,body{background:#dfe7f4}
+.topbar{height:68px;padding:0 28px;border-color:#e8edf5;background:#fff;box-shadow:0 4px 18px rgba(54,76,112,.055)}
+.shell{grid-template-columns:240px minmax(0,1fr);min-height:calc(100vh - 104px);background:#fff}
+.sidebar{top:86px;height:calc(100vh - 104px);padding:24px 14px;background:#f5f7fc;border-right:0;box-shadow:inset -1px 0 #e8edf5}
+.main{max-width:none;padding:30px 36px 56px;background:#fff}
+.nav-label{margin:14px 14px 8px;color:#99a7bd;font-weight:750;letter-spacing:.08em}
+.nav a,.nav-stage-locked,.nav-more summary{min-height:46px;margin:5px 0;padding:11px 16px;border-radius:7px;color:#72819d;transition:transform .14s ease,box-shadow .14s ease,background-color .14s ease,color .14s ease}
+.nav a:hover{background:#eaf1fd;color:#326fdc;transform:translateX(2px)}
+.nav a.active{background:#3978ed;color:#fff;font-weight:780;box-shadow:0 4px 0 #285fc8,0 11px 23px rgba(57,120,237,.28)}
+.nav a.active:hover{background:#3978ed;color:#fff;transform:translateY(-1px)}
+.nav .count{background:rgba(255,255,255,.24);color:inherit}
+.page-head{margin-bottom:22px}.page-head h1{font-size:27px;color:#15213a}.eyebrow{color:#3978ed}
+.card,.knowledge-summary>div,.task,.decision-card,.req-card,.stage-card,.locked-rule,.help-level,.knowledge-file,.math-shot{border-color:#e4eaf3;background:#fff;box-shadow:var(--shadow)}
+.card{padding:20px;border-radius:11px}.card.flat{box-shadow:0 2px 8px rgba(34,57,96,.04)}
+.metric{min-height:112px}.metric .v{font-size:28px}.progress{background:#edf1f7}.progress>i{background:#3978ed}
+.task,.decision-card,.req-card,.stage-card,.locked-rule,.help-level,.knowledge-file,.math-shot{transition:transform .14s ease,box-shadow .14s ease,border-color .14s ease}
+a.task:hover,.stage-card:not(.locked):hover,.help-level:not(:disabled):hover{transform:translateY(-2px);border-color:#cbdaf3;box-shadow:0 5px 10px rgba(34,57,96,.07),0 16px 30px rgba(49,75,118,.1)}
+.btn{display:inline-flex;align-items:center;justify-content:center;min-height:40px;padding:8px 16px;border-color:#d7e0ee;border-bottom-color:#bac9dd;border-radius:7px;background:#fff;color:#31425f;box-shadow:0 2px 0 rgba(78,101,139,.13),0 7px 15px rgba(47,70,107,.08);transition:transform .12s ease,box-shadow .12s ease,background-color .12s ease}
+.btn:hover{transform:translateY(-2px);box-shadow:0 3px 0 rgba(78,101,139,.12),0 11px 22px rgba(47,70,107,.13)}
+.btn:active{transform:translateY(1px);box-shadow:0 1px 0 rgba(78,101,139,.12),0 3px 8px rgba(47,70,107,.1)}
+.btn.primary,.recent-new-conversation{border-color:#3978ed;border-bottom-color:#2459bd;background:#3978ed;color:#fff;box-shadow:0 4px 0 #2459bd,0 10px 20px rgba(57,120,237,.28)}
+.btn.primary:hover,.recent-new-conversation:hover{background:#4380ef;box-shadow:0 5px 0 #2459bd,0 14px 26px rgba(57,120,237,.32)}
+.btn.primary:active,.recent-new-conversation:active{transform:translateY(3px);box-shadow:0 1px 0 #2459bd,0 5px 11px rgba(57,120,237,.22)}
+.btn.green{border-bottom-color:#0b5f58;box-shadow:0 4px 0 #0b5f58,0 10px 20px rgba(15,118,110,.2)}
+.btn.warn,.btn.danger{box-shadow:0 2px 0 rgba(91,64,36,.12),0 7px 15px rgba(91,64,36,.07)}
+.field input:not([type="file"]):not([type="checkbox"]),.field textarea,.field select,.ai-composer textarea{border-color:#dce4ef;background:#f7f9fc;box-shadow:inset 0 1px 2px rgba(35,53,82,.055)}
+.field input:not([type="file"]):not([type="checkbox"]):focus,.field textarea:focus,.field select:focus,.ai-composer textarea:focus{border-color:#79a4f3;background:#fff;box-shadow:0 0 0 4px rgba(57,120,237,.11),inset 0 1px 2px rgba(35,53,82,.035)}
+.pill,.operator-picker{border-color:#e0e7f1;background:#f9fbfd;box-shadow:0 2px 6px rgba(35,56,91,.035)}
+.project-pill{max-width:300px;overflow:hidden;color:#365071;font-weight:700;text-overflow:ellipsis;white-space:nowrap}
+.table-wrap{border-color:#e2e9f3;box-shadow:var(--shadow)}.table th{background:#f3f6fb;color:#74829a}.table tr:hover td{background:#f7faff}
+.stage-card.current{border-color:#8bb1f6;background:#eff5ff;box-shadow:inset 0 0 0 1px #cfe0ff,0 10px 23px rgba(57,120,237,.12)}
+.badge{box-shadow:inset 0 0 0 1px rgba(91,111,142,.045)}
+.ai-message{border-color:#e1e8f1;background:#fff;box-shadow:0 7px 20px rgba(43,65,99,.07)}
+.ai-message.user{border-color:#c9daf8;background:#edf4ff}
+.ai-message-body blockquote{margin:14px 0;padding:13px 16px;border:1px solid #f0dfbd;border-left:4px solid #e2a33b;border-radius:0 8px 8px 0;background:#fff8e8;color:#78501c;font-weight:680;box-shadow:0 4px 12px rgba(129,87,28,.07)}
+.ai-message-body>p:last-child strong{display:block;margin-top:12px;color:#1e3f70;font-size:1.03em}
+.ai-chat-panel,.ai-recent{box-shadow:0 12px 34px rgba(45,68,105,.09)}
+.ai-composer{background:#fbfcfe}
+.project-picker h2{margin:4px 0 6px;font-size:28px}.project-choice-list{display:grid;gap:10px;margin:22px 0}.project-choice{display:flex;align-items:center;justify-content:space-between;gap:18px;width:100%;min-height:64px;padding:14px 16px;border:1px solid #dfe7f2;border-bottom-color:#c3d1e4;border-radius:9px;background:#fff;color:#253755;text-align:left;box-shadow:0 3px 0 rgba(66,91,130,.1),0 10px 22px rgba(50,75,115,.08);transition:transform .14s ease,box-shadow .14s ease,border-color .14s ease}.project-choice:hover,.project-choice.selected{border-color:#8eb4f5;background:#f3f7ff;transform:translateY(-2px);box-shadow:0 4px 0 #b8cef4,0 14px 26px rgba(57,120,237,.15)}.project-choice:active{transform:translateY(1px);box-shadow:0 1px 0 #b8cef4,0 5px 12px rgba(57,120,237,.12)}.project-choice span{font-weight:800}.project-choice small{color:#6580a6}.project-create{display:flex;align-items:end;gap:10px;padding-top:18px;border-top:1px solid var(--line)}.project-create .field{flex:1}.project-create .btn{flex:none}
+@media(min-width:801px){body{padding:18px}.app{width:min(100%,1800px);min-height:calc(100vh - 36px);margin:0 auto;border-radius:16px;background:#fff;box-shadow:0 28px 72px rgba(37,58,94,.18)}.app .topbar{top:18px;border-radius:16px 16px 0 0}.app .sidebar{top:86px}.auth-shell{width:min(100%,1480px);min-height:calc(100vh - 36px);margin:0 auto;border-radius:16px;overflow:hidden;box-shadow:0 28px 72px rgba(37,58,94,.18)}}
+@media(max-width:1180px) and (min-width:801px){.shell{grid-template-columns:205px minmax(0,1fr)}.main{padding:26px 22px 44px}.topbar{padding-inline:20px}.project-pill{max-width:210px}}
+@media(max-width:800px){html,body{background:#f6f8fb}.topbar{height:64px;padding-inline:12px}.shell{display:block;min-height:calc(100vh - 64px)}.sidebar{position:relative;top:0;height:auto;padding:9px;background:#f5f7fc}.main{padding:18px 14px 38px}.nav a.active{box-shadow:0 3px 0 #2459bd,0 8px 16px rgba(57,120,237,.22)}.project-create{align-items:stretch;flex-direction:column}.project-create .btn{width:100%}.project-pill{display:none}}
+@media(max-width:600px){.table{table-layout:fixed}.table th,.table td{padding:7px 6px;overflow-wrap:anywhere}.table .progress{width:100%;min-width:0!important}}
+
 /* Student classroom surfaces use one status palette, larger touch targets, and a focused navigation. */
 :root{--ink:#172033;--muted:#667085;--bg:#f6f8fb;--blue:#2563eb;--teal:#0f766e;--green:#16a34a;--orange:#d97706;--red:#dc2626;--soft-blue:#eff6ff;--soft-green:#f0fdf4;--soft-orange:#fff7ed;--soft-red:#fef2f2}
 .student-app .main{font-size:17px;line-height:1.7}
