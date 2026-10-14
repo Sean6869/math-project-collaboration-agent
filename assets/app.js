@@ -7,7 +7,7 @@ const now=()=>new Date().toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-di
 const iso=()=>new Date().toISOString();
 const ROLE_NAMES=['建模者','质疑者','记录者','解释者','验证者','资料员','协调者','展示者','计算者','检查者'];
 const ROLE_DUTIES=['形成模型和图示','质疑条件、范围和证据','保存证据与修改理由','负责组内复述和成果表达','核验计算、单位与结论','整理任务资料与来源','协调分工与提交节奏','组织成果展示与答疑','承担关键计算过程','复查步骤、边界和遗漏'];
-const BRAND={name:'迈谱',latin:'MAPLE',full:'迈谱 Maple',slogan:'每迈一步，皆有章谱。',assetVersion:'20260918-1',wideLogo:'/assets/images/maple-login-light.webp',mark:'/assets/images/maple-login-light.webp'};
+const BRAND={name:'迈谱',latin:'MAPLE',full:'迈谱 Maple',slogan:'每迈一步，皆有章谱。',assetVersion:'20261014-1',wideLogo:'/assets/images/maple-login-light.webp',mark:'/assets/images/maple-mark.png'};
 const brandAsset=path=>`${path}?v=${BRAND.assetVersion}`;
 const brandLockup=role=>`<a class="brand app-brand" href="${role==='student'?'/student/dashboard.html':'/teacher/dashboard.html'}" aria-label="返回课堂首页" title="返回课堂首页"><img class="brand-lockup-image" src="${brandAsset(BRAND.wideLogo)}" alt="迈谱 Maple" decoding="async"></a>`;
 function installFavicon(){
