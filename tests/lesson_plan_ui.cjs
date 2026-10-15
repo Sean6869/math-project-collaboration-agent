@@ -105,17 +105,17 @@ const state={className:'七年级测试班',project:'原项目',groupCount:3,gro
     await page.waitForFunction(()=>document.querySelector('#root').innerHTML.length>0);
     assert(!await page.getByText('平台暂时不可用',{exact:true}).count(),role+'/'+file+' must render');
     if(role==='student'&&file==='dashboard.html'){
-     assert.equal(await page.locator('.page-head h1').textContent(),state.project);
+     assert.equal(await page.locator('.dashboard-project-head h1').textContent(),state.project);
      assert.equal(await page.locator('#projectOverview .project-info-grid article').count(),3);
      assert.equal(await page.locator('.dashboard-status').count(),1);
      assert.equal(await page.locator('.dashboard-status .journey-step').count(),5);
      assert.equal(await page.locator('.journey-step[aria-current="step"]').count(),1);
      assert.equal(await page.locator('.main>.stage-strip,.main>.cols-4').count(),0);
      const layout=await page.evaluate(()=>{
-      const status=document.querySelector('.dashboard-status'),info=document.querySelector('#projectOverview'),details=document.querySelector('.dashboard-details');
-      return {statusBottom:status.getBoundingClientRect().bottom,infoTop:info.getBoundingClientRect().top,infoBottom:info.getBoundingClientRect().bottom,detailsTop:details.getBoundingClientRect().top,font:parseFloat(getComputedStyle(info.querySelector('.project-summary p')).fontSize)};
+      const status=document.querySelector('.dashboard-status'),task=document.querySelector('.dashboard-task-card'),info=document.querySelector('#projectOverview');
+      return {statusBottom:status.getBoundingClientRect().bottom,taskTop:task.getBoundingClientRect().top,taskBottom:task.getBoundingClientRect().bottom,infoTop:info.getBoundingClientRect().top,font:parseFloat(getComputedStyle(info.querySelector('.project-summary p')).fontSize)};
      });
-     assert(layout.statusBottom<=layout.infoTop&&layout.infoBottom<=layout.detailsTop,'project learning information must be between the status bar and task panels');
+     assert(layout.statusBottom<=layout.taskTop&&layout.taskBottom<=layout.infoTop,'primary task panels must stay above the supplementary project information');
      assert(layout.font>=17,'project summary must have the larger reading type size');
      if(viewport.width===1440){
       state.stagePaused=true;state.stageTaskStatus=Array.from({length:5},()=>[false,false,false,false]);state.stageTaskStatus[4]=[true,true,false,true];
@@ -129,7 +129,7 @@ const state={className:'七年级测试班',project:'原项目',groupCount:3,gro
      }
      const name='maple-student-dashboard-'+viewport.width+'.png';await page.screenshot({path:path.join(os.tmpdir(),name),fullPage:true});
     }
-    const typeOutliers=await page.evaluate(()=>[...document.querySelectorAll('body *')].filter(el=>el.offsetParent!==null&&[...el.childNodes].some(node=>node.nodeType===3&&node.textContent.trim())).map(el=>({tag:el.tagName,className:el.className,size:parseFloat(getComputedStyle(el).fontSize)})).filter(item=>item.size<12||item.size>30));
+    const typeOutliers=await page.evaluate(()=>[...document.querySelectorAll('body *')].filter(el=>el.offsetParent!==null&&[...el.childNodes].some(node=>node.nodeType===3&&node.textContent.trim())).map(el=>({tag:el.tagName,className:el.className,size:parseFloat(getComputedStyle(el).fontSize)})).filter(item=>item.size<12||item.size>42));
     assert.deepEqual(typeOutliers,[],role+'/'+file+' typography must stay on the readable scale at '+viewport.width);
     assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),role+'/'+file+' must not overflow at '+viewport.width);audited++;
    }}

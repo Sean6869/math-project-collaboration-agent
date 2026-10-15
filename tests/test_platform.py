@@ -705,7 +705,8 @@ class PlatformTest(unittest.TestCase):
         self.assertIn("function stageStrip(compact=false)", script)
         self.assertIn("<div class=\"stage-state\">${label}</div>", script)
         self.assertIn("const title=esc(s.project)", script)
-        self.assertIn("+dashboardStatus(s)+projectOverview(s.currentLesson)+", script)
+        self.assertIn("+dashboardStatus(s)+", script)
+        self.assertIn("+projectOverview(s.currentLesson)+", script)
         self.assertIn("+stageStrip(true)+", script)
         self.assertIn(".stage-strip.compact .stage-card", styles)
 

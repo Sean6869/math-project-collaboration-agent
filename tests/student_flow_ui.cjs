@@ -32,8 +32,7 @@ const {chromium}=require('playwright'),root=path.resolve(__dirname,'..');
   assert.equal(taskStyles[0],taskStyles[1]);assert.equal(taskStyles[2],taskStyles[3]);
   const hintStyles=await page.locator('.hint-reading strong').evaluate(el=>{const child=el.querySelector('.reading-total'),a=getComputedStyle(el),b=getComputedStyle(child);return [a.fontSize,b.fontSize,a.color,b.color]});
   assert.equal(hintStyles[0],hintStyles[1]);assert.equal(hintStyles[2],hintStyles[3]);
-  const beforeHover=hintStyles[2];await page.locator('.hint-reading').hover();
-  assert.equal(await page.locator('.hint-reading strong').evaluate(el=>getComputedStyle(el).color),beforeHover);
+  assert.equal(await page.locator('.dashboard-readings').evaluate(el=>getComputedStyle(el).display),'none');
   await page.goto(base+'/student/stage1-materials.html');
   assert.deepEqual(await page.locator('.stage1-material-icon').allTextContents(),['PDF','XLSX','PNG']);
   assert.equal(await page.locator('.stage1-material-item').count(),3);
@@ -62,6 +61,6 @@ const {chromium}=require('playwright'),root=path.resolve(__dirname,'..');
   assert.deepEqual(await page.locator('[data-member]').allTextContents(),['','','','']);
   assert.deepEqual(await page.locator('[data-member]').evaluateAll(inputs=>inputs.map(input=>input.value)),names);
   assert.deepEqual(errors,[]);
-  console.log('PASS: dashboard typography, hover color, explicit stage-3 navigation, and first member save');
+  console.log('PASS: dashboard typography, compact progress display, explicit stage-3 navigation, and first member save');
  }finally{if(browser)await browser.close();await new Promise(resolve=>server.close(resolve))}
 })().catch(error=>{console.error(error);process.exitCode=1});
