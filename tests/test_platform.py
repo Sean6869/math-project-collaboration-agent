@@ -699,14 +699,15 @@ class PlatformTest(unittest.TestCase):
             self.json_request(student, "/api/state", "PUT", {"state": current})
         self.assertEqual(incomplete.exception.code, 409)
 
-    def test_stage_pages_use_compact_strip_but_dashboard_keeps_details(self):
+    def test_stage_pages_and_dashboard_use_compact_progress(self):
         script = (ROOT / "assets" / "app.js").read_text(encoding="utf-8")
         styles = (ROOT / "assets" / "styles.css").read_text(encoding="utf-8")
         self.assertIn("function stageStrip(compact=false)", script)
         self.assertIn("<div class=\"stage-state\">${label}</div>", script)
         self.assertIn("const title=esc(s.project)", script)
         self.assertIn("+dashboardStatus(s)+", script)
-        self.assertIn("+projectOverview(s.currentLesson)+", script)
+        self.assertNotIn("+projectOverview(s.currentLesson)+", script)
+        self.assertIn("class=\"journey-copy\"", script)
         self.assertIn("+stageStrip(true)+", script)
         self.assertIn(".stage-strip.compact .stage-card", styles)
 

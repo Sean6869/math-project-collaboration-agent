@@ -106,17 +106,18 @@ const state={className:'七年级测试班',project:'原项目',groupCount:3,gro
     assert(!await page.getByText('平台暂时不可用',{exact:true}).count(),role+'/'+file+' must render');
     if(role==='student'&&file==='dashboard.html'){
      assert.equal(await page.locator('.dashboard-project-head h1').textContent(),state.project);
-     assert.equal(await page.locator('#projectOverview .project-info-grid article').count(),3);
+     assert.equal(await page.locator('#projectOverview').count(),0);
+     assert((await page.locator('.dashboard-project-head p').textContent()).includes('本课时为方案探究制作阶段'));
      assert.equal(await page.locator('.dashboard-status').count(),1);
      assert.equal(await page.locator('.dashboard-status .journey-step').count(),5);
      assert.equal(await page.locator('.journey-step[aria-current="step"]').count(),1);
      assert.equal(await page.locator('.main>.stage-strip,.main>.cols-4').count(),0);
      const layout=await page.evaluate(()=>{
-      const status=document.querySelector('.dashboard-status'),task=document.querySelector('.dashboard-task-card'),info=document.querySelector('#projectOverview');
-      return {statusBottom:status.getBoundingClientRect().bottom,taskTop:task.getBoundingClientRect().top,taskBottom:task.getBoundingClientRect().bottom,infoTop:info.getBoundingClientRect().top,font:parseFloat(getComputedStyle(info.querySelector('.project-summary p')).fontSize)};
+      const status=document.querySelector('.dashboard-status'),task=document.querySelector('.dashboard-task-card');
+      return {statusBottom:status.getBoundingClientRect().bottom,taskTop:task.getBoundingClientRect().top,summaryFont:parseFloat(getComputedStyle(document.querySelector('.dashboard-project-head p')).fontSize)};
      });
-     assert(layout.statusBottom<=layout.taskTop&&layout.taskBottom<=layout.infoTop,'primary task panels must stay above the supplementary project information');
-     assert(layout.font>=17,'project summary must have the larger reading type size');
+     assert(layout.statusBottom<=layout.taskTop,'primary task panels must stay below the stage progress');
+     assert(layout.summaryFont>=14,'project summary must keep a readable type size');
      if(viewport.width===1440){
       state.stagePaused=true;state.stageTaskStatus=Array.from({length:5},()=>[false,false,false,false]);state.stageTaskStatus[4]=[true,true,false,true];
       await page.waitForFunction(()=>document.querySelector('.dashboard-status')?.classList.contains('is-paused')&&document.querySelector('.gauge-value')?.getAttribute('stroke-dasharray')==='75 100',null,{timeout:12000});
