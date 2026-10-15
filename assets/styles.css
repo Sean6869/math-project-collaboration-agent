@@ -386,3 +386,74 @@ html,body{color:var(--ink);background:#f5effb;background-image:linear-gradient(1
 @media(max-width:980px){.dashboard-project-head{height:auto;min-height:80px;align-items:flex-start}.dashboard-project-head>div{align-self:auto;padding-bottom:0}.dashboard-hero-art{align-self:flex-end}}
 @media(max-width:800px){.dashboard-project-head{min-height:auto}.student-dashboard-grid .dashboard-status{height:104px;min-height:104px;padding:8px 16px 12px}.student-dashboard-grid .journey-step{padding:0 4px}.student-dashboard-grid .journey-node{width:36px;height:36px}.student-dashboard-grid .journey-step:not(:last-child)::after{top:17px;left:calc(50% + 24px);width:calc(100% - 48px)}.dashboard-group-status-card{height:auto;padding:16px}}
 
+
+/* Role-aware project navigation, CodePen-inspired login motion, and class dashboards. */
+.auth-login-card{position:relative;width:min(620px,calc(100% - 48px));min-height:620px;padding:40px;overflow:hidden;border:1px solid rgba(120,100,160,.12);border-radius:32px;background:linear-gradient(145deg,rgba(255,255,255,.96),rgba(248,240,255,.92));box-shadow:12px 12px 28px rgba(69,53,104,.11),inset 4px 4px 10px rgba(255,255,255,.85),inset -3px -3px 8px rgba(75,55,110,.07)}
+.auth-login-card::before,.auth-login-card::after{content:"";position:absolute;z-index:0;border-radius:50%;pointer-events:none;filter:blur(.2px)}
+.auth-login-card::before{width:180px;height:180px;right:-72px;top:-88px;background:linear-gradient(145deg,rgba(251,207,232,.65),rgba(221,214,254,.55))}
+.auth-login-card::after{width:120px;height:120px;left:-58px;bottom:-50px;background:linear-gradient(145deg,rgba(187,247,208,.5),rgba(186,230,253,.48))}
+.auth-login-card>*{position:relative;z-index:1}
+.auth-login-heading{display:flex;align-items:center;gap:16px;margin-bottom:24px;text-align:left}
+.auth-login-heading h2{margin:2px 0 4px;font-size:32px;line-height:1.2}
+.auth-login-heading p{margin:0;color:var(--muted)}
+.auth-login-symbol{display:grid;place-items:center;flex:0 0 56px;width:56px;height:56px;border-radius:20px;color:#6652b8;font-size:24px;background:linear-gradient(145deg,#e8ddff,#d9cdfb);box-shadow:8px 8px 16px rgba(77,61,112,.11),inset 4px 4px 8px rgba(255,255,255,.7),inset -2px -2px 4px rgba(54,40,88,.08)}
+.auth-login-card .auth-role-switch{position:relative;isolation:isolate;display:grid;grid-template-columns:1fr 1fr;min-height:56px;padding:4px;border:0;border-radius:24px;background:linear-gradient(145deg,#ebe6f4,#f8f4fc);box-shadow:inset 4px 4px 8px rgba(52,38,78,.1),inset -4px -4px 8px rgba(255,255,255,.9)}
+.auth-login-card .auth-role-switch::before{content:"";position:absolute;z-index:-1;top:4px;bottom:4px;left:4px;width:calc(50% - 4px);border-radius:20px;background:linear-gradient(145deg,#fdfcff,#f3eafd);box-shadow:6px 6px 14px rgba(66,48,101,.1),inset 3px 3px 6px rgba(255,255,255,.82),inset -2px -2px 4px rgba(64,45,94,.06);transition:transform 300ms cubic-bezier(.34,1.56,.64,1)}
+.auth-login-card[data-auth-role="teacher"] .auth-role-switch::before{transform:translateX(100%)}
+.auth-login-card .auth-role-tab{z-index:1;border:0;background:transparent!important;box-shadow:none!important;color:#756b87;font-weight:800;transition:color 300ms cubic-bezier(.34,1.56,.64,1),transform 300ms cubic-bezier(.34,1.56,.64,1)}
+.auth-login-card .auth-role-tab.active{color:#58439f}
+.auth-login-card .auth-role-tab:active{transform:scaleX(1.05) scaleY(.9)}
+.auth-login-card .auth-forms{margin-top:24px}
+.auth-login-card .auth-form{animation:authPanelIn 420ms cubic-bezier(.34,1.56,.64,1) both}
+.auth-login-card .auth-form h3{margin:0 0 16px;font-size:24px}
+.auth-login-card .field input,.auth-login-card .field select{min-height:52px;border:1px solid rgba(113,93,151,.1);border-radius:18px;background:linear-gradient(145deg,#f4eff8,#fff);box-shadow:inset 4px 4px 8px rgba(55,42,81,.1),inset -4px -4px 8px rgba(255,255,255,.9)}
+.auth-login-card .toolbar{margin-top:20px}
+.auth-login-card .btn{min-height:48px;border-radius:18px}
+@keyframes authPanelIn{from{opacity:0;transform:scale(.96) translateX(16px)}to{opacity:1;transform:scale(1) translateX(0)}}
+
+.project-choice-row{display:grid;grid-template-columns:minmax(0,1fr) 52px;gap:8px;align-items:stretch}
+.project-choice-row .project-choice{min-width:0}
+.project-delete-button{display:grid;place-items:center;border:1px solid rgba(190,76,98,.14);border-radius:18px;color:#a94760;background:linear-gradient(145deg,#ffe9ee,#ffdce4);box-shadow:8px 8px 16px rgba(83,52,65,.08),inset 4px 4px 8px rgba(255,255,255,.68),inset -2px -2px 4px rgba(87,42,56,.08);cursor:pointer;transition:transform 300ms cubic-bezier(.34,1.56,.64,1),box-shadow 300ms cubic-bezier(.34,1.56,.64,1)}
+.project-delete-button:hover{transform:translateY(-4px);box-shadow:10px 12px 20px rgba(83,52,65,.11),inset 4px 4px 8px rgba(255,255,255,.68),inset -2px -2px 4px rgba(87,42,56,.08)}
+.project-delete-button:active{transform:scaleX(1.05) scaleY(.9);box-shadow:2px 2px 4px rgba(48,42,66,.05),inset 8px 8px 16px rgba(48,42,66,.15),inset -4px -4px 8px rgba(255,255,255,.5)}
+
+.teacher-dashboard-grid{display:grid;grid-template-columns:minmax(0,1.06fr) minmax(0,.94fr);gap:16px}
+.teacher-dashboard-grid>.card,.teacher-insight-grid>.card{min-width:0}
+.teacher-monitor-card,.teacher-common-card,.teacher-stage-chart,.teacher-support-chart{padding:24px}
+.tone-blue{background:linear-gradient(145deg,#f4f8ff,#eaf1ff)!important}
+.tone-pink{background:linear-gradient(145deg,#fff7fa,#faedf5)!important}
+.tone-mint{background:linear-gradient(145deg,#f1fcf6,#e5f7ef)!important}
+.tone-cream{background:linear-gradient(145deg,#fffaf0,#fff1dc)!important}
+.teacher-monitor-summary{display:grid;grid-template-columns:156px minmax(0,1fr);gap:24px;align-items:center;margin-top:16px}
+.teacher-gauge{display:grid;place-items:center;width:144px;aspect-ratio:1;border-radius:50%;background:conic-gradient(#67b7d1 0 var(--gauge),rgba(255,255,255,.7) var(--gauge) 360deg);box-shadow:8px 8px 18px rgba(55,90,110,.1),inset 4px 4px 8px rgba(255,255,255,.65),inset -2px -2px 4px rgba(45,76,94,.08)}
+.teacher-gauge::before{content:"";position:absolute;width:104px;aspect-ratio:1;border-radius:50%;background:linear-gradient(145deg,#fff,#edf6ff);box-shadow:inset 3px 3px 7px rgba(49,68,94,.08),inset -3px -3px 7px rgba(255,255,255,.9)}
+.teacher-gauge{position:relative}.teacher-gauge span{position:relative;z-index:1;display:grid;text-align:center}.teacher-gauge b{font-size:24px}.teacher-gauge small{color:var(--muted)}
+.teacher-group-bars{display:grid;gap:8px}
+.teacher-group-bar{display:grid;grid-template-columns:minmax(112px,.9fr) minmax(100px,1.2fr) 44px;gap:12px;align-items:center;padding:8px 12px;border-radius:20px;color:var(--ink);background:rgba(255,255,255,.64);box-shadow:5px 5px 12px rgba(60,71,96,.06),inset 3px 3px 6px rgba(255,255,255,.72),inset -2px -2px 4px rgba(49,61,83,.05);transition:transform 300ms cubic-bezier(.34,1.56,.64,1),box-shadow 300ms cubic-bezier(.34,1.56,.64,1)}
+.teacher-group-bar:hover{transform:translateY(-4px)}.teacher-group-bar span{display:grid}.teacher-group-bar small{color:var(--muted);white-space:nowrap}.teacher-group-bar i,.common-chart-track{height:10px;overflow:hidden;border-radius:999px;background:rgba(123,111,158,.1);box-shadow:inset 2px 2px 4px rgba(53,43,77,.08),inset -2px -2px 4px rgba(255,255,255,.72)}
+.teacher-group-bar em,.common-chart-track i{display:block;height:100%;border-radius:999px;background:linear-gradient(90deg,#76cbd0,#8f82d6)}
+.teacher-group-bar strong{text-align:right}
+.common-chart{display:grid;gap:12px;margin-top:16px}.common-chart-row{display:grid;grid-template-columns:minmax(180px,1.2fr) minmax(100px,1fr) 44px;gap:12px;align-items:center;padding:12px 16px;border-radius:22px;background:rgba(255,255,255,.65);box-shadow:5px 5px 12px rgba(82,53,74,.06),inset 3px 3px 6px rgba(255,255,255,.74),inset -2px -2px 4px rgba(76,42,64,.05)}
+.common-chart-row>div{display:grid}.common-chart-row small{color:var(--muted)}.common-chart-track i{background:linear-gradient(90deg,#ee9ab4,#c6a4df)}
+.teacher-queue-summary{display:grid;grid-template-columns:auto 48px 1fr auto;gap:12px;align-items:center;margin-top:16px;padding:16px;border-radius:24px;background:linear-gradient(145deg,#fff5e5,#ffebc9);box-shadow:7px 7px 14px rgba(100,74,36,.07),inset 4px 4px 8px rgba(255,255,255,.68),inset -2px -2px 4px rgba(93,61,25,.06)}
+.teacher-queue-summary>span{display:flex;gap:8px;align-items:center}.teacher-queue-summary>strong{font-size:24px}.teacher-queue-summary small{color:var(--muted)}
+.teacher-insight-grid{display:grid;grid-template-columns:1.06fr .94fr;gap:16px;margin-top:16px}
+.stage-column-chart{display:grid;grid-template-columns:repeat(5,1fr);gap:16px;height:190px;margin-top:16px;align-items:end}.stage-column{display:grid;grid-template-rows:18px 100px 20px 22px;justify-items:center;gap:4px;text-align:center}.stage-column>i{display:flex;align-items:flex-end;width:36px;height:100px;padding:4px;border-radius:18px;background:rgba(255,255,255,.58);box-shadow:inset 3px 3px 7px rgba(40,79,61,.08),inset -3px -3px 7px rgba(255,255,255,.85)}.stage-column em{display:block;width:100%;min-height:8px;border-radius:14px;background:linear-gradient(180deg,#78d2b1,#7abfc9)}.stage-column small{color:var(--muted);white-space:nowrap}
+.support-stat-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:16px;margin-top:24px}.support-stat-grid>div{display:grid;grid-template-columns:48px 1fr;grid-template-rows:auto auto;column-gap:12px;padding:16px;border-radius:24px;background:rgba(255,255,255,.64);box-shadow:7px 7px 14px rgba(96,73,40,.06),inset 4px 4px 8px rgba(255,255,255,.7),inset -2px -2px 4px rgba(80,55,27,.05)}.support-stat-grid b{font-size:24px}.support-stat-grid small{color:var(--muted)}.support-icon{grid-row:1/3;display:grid;place-items:center;width:48px;height:48px;border-radius:18px}.support-icon.mint{background:#ccefe2;color:#287b65}.support-icon.purple{background:#e4dafb;color:#6c50ad}.support-icon.pink{background:#f9d6e2;color:#a64e70}.support-icon.amber{background:#ffe6b5;color:#9a6720}
+
+/* Reuse the candy palette on the rest of the student and teacher workspaces. */
+.main .grid>.card:nth-child(5n+1),.main .cols-2>.card:nth-child(5n+1){background-image:linear-gradient(145deg,#f7f3ff,#eee7fb)}
+.main .grid>.card:nth-child(5n+2),.main .cols-2>.card:nth-child(5n+2){background-image:linear-gradient(145deg,#f0fbf6,#e4f5ed)}
+.main .grid>.card:nth-child(5n+3),.main .cols-2>.card:nth-child(5n+3){background-image:linear-gradient(145deg,#fff8ee,#ffeedc)}
+.main .grid>.card:nth-child(5n+4),.main .cols-2>.card:nth-child(5n+4){background-image:linear-gradient(145deg,#fff5f8,#fae8f0)}
+.main .grid>.card:nth-child(5n),.main .cols-2>.card:nth-child(5n){background-image:linear-gradient(145deg,#f1f8ff,#e5f0fb)}
+
+@media(max-width:1200px){.teacher-dashboard-grid,.teacher-insight-grid{grid-template-columns:1fr}.teacher-monitor-summary{grid-template-columns:140px 1fr}.auth-login-card{min-height:auto}}
+@media(max-width:800px){.auth-login-card{width:100%;padding:24px;border-radius:28px}.auth-login-heading h2{font-size:24px}.auth-login-heading p{font-size:14px}.teacher-monitor-card,.teacher-common-card,.teacher-stage-chart,.teacher-support-chart{padding:16px}.teacher-monitor-summary{grid-template-columns:1fr}.teacher-gauge{justify-self:center}.teacher-group-bar,.common-chart-row{grid-template-columns:1fr 42px}.teacher-group-bar i,.common-chart-track{grid-column:1/2}.teacher-group-bar strong,.common-chart-row strong{grid-column:2;grid-row:2}.teacher-queue-summary{grid-template-columns:1fr auto}.teacher-queue-summary small{grid-column:1/2}.stage-column-chart{gap:4px}.stage-column small{font-size:12px}.support-stat-grid{grid-template-columns:1fr}.project-choice-row{grid-template-columns:minmax(0,1fr) 48px}}
+@media(prefers-reduced-motion:reduce){.auth-login-card .auth-role-switch::before,.auth-login-card .auth-form,.project-delete-button,.teacher-group-bar{animation:none;transition-duration:.01ms!important}}
+
+.main>:is(section,form).card:nth-of-type(5n+1),.main :is(.project-layout,.help-layout,.knowledge-layout,.product-layout,.rehearsal-layout,.ai-chat-layout)>.card:nth-child(5n+1){background-image:linear-gradient(145deg,#f7f3ff,#eee7fb)}
+.main>:is(section,form).card:nth-of-type(5n+2),.main :is(.project-layout,.help-layout,.knowledge-layout,.product-layout,.rehearsal-layout,.ai-chat-layout)>.card:nth-child(5n+2){background-image:linear-gradient(145deg,#f0fbf6,#e4f5ed)}
+.main>:is(section,form).card:nth-of-type(5n+3),.main :is(.project-layout,.help-layout,.knowledge-layout,.product-layout,.rehearsal-layout,.ai-chat-layout)>.card:nth-child(5n+3){background-image:linear-gradient(145deg,#fff8ee,#ffeedc)}
+.main>:is(section,form).card:nth-of-type(5n+4),.main :is(.project-layout,.help-layout,.knowledge-layout,.product-layout,.rehearsal-layout,.ai-chat-layout)>.card:nth-child(5n+4){background-image:linear-gradient(145deg,#fff5f8,#fae8f0)}
+.main>:is(section,form).card:nth-of-type(5n),.main :is(.project-layout,.help-layout,.knowledge-layout,.product-layout,.rehearsal-layout,.ai-chat-layout)>.card:nth-child(5n){background-image:linear-gradient(145deg,#f1f8ff,#e5f0fb)}

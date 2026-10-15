@@ -532,6 +532,14 @@ class PlatformTest(unittest.TestCase):
         self.assertIn("event.preventDefault()", script)
         self.assertIn('<h2>选择项目</h2>', script)
         self.assertIn('创建并进入', script)
+        self.assertIn('切换学习项目', script)
+        self.assertIn('切换教学项目', script)
+        self.assertIn('data-delete-project', script)
+        self.assertIn("data.canDelete", script)
+        self.assertIn('auth-login-card', script)
+        self.assertIn('teacherGroupDashboard', script)
+        self.assertIn('teacherCommonDashboard', script)
+        self.assertIn('teacherInsightDashboard', script)
         self.assertIn("location.href='/?projects'", script)
         self.assertNotIn("进入工作端", script)
         self.assertNotIn('class="auth-options"', script)
@@ -578,6 +586,54 @@ class PlatformTest(unittest.TestCase):
                     db.execute("DELETE FROM states WHERE scope LIKE ?", (f"project:{project_id}:%",))
                     db.execute("DELETE FROM projects WHERE id=?", (project_id,))
                 db.execute("UPDATE sessions SET project_id=NULL")
+
+    def test_only_admin_can_delete_project_and_related_state(self):
+        admin, teacher = self.client(), self.client()
+        self.json_request(admin, "/api/login", "POST", {
+            "role": "teacher", "username": "test_teacher", "password": "StrongTeacher#2026",
+        })
+        username = "project_delete_teacher"
+        with app.database() as db:
+            db.execute("DELETE FROM teachers WHERE username=?", (username,))
+            db.execute(
+                "INSERT INTO teachers(username,password_hash,created_at,is_admin) VALUES(?,?,?,0)",
+                (username, app.password_hash("ProjectTeacher#2026"), app.utc_now()),
+            )
+        self.json_request(teacher, "/api/login", "POST", {
+            "role": "teacher", "username": username, "password": "ProjectTeacher#2026",
+        })
+        project_id = None
+        try:
+            _, created = self.json_request(admin, "/api/projects", "POST", {
+                "action": "create", "name": "待删除项目",
+            })
+            project_id = created["projectId"]
+            listing = self.json_request(admin, "/api/projects")[1]
+            self.assertTrue(listing["canDelete"])
+            with self.assertRaises(urllib.error.HTTPError) as denied:
+                self.json_request(teacher, "/api/projects", "POST", {
+                    "action": "delete", "projectId": project_id,
+                })
+            self.assertEqual(denied.exception.code, 403)
+            status, deleted = self.json_request(admin, "/api/projects", "POST", {
+                "action": "delete", "projectId": project_id,
+            })
+            self.assertEqual(status, 200)
+            self.assertTrue(deleted["deleted"])
+            with app.database() as db:
+                self.assertIsNone(db.execute("SELECT id FROM projects WHERE id=?", (project_id,)).fetchone())
+                self.assertEqual(db.execute(
+                    "SELECT COUNT(*) FROM states WHERE scope LIKE ?", (f"project:{project_id}:%",)
+                ).fetchone()[0], 0)
+                self.assertEqual(db.execute(
+                    "SELECT COUNT(*) FROM sessions WHERE project_id=?", (project_id,)
+                ).fetchone()[0], 0)
+        finally:
+            with app.database() as db:
+                if project_id:
+                    db.execute("DELETE FROM states WHERE scope LIKE ?", (f"project:{project_id}:%",))
+                    db.execute("DELETE FROM projects WHERE id=?", (project_id,))
+                db.execute("DELETE FROM teachers WHERE username=?", (username,))
 
     def test_broadcast_publish_permissions_and_stale_state(self):
         teacher, student = self.client(), self.client()

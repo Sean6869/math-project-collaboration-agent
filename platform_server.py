@@ -2409,6 +2409,7 @@ class Handler(SimpleHTTPRequestHandler):
                                   "label": f"{str(row['created_at'])[:10]} - {row['name']}"} for row in rows],
                     "selectedProjectId": session.get("projectId"),
                     "canCreate": session["role"] == "teacher",
+                    "canDelete": bool(session.get("isAdmin")),
                 })
             return
         if route.path == "/api/broadcast":
@@ -2986,8 +2987,26 @@ class Handler(SimpleHTTPRequestHandler):
             self.json_response({"error": "登录状态已失效，请重新登录"}, HTTPStatus.UNAUTHORIZED)
             return
         created = False
+        deleted_project = None
         with database() as db:
-            if action == "create":
+            if action == "delete":
+                if session["role"] != "teacher" or not session.get("isAdmin"):
+                    self.json_response({"error": "只有管理员教师可以删除项目"}, HTTPStatus.FORBIDDEN)
+                    return
+                project_id = str(body.get("projectId", ""))
+                project = db.execute("SELECT id,name FROM projects WHERE id=?", (project_id,)).fetchone()
+                if not project:
+                    raise ValueError("项目不存在，请刷新项目列表后重试")
+                db.execute("DELETE FROM states WHERE scope LIKE ?", (f"project:{project_id}:%",))
+                db.execute("UPDATE sessions SET project_id=NULL WHERE project_id=?", (project_id,))
+                db.execute("DELETE FROM projects WHERE id=?", (project_id,))
+                PROJECT_CONTEXT.set("")
+                db.execute(
+                    "INSERT INTO events(ts,actor,group_no,event_type,stage,data) VALUES(?,?,?,?,?,?)",
+                    (utc_now(), "teacher", session.get("groupId"), "project_delete", None, project["name"][:2000]),
+                )
+                deleted_project = project_id
+            elif action == "create":
                 if session["role"] != "teacher":
                     self.json_response({"error": "新项目由教师创建，学生请选择教师已经建立的项目"}, HTTPStatus.FORBIDDEN)
                     return
@@ -3019,8 +3038,12 @@ class Handler(SimpleHTTPRequestHandler):
                     raise ValueError("项目不存在，请刷新项目列表后重试")
             else:
                 raise ValueError("项目操作无效")
-            db.execute("UPDATE sessions SET project_id=? WHERE token_hash=?", (project_id, session_hash))
-            project = db.execute("SELECT id,name,created_at FROM projects WHERE id=?", (project_id,)).fetchone()
+            if deleted_project is None:
+                db.execute("UPDATE sessions SET project_id=? WHERE token_hash=?", (project_id, session_hash))
+                project = db.execute("SELECT id,name,created_at FROM projects WHERE id=?", (project_id,)).fetchone()
+        if deleted_project is not None:
+            self.json_response({"ok": True, "deleted": True, "projectId": deleted_project})
+            return
         PROJECT_CONTEXT.set(project_id)
         record_event(session["role"], session.get("groupId"), "project_create" if created else "project_select", None, project["name"])
         self.json_response({
