@@ -45,7 +45,7 @@ def main():
                 "/assets/data.js",
                 "/assets/app.js",
                 "/assets/lesson-plan.js",
-                "/assets/images/starry-night-login.webp",
+                "/assets/login-exploration-bg.webp",
                 "/assets/images/maple-login-light.webp",
             )
             for route in resources:

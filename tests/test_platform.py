@@ -897,11 +897,12 @@ class PlatformTest(unittest.TestCase):
         self.assertIn("brandLockup(role)", script)
         self.assertIn("role==='student'?'/student/dashboard.html':'/teacher/dashboard.html'", script)
         self.assertNotIn("brand-mark", script)
-        self.assertIn('class="auth-brand-link" href="/?current" aria-label="返回首页"', script)
+        self.assertIn('class="auth-centered-brand" href="/?current" aria-label="返回首页"', script)
         self.assertIn('class="brand-lockup-image"', script)
         self.assertIn("brandAsset(BRAND.wideLogo)", script)
         self.assertIn(".brand-lockup-image{display:block;width:auto;height:42px;", styles)
-        self.assertIn(".auth-brand-lockup{filter:invert(1)}", styles)
+        self.assertIn('url("login-exploration-bg.webp")', styles)
+        self.assertIn(".auth-centered .auth-main{display:grid;place-items:center", styles)
 
     def test_free_ai_math_renderer_handles_bold_latex_and_prompt_requires_delimiters(self):
         script = (ROOT / "assets" / "app.js").read_text(encoding="utf-8")
