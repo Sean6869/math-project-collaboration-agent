@@ -890,6 +890,9 @@ def merged_state(group_no: int, monitoring: bool = True) -> dict:
     value = dict(class_state)
     group_state = state_get(f"group:{group_no}")
     value.update(group_state)
+    # The project title is shared by the entire class, never a group draft.
+    if "project" in class_state:
+        value["project"] = class_state["project"]
     value.update(current_broadcast(class_state))
     value["stageSubmitted"] = validated_stage_submissions(group_state)
     value["stageTaskStatus"] = stage_task_status(group_state)
@@ -2901,7 +2904,11 @@ class Handler(SimpleHTTPRequestHandler):
         state_put(f"group:{group}", group_state, preserve_roles=True)
         if session["role"] == "teacher":
             class_state = state_get("class")
-            class_state.update({key: incoming[key] for key in CLASS_KEYS - {"groups", "queue", "common"} if key in incoming})
+            class_state.update({key: incoming[key] for key in CLASS_KEYS - {"project", "groups", "queue", "common"} if key in incoming})
+            if session.get("projectName"):
+                class_state["project"] = session["projectName"]
+            elif "project" in incoming:
+                class_state["project"] = incoming["project"]
             resolved_grade = class_code_grade() or grade_from_text(class_state.get("className", ""))
             if resolved_grade:
                 class_state["classGrade"] = resolved_grade
@@ -2987,6 +2994,7 @@ class Handler(SimpleHTTPRequestHandler):
             self.json_response({"error": "登录状态已失效，请重新登录"}, HTTPStatus.UNAUTHORIZED)
             return
         created = False
+        renamed = False
         deleted_project = None
         with database() as db:
             if action == "delete":
@@ -3031,6 +3039,43 @@ class Handler(SimpleHTTPRequestHandler):
                     (state_scope("class", project_id), json.dumps(initial, ensure_ascii=False, separators=(",", ":")), created_at),
                 )
                 created = True
+            elif action == "rename":
+                if session["role"] != "teacher":
+                    self.json_response({"error": "只有教师可以修改项目名称"}, HTTPStatus.FORBIDDEN)
+                    return
+                project_id = str(body.get("projectId", ""))
+                project = db.execute("SELECT id FROM projects WHERE id=?", (project_id,)).fetchone()
+                if not project:
+                    raise ValueError("项目不存在，请刷新项目列表后重试")
+                name = re.sub(r"\s+", " ", str(body.get("name", "")).strip())
+                if not 1 <= len(name) <= 80:
+                    raise ValueError("请填写1—80字的项目名称")
+                db.execute("UPDATE projects SET name=? WHERE id=?", (name, project_id))
+                class_scope = state_scope("class", project_id)
+                class_row = db.execute("SELECT data FROM states WHERE scope=?", (class_scope,)).fetchone()
+                class_state = json.loads(class_row["data"]) if class_row else {}
+                class_state["project"] = name
+                db.execute(
+                    "INSERT INTO states(scope,data,updated_at) VALUES(?,?,?) "
+                    "ON CONFLICT(scope) DO UPDATE SET data=excluded.data,updated_at=excluded.updated_at",
+                    (class_scope, json.dumps(class_state, ensure_ascii=False, separators=(",", ":")), utc_now()),
+                )
+                plan_scope = state_scope("project-plan", project_id)
+                plan_row = db.execute("SELECT data FROM states WHERE scope=?", (plan_scope,)).fetchone()
+                if plan_row:
+                    published = json.loads(plan_row["data"])
+                    plan = published.get("plan")
+                    if isinstance(plan, dict):
+                        plan["title"] = name
+                        for lesson in plan.get("lessons", []):
+                            if isinstance(lesson, dict):
+                                lesson["title"] = name
+                                if isinstance(lesson.get("projectInfo"), dict):
+                                    lesson["projectInfo"]["title"] = name
+                        published["revision"] = int(published.get("revision", 0)) + 1
+                        db.execute("UPDATE states SET data=?,updated_at=? WHERE scope=?",
+                                   (json.dumps(published, ensure_ascii=False, separators=(",", ":")), utc_now(), plan_scope))
+                renamed = True
             elif action == "select":
                 project_id = str(body.get("projectId", ""))
                 row = db.execute("SELECT id FROM projects WHERE id=?", (project_id,)).fetchone()
@@ -3045,9 +3090,9 @@ class Handler(SimpleHTTPRequestHandler):
             self.json_response({"ok": True, "deleted": True, "projectId": deleted_project})
             return
         PROJECT_CONTEXT.set(project_id)
-        record_event(session["role"], session.get("groupId"), "project_create" if created else "project_select", None, project["name"])
+        record_event(session["role"], session.get("groupId"), "project_create" if created else "project_rename" if renamed else "project_select", None, project["name"])
         self.json_response({
-            "ok": True, "created": created, "projectId": project["id"], "projectName": project["name"],
+            "ok": True, "created": created, "renamed": renamed, "projectId": project["id"], "projectName": project["name"],
             "projectLabel": f"{str(project['created_at'])[:10]} - {project['name']}",
         }, HTTPStatus.CREATED if created else HTTPStatus.OK)
 

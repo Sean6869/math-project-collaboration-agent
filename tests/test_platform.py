@@ -587,6 +587,55 @@ class PlatformTest(unittest.TestCase):
                     db.execute("DELETE FROM projects WHERE id=?", (project_id,))
                 db.execute("UPDATE sessions SET project_id=NULL")
 
+    def test_teacher_can_rename_project_and_students_see_new_name(self):
+        teacher, student = self.client(), self.client()
+        self.json_request(teacher, "/api/login", "POST", {
+            "role": "teacher", "username": "test_teacher", "password": "StrongTeacher#2026",
+        })
+        self.json_request(student, "/api/login", "POST", {
+            "role": "student", "classCode": "CLASS2026", "groupId": 1, "groupCode": "TEAM01",
+        })
+        project_id = None
+        try:
+            _, created = self.json_request(teacher, "/api/projects", "POST", {
+                "action": "create", "name": "原项目名",
+            })
+            project_id = created["projectId"]
+            self.json_request(student, "/api/projects", "POST", {
+                "action": "select", "projectId": project_id,
+            })
+            with self.assertRaises(urllib.error.HTTPError) as denied:
+                self.json_request(student, "/api/projects", "POST", {
+                    "action": "rename", "projectId": project_id, "name": "学生改名",
+                })
+            self.assertEqual(denied.exception.code, 403)
+            status, renamed = self.json_request(teacher, "/api/projects", "POST", {
+                "action": "rename", "projectId": project_id, "name": "  新的 探究项目  ",
+            })
+            self.assertEqual(status, 200)
+            self.assertEqual(renamed["projectName"], "新的 探究项目")
+            self.assertTrue(renamed["projectLabel"].endswith(" - 新的 探究项目"))
+            self.assertEqual(self.json_request(student, "/api/session")[1]["projectName"], "新的 探究项目")
+            self.assertEqual(self.json_request(student, "/api/state")[1]["state"]["project"], "新的 探究项目")
+            self.assertEqual(self.json_request(teacher, "/api/projects")[1]["projects"][0]["name"], "新的 探究项目")
+            self.json_request(teacher, "/api/lesson-plan/publish", "POST", {
+                "plan": {"title": "配置页名称", "lessons": [{"title": "配置页名称"}]},
+                "selectedLesson": 1, "revision": 0, "className": "测试班", "reviewed": True,
+            })
+            self.assertEqual(self.json_request(student, "/api/session")[1]["projectName"], "配置页名称")
+            self.assertEqual(self.json_request(student, "/api/state")[1]["state"]["project"], "配置页名称")
+            self.json_request(teacher, "/api/projects", "POST", {
+                "action": "rename", "projectId": project_id, "name": "最终名称",
+            })
+            published = self.json_request(teacher, "/api/lesson-plan")[1]["published"]
+            self.assertEqual(published["plan"]["lessons"][0]["title"], "最终名称")
+        finally:
+            if project_id:
+                with app.database() as db:
+                    db.execute("DELETE FROM states WHERE scope LIKE ?", (f"project:{project_id}:%",))
+                    db.execute("DELETE FROM projects WHERE id=?", (project_id,))
+                    db.execute("UPDATE sessions SET project_id=NULL WHERE project_id=?", (project_id,))
+
     def test_only_admin_can_delete_project_and_related_state(self):
         admin, teacher = self.client(), self.client()
         self.json_request(admin, "/api/login", "POST", {

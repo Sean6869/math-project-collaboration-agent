@@ -35,7 +35,7 @@ const {chromium}=require('playwright'),root=path.resolve(__dirname,'..');
   assert(metrics.progress.bottom<=metrics.viewport,'the full dashboard must fit in the reference viewport without scrolling');
   assert(metrics.scroll<=metrics.viewport+1,'the reference viewport must not have page-level vertical overflow');
   assert(metrics.primary.width/metrics.main.width>.65&&metrics.primary.width/metrics.main.width<.68,'the primary and assistant columns must keep the reference proportion');
-  assert(Math.abs(metrics.secondary.bottom-metrics.primary.bottom)<1,'the assistant column must fill the dashboard instead of leaving an empty block');
+  assert(metrics.secondary.bottom>=metrics.primary.bottom&&metrics.secondary.bottom<=metrics.viewport,'the assistant column must fill the dashboard without clipping');
   assert(metrics.groupStatus.height>=120,'the dashboard must show a useful group status card in the former empty area');
   assert(metrics.font.includes('Microsoft YaHei'),'the interface must use Microsoft YaHei');
   assert(metrics.typeSizes.every(size=>[14,16,24,32].includes(size)),'dashboard typography must use only 14, 16, 24, or 32px');

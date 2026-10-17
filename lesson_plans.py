@@ -266,6 +266,7 @@ def analyze(app, text, images, lesson_count=1):
         content += [{'type': 'text', 'text': f'原文第{number}页视觉内容：'},
                     {'type': 'image_url', 'image_url': {'url': 'data:image/jpeg;base64,' + encoded}}]
     payload = {'model': model, 'stream': False, 'temperature': 0.1, 'max_tokens': 16000,
+               'thinking': {'type': 'disabled'},
                'response_format': {'type': 'json_object'},
                'messages': [{'role': 'system', 'content': system}, {'role': 'user', 'content': content if images else text}]}
     request = urllib.request.Request(app.ARK_TEXT_URL, data=json.dumps(payload).encode(),
@@ -307,7 +308,8 @@ def suggest_lesson_count(app, text, images):
         content += [{'type': 'text', 'text': f'原文第{number}页视觉内容：'},
                     {'type': 'image_url', 'image_url': {'url': 'data:image/jpeg;base64,' + encoded}}]
     payload = {'model': os.environ.get('ARK_PLAN_MODEL') or app.ARK_TEXT_MODEL, 'stream': False,
-               'temperature': 0.1, 'max_tokens': 300, 'response_format': {'type': 'json_object'},
+               'temperature': 0.1, 'max_tokens': 300, 'thinking': {'type': 'disabled'},
+               'response_format': {'type': 'json_object'},
                'messages': [{'role': 'system', 'content': system},
                             {'role': 'user', 'content': content if images else text}]}
     request = urllib.request.Request(app.ARK_TEXT_URL, data=json.dumps(payload).encode(),
@@ -421,7 +423,18 @@ def publish(app, body, owner=None):
         row = db.execute("SELECT data FROM states WHERE scope=?", (class_scope,)).fetchone()
         state = json.loads(row['data']) if row else {}
         info = plan['lessons'][number - 1].get('projectInfo', plan)
-        state.update(project=info['title'], className=class_name.strip(), projectType=info['projectType'], projectHours=f"{len(plan['lessons'])}课时")
+        project_name = info['title']
+        if not 1 <= len(project_name) <= 80:
+            raise ValueError('请填写1—80字的项目名称')
+        plan['title'] = project_name
+        for lesson in plan['lessons']:
+            lesson['title'] = project_name
+            if isinstance(lesson.get('projectInfo'), dict):
+                lesson['projectInfo']['title'] = project_name
+        selected_project = app.PROJECT_CONTEXT.get()
+        if selected_project:
+            db.execute('UPDATE projects SET name=? WHERE id=?', (project_name, selected_project))
+        state.update(project=project_name, className=class_name.strip(), projectType=info['projectType'], projectHours=f"{len(plan['lessons'])}课时")
         grade = app.class_code_grade() or app.grade_from_text(class_name)
         if grade:
             state['classGrade'] = grade

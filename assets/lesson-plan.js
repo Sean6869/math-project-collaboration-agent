@@ -26,7 +26,7 @@ async function mount({s,api,esc,toast,refreshState,teacherId}){
  selected=Math.max(1,Math.min(selected,plan.lessons.length));
  $('projectInfoFields').innerHTML=Object.entries(fields).map(([key,label])=>{
   const multiline=['teachingUnit','projectSummary','learningObjectives'].includes(key);
-  return '<div class="field'+(multiline?' span-2':'')+'"><label for="'+fieldId(key)+'">'+esc(label)+'</label>'+(multiline?'<textarea rows="4" id="'+fieldId(key)+'"></textarea>':'<input id="'+fieldId(key)+'">')+'</div>';
+  return '<div class="field'+(multiline?' span-2':'')+'"><label for="'+fieldId(key)+'">'+esc(label)+'</label>'+(multiline?'<textarea rows="4" id="'+fieldId(key)+'"></textarea>':'<input id="'+fieldId(key)+'"'+(key==='title'?' maxlength="80"':'')+'>')+'</div>';
  }).join('');
  const source=$('planSource');source.innerHTML='<h2>教案智能解析</h2><div class="field"><label for="planTotal">总课时数</label><input id="planTotal" type="number" min="1" max="30"></div><div class="field mt12"><label for="planFile">教案文件（PDF / DOCX，最大10MB）</label><div class="file-upload"><input id="planFileStatus" class="file-name" type="text" readonly placeholder="尚未选择教案"><div class="file-upload-actions"><label class="btn evidence-file-button">选择文件<input id="planFile" type="file" accept=".pdf,.docx" hidden></label><button id="planAnalyze" class="btn primary">解析教案</button></div></div></div><p id="planStatus" role="status" aria-live="polite"></p><div id="planPreview"></div><button class="btn mt12" id="planApply" hidden>填入解析结果</button>';
  const resourceSource=$('resourceSource');resourceSource.innerHTML='<h2>课程支持材料</h2><div class="field"><label for="resourceFile">无需AI解析，可上传多份；勾选后随本课时发布给学生</label><div class="file-upload"><input id="resourceFileStatus" class="file-name" type="text" readonly placeholder="尚未选择材料"><div class="file-upload-actions"><label class="btn evidence-file-button">选择文件<input id="resourceFile" type="file" multiple accept=".pdf,.docx,.txt,.md,.csv,.png,.jpg,.jpeg,.webp" hidden></label><button id="resourceUpload" class="btn primary">上传材料</button></div></div></div><div id="resourceList" class="task-list"></div>';
@@ -104,12 +104,14 @@ async function mount({s,api,esc,toast,refreshState,teacherId}){
  $('saveProject').onclick=async()=>{
   read();const count=Number($('pcGroupCount').value);
   if(!Number.isInteger(count)||count<1||count>20){toast('小组数量应为1—20');return}
-  if(plan.lessons.some(l=>!l.projectInfo.title)){toast('请填写各课时项目名称');return}
+  if(!plan.lessons[selected-1].projectInfo.title){toast('请填写项目名称');return}
+  const projectName=plan.lessons[selected-1].projectInfo.title;
+  plan.lessons.forEach(lesson=>{lesson.projectInfo.title=projectName});
   if(count<s.groupCount&&!confirm('减少小组将删除被移除小组的数据，是否继续？'))return;
   const button=$('saveProject');button.disabled=true;let groupChanged=false;
   try{
    if(count!==s.groupCount){const result=await api('/api/groups/configure',{method:'POST',body:JSON.stringify({groupCount:count})});groupChanged=true;s.groupCount=count;if(result.addedCodes?.length)alert('请保存新增访问码：\n'+result.addedCodes.map(x=>x.groupNo+'组：'+x.code).join('\n'))}
-   const saved=await api('/api/lesson-plan/publish',{method:'POST',body:JSON.stringify({plan,selectedLesson:selected,revision,className:$('pcClass').value.trim(),reviewed:true,sourceJobId,shareSource,resourceIds})});revision=saved.revision;sourceJobId=null;dirty=false;stash();$('planSaveStatus').textContent='已发布第'+selected+'课时';toast('项目配置已保存');await refreshState();
+   const saved=await api('/api/lesson-plan/publish',{method:'POST',body:JSON.stringify({plan,selectedLesson:selected,revision,className:$('pcClass').value.trim(),reviewed:true,sourceJobId,shareSource,resourceIds})});revision=saved.revision;sourceJobId=null;dirty=false;stash();$('planSaveStatus').textContent='已发布第'+selected+'课时';toast('项目配置已保存');await refreshState();if(projectName!==s.project)location.reload();
   }catch(e){$('planSaveStatus').textContent=(groupChanged?'小组已更新，但项目保存失败：':'保存失败：')+e.message}finally{button.disabled=false}
  };
  window.addEventListener('beforeunload',event=>{if(dirty){event.preventDefault();event.returnValue=''}});
