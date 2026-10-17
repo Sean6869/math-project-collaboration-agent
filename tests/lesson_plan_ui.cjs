@@ -109,7 +109,7 @@ const state={className:'七年级测试班',project:'原项目',groupCount:3,gro
      assert.equal(await page.locator('.dashboard-project-head h1').textContent(),state.project);
      assert.equal(await page.locator('#projectOverview').count(),0);
      assert((await page.locator('.dashboard-project-head p').textContent()).length<=53);
-     assert.equal(await page.locator('.dashboard-task-intro').count(),0);
+     assert.equal((await page.locator('.dashboard-task-intro').textContent()).trim(),'和伙伴一起迈出每一步，让想法在探索中变得更清晰！');
      assert.equal(await page.locator('.dashboard-task-card .task small').count(),0);
      assert.equal(await page.locator('.dashboard-status').count(),1);
      assert.equal(await page.locator('.dashboard-status .journey-step').count(),5);
