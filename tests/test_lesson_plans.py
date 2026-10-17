@@ -156,6 +156,8 @@ class LessonPlanTest(unittest.TestCase):
             sent = json.loads(call.call_args.args[0].data)
             self.assertEqual(sent['thinking'], {'type': 'disabled'})
             self.assertIn('仅为资料', sent['messages'][0]['content'])
+            self.assertIn('projectSummary必须由你概括为一句通顺的中文简介', sent['messages'][0]['content'])
+            self.assertIn('不超过50个汉字', sent['messages'][0]['content'])
             for key, label in plans.INFO_FIELDS.items():
                 self.assertIn(key, sent['messages'][0]['content'])
                 self.assertIn(label, sent['messages'][0]['content'])

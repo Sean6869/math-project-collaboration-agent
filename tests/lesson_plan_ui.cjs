@@ -108,9 +108,9 @@ const state={className:'七年级测试班',project:'原项目',groupCount:3,gro
     if(role==='student'&&file==='dashboard.html'){
      assert.equal(await page.locator('.dashboard-project-head h1').textContent(),state.project);
      assert.equal(await page.locator('#projectOverview').count(),0);
-     assert((await page.locator('.dashboard-project-head p').textContent()).includes('本课时为方案探究制作阶段'));
-     assert((await page.locator('.dashboard-task-intro').textContent()).includes('知识目标'));
-     assert.notEqual(await page.locator('.dashboard-project-head p').textContent(),await page.locator('.dashboard-task-intro').textContent());
+     assert((await page.locator('.dashboard-project-head p').textContent()).length<=53);
+     assert.equal(await page.locator('.dashboard-task-intro').count(),0);
+     assert.equal(await page.locator('.dashboard-task-card .task small').count(),0);
      assert.equal(await page.locator('.dashboard-status').count(),1);
      assert.equal(await page.locator('.dashboard-status .journey-step').count(),5);
      assert.equal(await page.locator('.journey-step[aria-current="step"]').count(),1);
