@@ -16,7 +16,7 @@ function normalize(source){
 async function mount({s,api,esc,toast,refreshState,teacherId}){
  const $=id=>document.getElementById(id),snapshot=await api('/api/lesson-plan');
  const fields=snapshot.fields,fieldId=key=>key==='title'?'pcProject':'pc-'+key;
- let revision=snapshot.published.revision||0,job=snapshot.job,selected=snapshot.published.selectedLesson||1;
+ let revision=snapshot.published.revision||0,job=snapshot.job,selected=snapshot.published.selectedLesson||1,publishedSourceJobId=snapshot.published.sourceJobId||null;
  const initial=info({title:s.project||'',grade:'',mathTopic:s.teacherConfig.mathTopic||'',standard:s.teacherConfig.standard||'',projectType:s.projectType||''});
  let plan=normalize(snapshot.published.plan||{...initial,lessons:[{projectInfo:initial}],warnings:[]});
  let dirty=false,busy=false,inspectedJob=null,appliedJob=snapshot.published.sourceJobId||null,pendingJob=null,sourceJobId=null,shareSource=!!snapshot.published.supportMaterial;
@@ -80,7 +80,8 @@ async function mount({s,api,esc,toast,refreshState,teacherId}){
   busy=Boolean(job&&['inspecting','extracting','analyzing'].includes(job.status));
   if(job?.status==='inspected'&&inspectedJob!==job.id){inspectedJob=job.id;$('planTotal').value=job.lessonCount}
   $('planAnalyze').disabled=busy||!job?.id;$('planTotal').disabled=busy;
-  $('planStatus').textContent=job?.detail||'';
+  const publishedJob=revision>0&&job?.status==='ready'&&publishedSourceJobId===job.id;
+  $('planStatus').textContent=publishedJob&&!dirty?'解析完成，已发布第'+selected+'课时':job?.detail||'';
   applyResult();
   const material=job||snapshot.published.supportMaterial;
   const url=material?'/api/lesson-plan/'+(job?'source':'material')+'?id='+encodeURIComponent(material.id):'';
@@ -111,11 +112,22 @@ async function mount({s,api,esc,toast,refreshState,teacherId}){
   const button=$('saveProject');button.disabled=true;let groupChanged=false;
   try{
    if(count!==s.groupCount){const result=await api('/api/groups/configure',{method:'POST',body:JSON.stringify({groupCount:count})});groupChanged=true;s.groupCount=count;if(result.addedCodes?.length)alert('请保存新增访问码：\n'+result.addedCodes.map(x=>x.groupNo+'组：'+x.code).join('\n'))}
-   const saved=await api('/api/lesson-plan/publish',{method:'POST',body:JSON.stringify({plan,selectedLesson:selected,revision,className:$('pcClass').value.trim(),reviewed:true,sourceJobId,shareSource,resourceIds})});revision=saved.revision;sourceJobId=null;dirty=false;stash();$('planSaveStatus').textContent='已发布第'+selected+'课时';toast('项目配置已保存');await refreshState();if(projectName!==s.project)location.reload();
+   const previousRevision=revision,publishBody={plan,selectedLesson:selected,revision,className:$('pcClass').value.trim(),reviewed:true,sourceJobId,shareSource,resourceIds};
+   let saved;
+   try{saved=await api('/api/lesson-plan/publish',{method:'POST',body:JSON.stringify(publishBody)})}
+   catch(error){
+    // The server may commit before a connection drops. Reconcile against the
+    // authoritative snapshot so a successful publish is never shown as failed.
+    if(error instanceof TypeError||/Failed to fetch|网络|连接/.test(error.message||'')){
+     try{const latest=await api('/api/lesson-plan'),published=latest.published||{},info=published.plan?.lessons?.[published.selectedLesson-1]?.projectInfo;if(published.revision>previousRevision&&published.selectedLesson===selected&&info?.title===projectName)saved=published}catch(_){}
+    }
+    if(!saved)throw error;
+   }
+   revision=saved.revision;publishedSourceJobId=saved.sourceJobId||sourceJobId||publishedSourceJobId;sourceJobId=null;dirty=false;stash();$('planSaveStatus').textContent='已发布第'+selected+'课时';$('planStatus').textContent='解析完成，已发布第'+selected+'课时';toast('项目配置已保存');await refreshState();if(projectName!==s.project)location.reload();
   }catch(e){$('planSaveStatus').textContent=(groupChanged?'小组已更新，但项目保存失败：':'保存失败：')+e.message}finally{button.disabled=false}
  };
  window.addEventListener('beforeunload',event=>{if(dirty){event.preventDefault();event.returnValue=''}});
- paint();preview();renderResources();if(busy)setTimeout(poll,2000);
+ paint();preview();renderResources();if(revision>0&&!dirty)$('planSaveStatus').textContent='已发布第'+selected+'课时';if(busy)setTimeout(poll,2000);
 }
 window.MPT_PLAN={mount};
 })();

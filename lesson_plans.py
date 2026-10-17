@@ -687,4 +687,12 @@ def handle(app, handler, method, route):
             handler.json_response({'error': '接口不存在'}, 404)
     except ValueError as exc:
         handler.json_response({'error': str(exc)}, 400)
+    except sqlite3.Error as exc:
+        # Keep transient database failures inside the JSON API. If the request
+        # handler closes the socket, browsers can only report "Failed to fetch".
+        handler.log_error('lesson plan database request failed: %r', exc)
+        handler.json_response({'error': '项目保存暂时繁忙，请稍后重试'}, 503)
+    except Exception as exc:
+        handler.log_error('lesson plan request failed: %r', exc)
+        handler.json_response({'error': '项目配置处理失败，请刷新后重试'}, 500)
     return True

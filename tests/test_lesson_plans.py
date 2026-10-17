@@ -84,6 +84,32 @@ class LessonPlanTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             plans.validate_plan({'title': 'Only a title'})
 
+    def test_unexpected_publish_failure_returns_json_instead_of_dropping_connection(self):
+        class Handler:
+            path = '/api/lesson-plan/publish'
+
+            def __init__(self):
+                self.response = None
+                self.logged = None
+
+            def require_session(self, role=None):
+                return {'role': 'teacher', 'teacherId': 1}
+
+            def read_json(self, limit=None):
+                return {}
+
+            def json_response(self, payload, status=200):
+                self.response = (status, payload)
+
+            def log_error(self, pattern, *args):
+                self.logged = pattern % args
+
+        handler = Handler()
+        with mock.patch.object(plans, 'publish', side_effect=RuntimeError('unexpected')):
+            self.assertTrue(plans.handle(app, handler, 'POST', handler.path))
+        self.assertEqual(handler.response, (500, {'error': '项目配置处理失败，请刷新后重试'}))
+        self.assertIn('unexpected', handler.logged)
+
     def test_publication_is_reviewed_atomic_and_preserves_student_work(self):
         app.state_put('class', {'project': '旧项目', 'currentStage': 3, 'teacherConfig': {'knowledge': ['学生资料'], 'staticHints': ['保留']}})
         group = {'members': ['甲', '乙'], 'roles': ['记录者', '建模者'], 'workspace': {'problem': '保留的工作'}, 'stageSubmitted': {'1': False}, 'freeAi': {'usage': 2}, 'roleRound': 2}

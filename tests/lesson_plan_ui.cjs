@@ -28,7 +28,7 @@ const state={className:'七年级测试班',project:'原项目',groupCount:3,gro
     job=analyzeCalls===1?{id:'failed',name:'新教案.docx',status:'failed',detail:'解析超时',result:null}:{id:'retried',name:'新教案.docx',status:'ready',detail:'解析完成',result:plan};result={id:job.id};
    }else if(url.pathname==='/api/lesson-plan/publish'){
     const body=req.postDataJSON();assert.equal(body.reviewed,true);assert.equal(body.shareSource,true);assert.deepEqual(body.resourceIds,['resource-1']);publishCalls++;
-    published={plan:body.plan,selectedLesson:body.selectedLesson,revision:publishCalls,sourceJobId:body.sourceJobId,supportMaterial:{id:'shared',name:'采购.docx'},supportResources:resources};
+    published={plan:body.plan,selectedLesson:body.selectedLesson,revision:publishCalls,sourceJobId:body.sourceJobId,supportMaterial:{id:'shared',name:'采购.docx'},supportResources:resources};state.project=body.plan.lessons[body.selectedLesson-1].projectInfo.title;
     state.currentLesson={lessonNo:body.selectedLesson,title:project.title,projectInfo:body.plan.lessons[body.selectedLesson-1].projectInfo,totalLessons:4,revision:publishCalls,supportMaterial:published.supportMaterial,supportMaterials:[published.supportMaterial,...resources]};result=published;
    }
    await route.fulfill({contentType:'application/json',body:JSON.stringify(result)});
@@ -47,6 +47,7 @@ const state={className:'七年级测试班',project:'原项目',groupCount:3,gro
   await page.reload();await page.locator('#pcProject').waitFor();assert.equal(await page.getByLabel('学习目标',{exact:true}).inputValue(),'第二课时人工审核目标');
   await page.locator('#resourceFile').setInputFiles({name:'采购清单.txt',mimeType:'text/plain',buffer:Buffer.from('预算材料')});await page.locator('#resourceUpload').click();await page.getByText('采购清单.txt',{exact:true}).waitFor();
   await page.locator('#saveProject').click();await page.waitForFunction(()=>document.querySelector('#planSaveStatus').textContent.includes('已发布'));
+  assert.match(await page.locator('#planStatus').textContent(),/已发布第2课时/);
   assert.equal(publishCalls,1);assert.equal(published.selectedLesson,2);assert.equal(published.plan.lessons[1].projectInfo.learningObjectives,'第二课时人工审核目标');
   await page.locator('#planFile').setInputFiles({name:'新教案.docx',mimeType:'application/vnd.openxmlformats-officedocument.wordprocessingml.document',buffer:Buffer.from('mock document')});await page.waitForFunction(()=>document.querySelector('#planStatus').textContent.includes('建议4课时'));assert.equal(await page.locator('#planTotal').inputValue(),'4');
   await page.locator('#planAnalyze').click();await page.waitForFunction(()=>document.querySelector('#planStatus').textContent.includes('超时'));
@@ -108,6 +109,8 @@ const state={className:'七年级测试班',project:'原项目',groupCount:3,gro
      assert.equal(await page.locator('.dashboard-project-head h1').textContent(),state.project);
      assert.equal(await page.locator('#projectOverview').count(),0);
      assert((await page.locator('.dashboard-project-head p').textContent()).includes('本课时为方案探究制作阶段'));
+     assert((await page.locator('.dashboard-task-intro').textContent()).includes('知识目标'));
+     assert.notEqual(await page.locator('.dashboard-project-head p').textContent(),await page.locator('.dashboard-task-intro').textContent());
      assert.equal(await page.locator('.dashboard-status').count(),1);
      assert.equal(await page.locator('.dashboard-status .journey-step').count(),5);
      assert.equal(await page.locator('.journey-step[aria-current="step"]').count(),1);
