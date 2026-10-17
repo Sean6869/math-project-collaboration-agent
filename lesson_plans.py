@@ -8,12 +8,14 @@ import base64
 import io
 import html
 import json
+import logging
 import mimetypes
 import os
 import re
 import secrets
 import sqlite3
 import threading
+import time
 import urllib.error
 import urllib.request
 import zipfile
@@ -268,8 +270,10 @@ def analyze(app, text, images, lesson_count=1):
                'messages': [{'role': 'system', 'content': system}, {'role': 'user', 'content': content if images else text}]}
     request = urllib.request.Request(app.ARK_TEXT_URL, data=json.dumps(payload).encode(),
                                     headers={'Content-Type': 'application/json', 'Authorization': 'Bearer ' + key})
+    timeout = app.env_seconds('ARK_PLAN_TIMEOUT_SECONDS', max(240, app.ARK_TEXT_TIMEOUT_SECONDS), minimum=60, maximum=300)
+    started = time.monotonic()
     try:
-        with urllib.request.urlopen(request, timeout=app.ARK_TEXT_TIMEOUT_SECONDS) as response:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
             result = json.loads(response.read(2 * 1024 * 1024))
         choice = result['choices'][0]
         if choice.get('finish_reason') != 'stop':
@@ -280,7 +284,13 @@ def analyze(app, text, images, lesson_count=1):
     except (KeyError, IndexError, TypeError, json.JSONDecodeError) as exc:
         raise ValueError('豆包未返回完整有效的结构化内容，请重试') from exc
     except (TimeoutError, urllib.error.URLError) as exc:
-        raise ValueError('豆包解析超时或网络不可用，原文件已保留，可以重试') from exc
+        timed_out = isinstance(exc, TimeoutError) or isinstance(getattr(exc, 'reason', None), TimeoutError)
+        logging.warning('Lesson plan analysis upstream %s after %.1fs (timeout=%ss, lessons=%s, images=%s, reason=%s)',
+                        'timeout' if timed_out else 'connection failure', time.monotonic() - started,
+                        timeout, lesson_count, len(images), type(getattr(exc, 'reason', exc)).__name__)
+        if timed_out:
+            raise ValueError(f'豆包解析等待超过{timeout}秒；原文件已保留，请重试，或按课时拆分教案') from exc
+        raise ValueError('无法连接豆包解析服务；原文件已保留，请稍后重试') from exc
 
 
 def suggest_lesson_count(app, text, images):
@@ -318,7 +328,10 @@ def suggest_lesson_count(app, text, images):
     except (KeyError, IndexError, TypeError, json.JSONDecodeError) as exc:
         raise ValueError('AI未返回有效的课时建议，请重试') from exc
     except (TimeoutError, urllib.error.URLError) as exc:
-        raise ValueError('AI判断课时数超时或网络不可用，请重试') from exc
+        timed_out = isinstance(exc, TimeoutError) or isinstance(getattr(exc, 'reason', None), TimeoutError)
+        logging.warning('Lesson count inspection upstream %s (reason=%s)',
+                        'timeout' if timed_out else 'connection failure', type(getattr(exc, 'reason', exc)).__name__)
+        raise ValueError('AI判断课时数超时，请重试' if timed_out else '无法连接豆包课时判断服务，请稍后重试') from exc
 
 
 def run_inspection(app, job_id):

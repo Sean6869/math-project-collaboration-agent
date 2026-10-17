@@ -147,6 +147,21 @@ class LessonPlanTest(unittest.TestCase):
             sent = json.loads(call.call_args.args[0].data)
             self.assertIn('仅为资料', sent['messages'][0]['content'])
 
+    def test_plan_analysis_uses_separate_timeout_and_distinguishes_network_failure(self):
+        with mock.patch.dict(os.environ, {'ARK_API_KEY': 'test-key', 'ARK_PLAN_TIMEOUT_SECONDS': ''}), \
+             mock.patch.object(app, 'ARK_TEXT_TIMEOUT_SECONDS', 120), \
+             mock.patch.object(plans.urllib.request, 'urlopen') as call:
+            call.side_effect = TimeoutError('timed out')
+            with self.assertRaisesRegex(ValueError, '等待超过240秒'):
+                plans.analyze(app, '教案正文', [], 4)
+            self.assertEqual(call.call_args.kwargs['timeout'], 240)
+            call.side_effect = urllib.error.URLError('connection refused')
+            with self.assertRaisesRegex(ValueError, '无法连接豆包解析服务'):
+                plans.analyze(app, '教案正文', [], 4)
+            call.side_effect = urllib.error.URLError(TimeoutError('timed out'))
+            with self.assertRaisesRegex(ValueError, '等待超过240秒'):
+                plans.analyze(app, '教案正文', [], 4)
+
     def test_original_activity_minutes_cannot_be_lost_or_counted_twice(self):
         value = sample_plan()
         value['declaredLessons'] = 4
