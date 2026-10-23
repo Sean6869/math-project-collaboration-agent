@@ -45,6 +45,25 @@ def word_file():
     return output.getvalue()
 
 
+def new_template_word_file():
+    """Small fixture shaped like the new five-stage DOCX template."""
+    xml = '''<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>
+    <w:p><w:r><w:t>“智能体接入的五阶段数学项目式学习”基本信息表</w:t></w:r></w:p>
+    <w:tbl>
+      <w:tr><w:tc><w:p><w:r><w:t>项目名称</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>校园节水方案</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>项目规模</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>□微型2–3课时  □标准5–7课时</w:t></w:r></w:p></w:tc></w:tr>
+      <w:tr><w:tc><w:p><w:r><w:t>教学单元/章节</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>数据的收集与整理</w:t></w:r></w:p></w:tc></w:tr>
+      <w:tr><w:tc><w:p><w:r><w:t>项目概要</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>调查校园用水并提出节水建议</w:t></w:r></w:p></w:tc></w:tr>
+    </w:tbl>
+    <w:p><w:r><w:t>学习目标与评价证据</w:t></w:r></w:p>
+    <w:tbl>
+      <w:tr><w:tc><w:p><w:r><w:t>学生将会知道/理解</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>理解平均数的意义</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>学生将能做到</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>能根据数据比较方案</w:t></w:r></w:p></w:tc></w:tr>
+    </w:tbl></w:body></w:document>'''
+    output = io.BytesIO()
+    with zipfile.ZipFile(output, 'w') as archive:
+        archive.writestr(zipfile.ZipInfo('word/document.xml'), xml)
+    return output.getvalue()
+
+
 class LessonPlanTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -70,6 +89,8 @@ class LessonPlanTest(unittest.TestCase):
     def test_extract_and_schema_reject_partial_or_forged_structure(self):
         text, images, pages, warnings = plans.extract_source('采购.docx', word_file())
         self.assertIn('预算15元', text)
+        self.assertIn('【Word表格1】', text)
+        self.assertIn('第1行｜预算15元', text)
         self.assertEqual((images, pages, warnings), ([], 0, []))
         normalized = plans.validate_plan(sample_plan(), pages=0)
         self.assertEqual(len(normalized['lessons']), 4)
@@ -83,6 +104,16 @@ class LessonPlanTest(unittest.TestCase):
             plans.extract_source('bad.pdf', b'not a pdf')
         with self.assertRaises(ValueError):
             plans.validate_plan({'title': 'Only a title'})
+
+    def test_new_five_stage_template_preserves_field_and_cell_structure(self):
+        text, images, pages, warnings = plans.extract_source('五阶段模板.docx', new_template_word_file())
+        self.assertEqual((images, pages, warnings), ([], 0, []))
+        self.assertIn('【Word段落】“智能体接入的五阶段数学项目式学习”基本信息表', text)
+        self.assertIn('第1行｜项目名称 || 校园节水方案 || 项目规模 || □微型2–3课时 □标准5–7课时', text)
+        self.assertIn('第2行｜教学单元/章节 || 数据的收集与整理', text)
+        self.assertIn('【Word表格2】', text)
+        self.assertIn('学生将会知道/理解 || 理解平均数的意义', text)
+        self.assertIn('学生将能做到 || 能根据数据比较方案', text)
 
     def test_unexpected_publish_failure_returns_json_instead_of_dropping_connection(self):
         class Handler:
@@ -158,6 +189,10 @@ class LessonPlanTest(unittest.TestCase):
             self.assertIn('仅为资料', sent['messages'][0]['content'])
             self.assertIn('projectSummary必须由你概括为一句通顺的中文简介', sent['messages'][0]['content'])
             self.assertIn('不超过50个汉字', sent['messages'][0]['content'])
+            self.assertIn('教学单元/章节→teachingUnit', sent['messages'][0]['content'])
+            self.assertIn('学生将会知道/理解', sent['messages'][0]['content'])
+            self.assertIn('空白模板必须留空', sent['messages'][0]['content'])
+            self.assertIn('未勾选的□不是已选项', sent['messages'][0]['content'])
             for key, label in plans.INFO_FIELDS.items():
                 self.assertIn(key, sent['messages'][0]['content'])
                 self.assertIn(label, sent['messages'][0]['content'])
@@ -176,6 +211,7 @@ class LessonPlanTest(unittest.TestCase):
             sent = json.loads(call.call_args.args[0].data)
             self.assertEqual(sent['thinking'], {'type': 'disabled'})
             self.assertIn('仅为资料', sent['messages'][0]['content'])
+            self.assertIn('模板自带的五个阶段标题都不算原文明示课时数', sent['messages'][0]['content'])
 
     def test_plan_analysis_uses_separate_timeout_and_distinguishes_network_failure(self):
         with mock.patch.dict(os.environ, {'ARK_API_KEY': 'test-key', 'ARK_PLAN_TIMEOUT_SECONDS': ''}), \
