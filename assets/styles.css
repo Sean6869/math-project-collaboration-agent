@@ -536,3 +536,59 @@ input[data-camera-ready][hidden]{display:none!important}
 .ai-photo-item img{width:88px;height:72px;object-fit:cover;border-radius:10px}
 .ai-attached-image{width:150px;max-width:100%;max-height:160px;object-fit:contain;border-radius:12px;margin:8px 8px 0 0}
 #imageTranscript{min-height:220px}
+
+/* Buttons keep their complete labels and size to their content. */
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;max-width:100%;white-space:normal;overflow-wrap:anywhere;line-height:1.45;text-align:center}
+[hidden]{display:none!important}
+.actions,.toolbar,.file-upload-actions,.camera-controls{min-width:0;align-items:stretch}
+.actions>.btn,.toolbar>.btn,.file-upload-actions>.btn{flex:0 1 auto;min-width:0}
+.page-head{flex-wrap:wrap}
+.page-head>div{min-width:0;max-width:100%}
+.file-upload-actions>.btn{width:auto;min-width:101px}
+.help-actions .btn{white-space:normal}
+/* The composer grows with photos/actions; only the conversation scrolls. */
+.ai-chat-panel{max-height:none;min-width:0}
+.ai-chat-title,#aiBoundaries,.ai-composer{flex:0 0 auto;min-width:0}
+.ai-chat-title>div{min-width:0;overflow-wrap:anywhere}
+.ai-conversation{min-height:240px;max-height:55dvh;min-width:0}
+.ai-chat-empty{min-height:180px}
+#aiBoundaries{padding:10px 18px;margin:0;gap:8px}
+.ai-composer{display:block;padding:14px 18px 18px}
+.ai-composer-main{display:grid;width:100%;min-width:0;gap:10px}
+.ai-composer textarea{display:block;width:100%;min-width:0;min-height:88px;margin:0}
+.ai-composer-actions{display:flex;justify-content:flex-end;align-items:stretch;flex-wrap:wrap;gap:8px;min-width:0}
+#aiPhotoTools,.ai-composer-actions .camera-controls{display:contents}
+.ai-composer-actions .camera-controls>[role="status"]{display:none}
+.ai-composer-actions .btn{width:116px;min-width:0;min-height:44px;margin:0;padding:10px 14px;flex:0 1 auto;font-size:16px}
+.ai-composer-actions .btn svg{flex:none}
+.ai-photo-list{margin:0;min-width:0}
+@media(max-width:800px){
+ .topbar{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;height:auto;padding:8px 16px}
+ .topbar>.app-brand{grid-column:1;grid-row:1;max-width:140px}
+ .top-account{grid-column:2;grid-row:1;min-width:0}
+ .top-account .operator-picker{display:none}
+ .top-account .notification-button{display:none}
+ .top-context{grid-column:1/-1;grid-row:2;margin:0;min-width:0}
+ .top-context .project-pill{width:100%;max-width:none;min-width:0}
+ .top-context .project-pill .bi{flex:none}
+ .top-context .project-pill-name{flex:1;text-align:left}
+ .main,.ai-chat-layout,.ai-chat-panel{min-width:0}
+ .ai-recent-head{flex-wrap:wrap}
+}
+@media(max-width:600px){
+ .ai-chat-panel{min-height:0}
+ .ai-conversation{min-height:200px;max-height:45dvh;padding:14px}
+ .ai-composer{padding:12px}
+ #aiBoundaries{padding:10px 12px}
+ .ai-composer-actions{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+ .ai-composer-actions .btn{min-width:0;width:100%;font-size:15px;padding:10px 8px}
+ .ai-composer-actions #sendAi{grid-column:2}
+ .ai-photo-item{min-width:0}
+ .modal-mask{padding:12px}
+ .modal{width:100%;max-width:100%;box-sizing:border-box}
+}
+
+/* Tool choices wrap into real rows instead of disappearing beyond a clipped card. */
+.desmos-tool-switch{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:8px;overflow:visible}
+.desmos-tool-tab{min-width:0;min-height:44px;white-space:normal;overflow-wrap:anywhere;line-height:1.45;padding:10px 8px}
+@media(max-width:760px){.desmos-tool-switch{grid-template-columns:repeat(2,minmax(0,1fr))}}
