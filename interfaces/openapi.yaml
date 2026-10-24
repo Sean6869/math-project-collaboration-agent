@@ -148,11 +148,16 @@ paths:
               type: object
               required: [state]
               properties:
-                state: {type: object}
+                state:
+                  type: object
+                  required: [_revision]
+                  properties:
+                    _revision: {type: integer, minimum: 0, description: 当前小组服务端版本}
+                    _classRevision: {type: integer, minimum: 0, description: 教师保存时必填的班级服务端版本}
       responses:
         '200': {description: 已保存，返回 ok、updatedAt 和包含实际版本及任务状态的 state}
         '403': {description: 权限不足}
-        '409': {description: 阶段产出不完整、阶段未开放或已暂停，或成员与角色状态冲突}
+        '409': {description: 版本冲突返回 code=revision_conflict 和当前 state，或阶段与成员状态不允许提交}
   /api/broadcast:
     get:
       summary: 获取当前广播及本组查看状态或全班查看进度
@@ -290,3 +295,122 @@ paths:
       responses:
         '200': {description: 下载文件}
         '403': {description: 仅教师可导出}
+  /api/classroom/config:
+    post:
+      summary: 教师保存简明任务、已学知识与阶段提示配置
+      responses:
+        '200': {description: 操作完成}
+        '400': {description: 输入需要补充或修正}
+        '403': {description: 权限不足或入口已失效}
+        '409': {description: 记录已有更新，需比较版本}
+  /api/classroom/control:
+    post:
+      summary: 教师按组暂缓、放行、回退或恢复跟随全班
+      responses:
+        '200': {description: 操作完成}
+        '400': {description: 输入需要补充或修正}
+        '403': {description: 权限不足或入口已失效}
+        '409': {description: 记录已有更新，需比较版本}
+  /api/classroom/advance:
+    post:
+      summary: 教师推进可推进小组并保留暂缓组
+      responses:
+        '200': {description: 操作完成}
+        '400': {description: 输入需要补充或修正}
+        '403': {description: 权限不足或入口已失效}
+        '409': {description: 记录已有更新，需比较版本}
+  /api/classroom/ai-access:
+    post:
+      summary: 教师按组开放或暂停自由AI
+      responses:
+        '200': {description: 操作完成}
+        '403': {description: 权限不足}
+        '409': {description: 记录已有更新，需比较版本}
+  /api/classroom/thought:
+    post:
+      summary: 学生保存一位成员的文本或照片想法并追加修订历史
+      responses:
+        '200': {description: 操作完成}
+        '400': {description: 输入需要补充或修正}
+        '403': {description: 权限不足或入口已失效}
+        '409': {description: 记录已有更新，需比较版本}
+  /api/classroom/roles:
+    post:
+      summary: 确认本轮职责及不轮换原因
+      responses:
+        '200': {description: 操作完成}
+        '400': {description: 输入需要补充或修正}
+        '403': {description: 权限不足或入口已失效}
+        '409': {description: 记录已有更新，需比较版本}
+  /api/classroom/evaluation:
+    post:
+      summary: 教师保存、发布或撤回评价
+      responses:
+        '200': {description: 操作完成}
+        '400': {description: 输入需要补充或修正}
+        '403': {description: 权限不足或入口已失效}
+        '409': {description: 记录已有更新，需比较版本}
+  /api/classroom/queue:
+    post:
+      summary: 教师标记求助状态及优先级
+      responses:
+        '200': {description: 操作完成}
+        '400': {description: 输入需要补充或修正}
+        '403': {description: 权限不足或入口已失效}
+        '409': {description: 记录已有更新，需比较版本}
+  /api/classroom/help-feedback:
+    post:
+      summary: 学生记录后续尝试并确认是否解决
+      responses:
+        '200': {description: 操作完成}
+        '400': {description: 输入需要补充或修正}
+        '403': {description: 权限不足或入口已失效}
+        '409': {description: 记录已有更新，需比较版本}
+  /api/classroom/copy:
+    post:
+      summary: 教师复制自有项目为独立草稿
+      responses:
+        '200': {description: 操作完成}
+        '400': {description: 输入需要补充或修正}
+        '403': {description: 权限不足或入口已失效}
+        '409': {description: 记录已有更新，需比较版本}
+  /api/classroom/review:
+    post:
+      summary: 教师保存课后复盘
+      responses:
+        '200': {description: 操作完成}
+        '400': {description: 输入需要补充或修正}
+        '403': {description: 权限不足或入口已失效}
+        '409': {description: 记录已有更新，需比较版本}
+  /api/classroom/join-token:
+    post:
+      summary: 教师生成短期一次性小组入口
+      responses:
+        '200': {description: 操作完成}
+        '400': {description: 输入需要补充或修正}
+        '403': {description: 权限不足或入口已失效}
+        '409': {description: 记录已有更新，需比较版本}
+  /api/classroom/join-revoke:
+    post:
+      summary: 教师撤销小组入口
+      responses:
+        '200': {description: 操作完成}
+        '400': {description: 输入需要补充或修正}
+        '403': {description: 权限不足或入口已失效}
+        '409': {description: 记录已有更新，需比较版本}
+  /api/classroom/join-info:
+    post:
+      summary: 读取一次性入口的小组信息
+      responses:
+        '200': {description: 操作完成}
+        '400': {description: 输入需要补充或修正}
+        '403': {description: 权限不足或入口已失效}
+        '409': {description: 记录已有更新，需比较版本}
+  /api/classroom/join:
+    post:
+      summary: 验证一次性令牌并建立小组会话
+      responses:
+        '200': {description: 操作完成}
+        '400': {description: 输入需要补充或修正}
+        '403': {description: 权限不足或入口已失效}
+        '409': {description: 记录已有更新，需比较版本}

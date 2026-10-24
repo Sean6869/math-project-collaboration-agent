@@ -153,6 +153,12 @@ class PlatformTest(unittest.TestCase):
         return urllib.request.build_opener(urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()))
 
     def json_request(self, client, path, method="GET", payload=None):
+        # Historical tests exercise non-conflict behavior. Refresh revision tokens
+        # explicitly; concurrent stale writes are covered by test_classroom.
+        if path == "/api/state" and method == "PUT":
+            current = self.json_request(client, "/api/state")[1]["state"]
+            payload["state"]["_revision"] = current["_revision"]
+            payload["state"]["_classRevision"] = current["_classRevision"]
         data = None if payload is None else json.dumps(payload, ensure_ascii=False).encode()
         request = urllib.request.Request(
             self.base + path,
@@ -245,6 +251,7 @@ class PlatformTest(unittest.TestCase):
             self.assertIn("font-src 'self' data: https://www.desmos.com https://*.desmos.com", policy)
 
     def test_teacher_state_and_student_hint_fallback(self):
+        c = app.state_get("class"); c["currentStage"] = 2; c["groupControls"] = {}; app.state_put("class", c)
         teacher = self.client()
         status, login = self.json_request(
             teacher, "/api/login", "POST",
@@ -316,7 +323,8 @@ class PlatformTest(unittest.TestCase):
         self.assertEqual(groups[2]["status"], "准备中")
         self.assertEqual(groups[2]["progress"], 0)
 
-        student_state = data["state"]
+        c = app.state_get("class"); c.setdefault("groupControls", {})["1"] = {"stage": 3}; app.state_put("class", c)
+        student_state = self.json_request(student, "/api/state")[1]["state"]
         student_state["workspace"] = {
             "problem": "测量并建立面积模型", "known": "场地边界已知", "unknown": "最大面积",
             "constraints": "长度为正", "variables": "x表示宽", "relation": "y=x(20-x)",
@@ -333,6 +341,7 @@ class PlatformTest(unittest.TestCase):
         self.assertTrue(saved["state"]["stageTaskStatus"][2][2])
 
     def test_hint_level_state_machine_stays_in_level_until_student_advances(self):
+        c = app.state_get("class"); c["hintStageLimit"] = 30; app.state_put("class", c)
         student = self.client()
         status, _ = self.json_request(
             student, "/api/login", "POST",
@@ -424,6 +433,7 @@ class PlatformTest(unittest.TestCase):
         self.assertEqual(state["state"]["activeHelpThread"]["currentLevel"], 4)
 
     def test_hint_new_conversation_isolated_from_active_and_teacher_threads(self):
+        c = app.state_get("class"); c["hintStageLimit"] = 30; app.state_put("class", c)
         original_group = app.state_get("group:2")
         original_class = app.state_get("class")
         self.addCleanup(app.state_put, "group:2", original_group)
@@ -601,6 +611,9 @@ class PlatformTest(unittest.TestCase):
                 "action": "create", "name": "原项目名",
             })
             project_id = created["projectId"]
+            token = app.PROJECT_CONTEXT.set(project_id)
+            record = app.state_get("class"); record["published"] = True; app.state_put("class", record)
+            app.PROJECT_CONTEXT.reset(token)
             self.json_request(student, "/api/projects", "POST", {
                 "action": "select", "projectId": project_id,
             })
@@ -790,6 +803,8 @@ class PlatformTest(unittest.TestCase):
         state = {"project": "测试项目", "teacherConfig": {"standard": "目标", "finalProduct": "成果"}}
         self.assertEqual(app.stage_task_status(state)[0], [False, False, False, False])
         self.assertFalse(any(app.validated_stage_submissions(state).values()))
+        state["currentStage"] = 5
+        self.assertEqual(app.group_completion(state), (0, 0), "教师放行阶段不代表已完成任务")
         state["members"] = ["甲", "乙"]
         state["membersLocked"] = True
         state["preparationChecks"] = {"goal": True, "materials": True, "rules": True}
@@ -817,6 +832,7 @@ class PlatformTest(unittest.TestCase):
         self.assertIn(".stage-strip.compact .stage-card", styles)
 
     def test_binary_evidence_upload_ai_compare_and_legacy_knowledge_removal(self):
+        c = app.state_get("class"); c["currentStage"] = 3; c["groupControls"] = {}; app.state_put("class", c)
         original_group_state = app.state_get("group:2")
         student = self.client()
         status, _ = self.json_request(
@@ -1006,7 +1022,7 @@ class PlatformTest(unittest.TestCase):
                     {"prompt": "请解释如何生成函数图像", "newConversation": True},
                 )
         self.assertEqual(context.exception.code, 503)
-        self.assertIn("ARK_API_KEY", context.exception.read().decode())
+        self.assertIn("AI暂时不可用", context.exception.read().decode())
 
         status, saved = self.json_request(student, "/api/state")
         self.assertEqual(status, 200)
@@ -1064,7 +1080,7 @@ class PlatformTest(unittest.TestCase):
                         {"prompt": "继续检查", "conversationId": conversation_id},
                     )
             self.assertEqual(context.exception.code, 400)
-            self.assertIn("model is unavailable", context.exception.read().decode())
+            self.assertIn("AI暂时没有回答", context.exception.read().decode())
 
             encoded = app.base64.b64encode(b"fake-png").decode("ascii")
             image_upstream = FakeResponse(json.dumps({"data": [{"b64_json": encoded}]}).encode())

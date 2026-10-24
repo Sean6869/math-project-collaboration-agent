@@ -1,0 +1,35 @@
+"""Disposable real API server for classroom browser acceptance."""
+import os
+from pathlib import Path
+import sys
+import tempfile
+import threading
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import platform_server as app
+
+for key in ('ARK_API_KEY', 'DEEPSEEK_API_KEY', 'MPT_TEACHER_USERNAME', 'MPT_TEACHER_PASSWORD', 'MPT_CLASS_CODE', 'MPT_GROUP_CODE_PREFIX', 'MPT_GROUP_COUNT'):
+    os.environ.pop(key, None)
+os.environ['MPT_ENV'] = 'development'
+with tempfile.TemporaryDirectory(prefix='classroom-ui-') as folder:
+    app.DATA_DIR = Path(folder); app.UPLOAD_DIR = app.DATA_DIR / 'uploads'
+    app.DB_PATH = app.DATA_DIR / 'test.db'; app.SETUP_TOKEN_FILE = app.DATA_DIR / 'setup-token'
+    app.init_database()
+    app.initialize_platform('ui_teacher', 'ClassroomTeacher#2026', 'UI-RECOVERY-2026', 'CLASSROOM', 'TEAM', 3)
+    with app.database() as db:
+        db.execute('INSERT INTO projects VALUES(?,?,?,?)', ('ui-project', '小小采购员', app.utc_now(), 1))
+    app.PROJECT_CONTEXT.set('ui-project')
+    app.state_put('class', {'project': '小小采购员', 'currentStage': 5, 'groupCount': 3, 'aiOpen': True, 'teacherConfig': {'mathTopic': '用数据选择方案', 'staticHints': ['检查数量与单位']}})
+    for n in range(1, 4):
+        app.state_put(f'group:{n}', {'groupId': n, 'members': ['同学甲', '同学乙', '同学丙', '同学丁'], 'membersLocked': True,
+            'roles': ['建模者', '质疑者', '记录者', '解释者'], 'roleRound': 1,
+            'workspace': {'model': '100元预算', 'variables': '金额，单位元', 'relation': '预算不少于支出', 'constraints': '总预算100元'},
+            'firstThoughts': {}, 'preparationChecks': {'goal': True, 'materials': True, 'rules': True}})
+    app.Handler.log_message = lambda *args: None
+    server = app.ThreadingHTTPServer(('127.0.0.1', 0), app.Handler)
+    worker = threading.Thread(target=server.serve_forever, daemon=True); worker.start()
+    print(f'http://127.0.0.1:{server.server_port}', flush=True)
+    try:
+        sys.stdin.read()
+    finally:
+        server.shutdown(); server.server_close(); worker.join()

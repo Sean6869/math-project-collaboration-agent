@@ -31,7 +31,7 @@ class KnowledgeStatusTest(unittest.TestCase):
     def document(self, name="scan", text="", expires=None):
         (app.UPLOAD_DIR / (name + ".pdf")).write_bytes(b"test fixture")
         with app.database() as db:
-            db.execute("INSERT INTO files VALUES(?,?,?,?,?,?,?,?,NULL)",
+            db.execute("INSERT INTO files(id,original_name,stored_name,mime,size,extracted_text,uploaded_at,uploaded_by,group_no) VALUES(?,?,?,?,?,?,?,?,NULL)",
                        (name, name + ".pdf", name + ".pdf", "application/pdf", 12,
                         text, app.utc_now(), "builtin-knowledge"))
             db.execute("INSERT INTO knowledge_provider_files VALUES(?,?,?,?,?,?)",
@@ -111,7 +111,7 @@ class KnowledgeStatusTest(unittest.TestCase):
         markdown = f"# 例题\n![]({image})\n这是图形说明。"
         with app.database() as db:
             db.execute(
-                "INSERT INTO files VALUES(?,?,?,?,?,?,?,?,NULL)",
+                "INSERT INTO files(id,original_name,stored_name,mime,size,extracted_text,uploaded_at,uploaded_by,group_no) VALUES(?,?,?,?,?,?,?,?,NULL)",
                 ("somark", "数学笔记.md", "somark.md", "text/markdown", len(markdown),
                  markdown, app.utc_now(), "teacher"),
             )
@@ -123,7 +123,7 @@ class KnowledgeStatusTest(unittest.TestCase):
         (app.UPLOAD_DIR / "somark-ready.md").write_text(markdown, encoding="utf-8")
         with app.database() as db:
             db.execute(
-                "INSERT INTO files VALUES(?,?,?,?,?,?,?,?,NULL)",
+                "INSERT INTO files(id,original_name,stored_name,mime,size,extracted_text,uploaded_at,uploaded_by,group_no) VALUES(?,?,?,?,?,?,?,?,NULL)",
                 ("somark-ready", "数学教材.md", "somark-ready.md", "text/markdown", len(markdown),
                  markdown, app.utc_now(), "builtin-knowledge"),
             )

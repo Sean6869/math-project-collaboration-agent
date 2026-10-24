@@ -6,3 +6,6 @@ tests/__pycache__/
 *.db
 *.db-wal
 *.db-shm
+.git/
+.test-*/
+.final-*/

@@ -471,6 +471,8 @@ def publish(app, body, owner=None):
         selected_project = app.PROJECT_CONTEXT.get()
         if selected_project:
             db.execute('UPDATE projects SET name=? WHERE id=?', (project_name, selected_project))
+        state['_revision'] = int(state.get('_revision', 0)) + 1
+        state['published'] = True
         state.update(project=project_name, className=class_name.strip(), projectType=info['projectType'], projectHours=f"{len(plan['lessons'])}课时")
         grade = app.class_code_grade() or app.grade_from_text(class_name)
         if grade:
@@ -494,7 +496,10 @@ def publish(app, body, owner=None):
             material = {'id': secrets.token_hex(16), 'name': row['name']}
             db.execute('INSERT INTO course_material(id,name,source) VALUES(?,?,?)', (material['id'], row['name'], row['source']))
         saved['supportMaterial'] = material
-        db.execute('DELETE FROM course_material WHERE id != ?', (material['id'] if material else '',))
+        # Other projects may still reference their published material.
+        previous_material = old.get('supportMaterial') or {}
+        if previous_material.get('id') and previous_material.get('id') != (material or {}).get('id'):
+            db.execute('DELETE FROM course_material WHERE id=?', (previous_material['id'],))
         resource_ids = body.get('resourceIds', [])
         if not isinstance(resource_ids, list) or len(resource_ids) > 30 or any(not isinstance(item, str) for item in resource_ids):
             raise ValueError('课程支持材料选择无效')
@@ -507,6 +512,17 @@ def publish(app, body, owner=None):
                 raise ValueError('部分课程支持材料不存在，请刷新后重试')
             resources = [{'id': item, 'name': found[item]['name'], 'mime': found[item]['mime']} for item in resource_ids]
         saved['supportResources'] = resources
+        brief = state.get('taskBrief', {})
+        if any(brief.get(key) for key in ('situation', 'problem', 'conditions', 'output')):
+            prospective = dict(state, currentLesson={
+                'projectInfo': {key: info[key] for key in INFO_FIELDS},
+                'supportMaterials': ([material] if material else []) + resources,
+            })
+            fingerprint = app.classroom.source_fingerprint(prospective)
+            if fingerprint != brief.get('source'):
+                if body.get('briefReviewed') is not True:
+                    raise ValueError('请先核对简明任务中的数字、单位与限制条件。')
+                brief.update(source=fingerprint, confirmed=True, teacher=owner, time=app.utc_now())
         for scope, value in ((class_scope, state), (project_scope, saved)):
             db.execute('INSERT INTO states(scope,data,updated_at) VALUES(?,?,?) ON CONFLICT(scope) DO UPDATE SET data=excluded.data,updated_at=excluded.updated_at',
                        (scope, json.dumps(value, ensure_ascii=False), app.utc_now()))

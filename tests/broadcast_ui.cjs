@@ -12,7 +12,7 @@ const elements = {
 let state = {broadcast: '', groupCount: 4}, response, fail = false;
 const notices = [], timers = [];
 const context = {
-  document: {hidden: false, querySelector: selector => elements[selector], addEventListener() {}},
+  confirm:()=>true,document: {hidden: false,querySelectorAll:()=>[{dataset:{targetGroup:'1'}}], querySelector: selector => elements[selector], addEventListener() {}},
   setInterval: (fn, ms) => timers.push(ms), _session: {role: 'student'},
   load: () => state, api: async () => {if(fail) throw Error('网络失败'); return response;},
   esc: value => String(value).replaceAll('<', '&lt;').replaceAll('>', '&gt;'),

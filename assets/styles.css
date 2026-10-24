@@ -493,3 +493,26 @@ html,body{color:var(--ink);background:#f5effb;background-image:linear-gradient(1
 @media(max-width:800px){.top-context{min-width:0}.top-context .project-pill{display:inline-flex!important;min-width:0;max-width:40vw;padding:8px}.top-context .ai-status{display:none}.top-account{flex-shrink:0}}
 @media(max-width:480px){.top-context .project-pill{max-width:36vw}.top-account .btn[data-logout]{padding:8px;font-size:12px}}
 @media(min-width:1501px){.student-dashboard-grid{align-items:stretch}.dashboard-secondary{height:auto;align-self:stretch;align-content:stretch;grid-template-rows:auto auto minmax(0,1fr)}.dashboard-group-status-card{height:auto;min-height:0}}
+/* Classroom tasks use normal document flow so long evidence never clips. */
+.nav .nav-action{display:block;font-size:.72em;line-height:1.5;opacity:.8;white-space:normal}
+.save-state{font-size:13px;color:#776c99;min-height:20px;margin:0 0 8px;line-height:1.5}
+.save-state:empty{display:none}
+.current-task{display:grid;gap:7px;padding:16px 20px;background:#faf6ff;border-radius:20px;line-height:1.6;margin-top:14px}
+.current-task span{overflow-wrap:anywhere}
+.version-compare{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,260px),1fr));gap:12px}
+.version-compare summary{cursor:pointer;font-weight:650;white-space:normal}
+.version-compare dd{margin:4px 0 16px;white-space:pre-wrap;overflow-wrap:anywhere}
+.conflict-content{max-height:320px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;font-size:14px}
+.symbol-toolbar{display:flex;flex-wrap:wrap;gap:6px;margin-top:12px}
+.symbol-toolbar button{min-width:42px;min-height:42px;font-size:18px}
+.role-edit{display:grid;grid-template-columns:minmax(100px,1fr) minmax(130px,1fr);align-items:center;gap:16px;padding:12px 0}
+.role-edit select{min-height:44px;max-width:100%}
+#broadcastTargets{border:1px solid #e8dff5;border-radius:16px;display:flex;gap:14px;flex-wrap:wrap;padding:14px}
+#classroomConfig details{margin-top:12px}
+#classroomConfig summary{cursor:pointer;font-weight:600}
+#groupCards .line-two{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;white-space:pre-wrap}
+#representationCheck .chips{flex-wrap:wrap}
+#currentTaskCard{grid-column:1/-1}
+.help-levels:has([data-help-level="4"][hidden]){grid-template-columns:repeat(3,minmax(0,1fr))}
+.help-level[hidden]{display:none}
+@media(max-width:760px){.current-task{padding:12px}.version-compare{grid-template-columns:1fr}.role-edit{gap:8px}.nav .nav-action{font-size:12px}}

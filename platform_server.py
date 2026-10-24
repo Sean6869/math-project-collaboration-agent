@@ -26,6 +26,7 @@ import urllib.error
 import urllib.request
 import zipfile
 import lesson_plans
+import classroom
 from datetime import datetime, timezone
 from http import HTTPStatus
 from http.cookies import SimpleCookie
@@ -139,12 +140,12 @@ CLASS_KEYS = {
     "project", "className", "currentStage", "stagePaused",
     "aiOpen", "freeAiEnabled", "freeAiQuota", "projectType", "projectHours", "hintQuota",
     "maxHintLevel", "hintPolicy", "broadcast", "teacherConfig", "groups", "queue", "common",
-    "evaluations", "audit",
+    "evaluations", "audit", "groupControls", "groupOverrides", "hintStageLimit", "taskBrief", "teachingReview", "evaluationHistory",
 }
 GROUP_KEYS = {
     "groupId", "roles", "roleRound", "stageSubmitted", "stageTimes",
     "workspace", "versions", "evidence", "viewpoints", "comparisonAi", "firstThoughts",
-    "debate", "product", "events", "questionTree", "graphConfig", "checklist", "preparationChecks", "freeAi", "mathTools",
+    "debate", "product", "events", "questionTree", "graphConfig", "checklist", "preparationChecks", "freeAi", "mathTools", "thoughtMeta", "thoughtHistory", "roleAssignments", "comparison", "comparisonHistory", "productHistory",
 }
 HINT_POLICY_DEFAULT = {"L1": 20, "L2": 10, "L3": 5, "L4": 3}
 HINT_LEVEL_NAMES = {1: "定位", 2: "拆解", 3: "局部示范", 4: "教师介入"}
@@ -174,6 +175,7 @@ class UpstreamServiceError(ValueError):
 
 def database() -> sqlite3.Connection:
     db = sqlite3.connect(DB_PATH, timeout=20, factory=ClosingConnection)
+    db.create_function("current_project", 0, lambda: PROJECT_CONTEXT.get())
     db.row_factory = sqlite3.Row
     db.execute("PRAGMA foreign_keys=ON")
     db.execute("PRAGMA busy_timeout=5000")
@@ -546,6 +548,7 @@ def init_database() -> None:
                         "INSERT OR IGNORE INTO states(scope,data,updated_at) VALUES(?,?,?)",
                         (f"project:{project_id}:{row['scope']}", row["data"], row["updated_at"]),
                     )
+    classroom.initialize(sys.modules[__name__])
     lesson_plans.initialize(sys.modules[__name__])
     env = os.environ.get("MPT_ENV", "development").lower()
     supplied = {
@@ -580,6 +583,12 @@ def init_database() -> None:
 def state_scope(scope: str, project_id: str | None = None) -> str:
     selected = PROJECT_CONTEXT.get() if project_id is None else project_id
     return f"project:{selected}:{scope}" if selected else scope
+
+
+def state_get_project_public(project_id: str) -> bool:
+    with database() as db:
+        row = db.execute('SELECT data FROM states WHERE scope=?', (state_scope('class', project_id),)).fetchone()
+    return bool(row) and json.loads(row[0]).get('published') is not False
 
 
 def state_get(scope: str) -> dict:
@@ -618,6 +627,10 @@ def state_put(scope: str, value: dict, preserve_roles: bool = False) -> None:
                 value.pop(key, None)
                 if key in saved:
                     value[key] = saved[key]
+        row = db.execute("SELECT data FROM states WHERE scope=?", (scope,)).fetchone()
+        previous = json.loads(row[0]) if row else {}
+        value["_revision"] = int(previous.get("_revision", 0)) + 1
+        value["_savedAt"] = utc_now()
         payload = json.dumps(value, ensure_ascii=False, separators=(",", ":"))
         db.execute(
             "INSERT INTO states(scope,data,updated_at) VALUES(?,?,?) "
@@ -646,7 +659,7 @@ def ensure_model_version(state: dict, timestamp: str, recover_only: bool = False
     valid = model_versions(state)
     if recover_only and valid:
         return
-    snapshot = {key: workspace.get(key, "") for key in ("model", "variables", "relation", "constraints")}
+    snapshot = {key: workspace.get(key, "") for key in ("model", "variables", "relation", "constraints", "modelFiles")}
     if valid and all(snapshot[key] == valid[-1].get(key, snapshot[key]) for key in snapshot):
         return
     versions = state.get("versions")
@@ -654,6 +667,7 @@ def ensure_model_version(state: dict, timestamp: str, recover_only: bool = False
     number = max([len(versions)] + [int(item["v"][1:]) for item in valid if re.fullmatch(r"V\d+", str(item.get("v", "")))]) + 1
     versions.append({"v": f"V{number}", "time": timestamp,
                      "note": "从已保存模型恢复版本记录" if recover_only else "保存模型与变量、关系、约束快照",
+                     "reason": workspace.get("revisionReason", ""), "fileIds": workspace.get("modelFiles", []),
                      **snapshot})
     state["versions"] = versions
 
@@ -695,12 +709,12 @@ def stage_task_status(group_state: dict) -> list[list[bool]]:
          bool(group_state.get("membersLocked")) and bool(members), preparation.get("rules") is True],
         [bool(members) and all(_has_value(thoughts.get(str(i), thoughts.get(i))) for i in range(len(members))),
          _has_value(workspace.get("problem")),
-         all(_has_value(workspace.get(key)) for key in ("known", "unknown", "constraints")),
+         all(_has_value(workspace.get(key)) for key in ("known", "constraints")),
          len([item for item in questions if _has_value(item)]) >= 3 and _has_value(questions[0] if questions else "")],
         [all(_has_value(workspace.get(key)) for key in ("variables", "constraints")),
          _has_value(workspace.get("relation")),
          _has_value(workspace.get("model")) and len(versions) >= 1,
-         graph_complete or desmos_complete or checklist_complete],
+         graph_complete or desmos_complete or checklist_complete or all(_has_value(math_tools.get("representation", {}).get(k)) for k in ("meaning", "check"))],
         [len(evidence) >= 1, any(isinstance(item, dict) and item.get("verified") is True for item in evidence),
          sum(isinstance(item, dict) and all(_has_value(item.get(key)) for key in ("claim", "basis", "risk")) for item in viewpoints) >= 2,
          len(versions) >= 2],
@@ -795,6 +809,7 @@ def dynamic_group_summaries(class_state: dict) -> list[dict]:
     for number in range(1, count + 1):
         saved = next((item for item in stored if isinstance(item, dict) and int(item.get("id", 0)) == number), {})
         group_state = state_get(f"group:{number}")
+        current_stage = classroom.effective_stage(class_state, number)
         progress, submitted_count = group_completion(group_state)
         versions = group_state.get("versions", [])
         latest = versions[-1].get("note", "模型版本已保存") if isinstance(versions, list) and versions and isinstance(versions[-1], dict) else "工作区已保存" if _has_value(group_state.get("workspace")) else "尚未保存"
@@ -802,6 +817,7 @@ def dynamic_group_summaries(class_state: dict) -> list[dict]:
         waiting = bool(saved.get("teacher")) or any(int(item.get("group", 0)) == number and not item.get("resolved") for item in queue if isinstance(item, dict))
         status = "等待教师" if waiting else "已完成" if submitted_count == 5 else "持续推进" if active else "准备中"
         summaries.append({
+            **classroom.summary(sys.modules[__name__], class_state, number, group_state),
             "id": number,
             "roleRound": int(group_state.get("roleRound", 1)),
             "membersLocked": bool(group_state.get("membersLocked")),
@@ -832,6 +848,8 @@ def current_broadcast(class_state: dict | None = None) -> dict:
 def broadcast_for_session(session: dict) -> dict:
     message = current_broadcast()
     seen = message.get("seenGroups", [])
+    if session.get("role") == "student" and int(session.get("groupId") or 0) not in message.get("targets", list(range(1, group_count() + 1))):
+        return {"broadcast": "", "broadcastId": "", "seenGroups": [], "broadcastViewed": False}
     if session.get("role") == "student":
         message["broadcastViewed"] = int(session.get("groupId") or 0) in seen
     else:
@@ -840,6 +858,8 @@ def broadcast_for_session(session: dict) -> dict:
 
 
 def acknowledge_broadcast(group_no: int, broadcast_id: str) -> dict:
+    if group_no not in current_broadcast().get("targets", list(range(1, group_count() + 1))):
+        raise ValueError("本组未收到这条消息。")
     if not broadcast_id:
         raise ValueError("广播标识无效，请刷新页面后重试")
     with database() as db:
@@ -893,7 +913,7 @@ def merged_state(group_no: int, monitoring: bool = True) -> dict:
     # The project title is shared by the entire class, never a group draft.
     if "project" in class_state:
         value["project"] = class_state["project"]
-    value.update(current_broadcast(class_state))
+    value.update(broadcast_for_session({"role": "student", "groupId": group_no}) if not monitoring else current_broadcast(class_state))
     value["stageSubmitted"] = validated_stage_submissions(group_state)
     value["stageTaskStatus"] = stage_task_status(group_state)
     value["broadcastViewed"] = group_no in value.get("seenGroups", [])
@@ -902,7 +922,17 @@ def merged_state(group_no: int, monitoring: bool = True) -> dict:
     for key in ("currentStage", "stagePaused", "aiOpen"):
         if key in class_state:
             value[key] = class_current_stage(class_state) if key == "currentStage" else class_state[key]
-    value["freeAiEnabled"] = class_state.get("freeAiEnabled", True) is not False
+    override = class_state.get("groupOverrides", {}).get(str(group_no), {})
+    value["groupCurrentStage"] = classroom.effective_stage(class_state, group_no)
+    value["currentStage"] = class_current_stage(class_state) if monitoring else value["groupCurrentStage"]
+    value["stagePaused"] = bool(class_state.get("stagePaused") or (not monitoring and classroom.control(class_state, group_no).get("hold")))
+    value["freeAiEnabled"] = class_state.get("freeAiEnabled", True) is not False and (monitoring or override.get("freeAiEnabled", True) is not False)
+    value["classTargetStage"] = class_current_stage(class_state)
+    value["_revision"] = classroom.revision(group_state)
+    value["_classRevision"] = classroom.revision(class_state)
+    value["_projectId"] = PROJECT_CONTEXT.get()
+    value["hintStageLimit"] = int(class_state.get("hintStageLimit", 2)) + int(override.get("hintExtra", {}).get(str(value["currentStage"]), 0))
+    value["stageHintUsed"] = sum(item.get("stage") == value["currentStage"] and item.get("source") == "deepseek" for item in group_state.get("helpHistory", []))
     try:
         value["freeAiQuota"] = max(1, min(100, int(class_state.get("freeAiQuota", FREE_AI_QUOTA_DEFAULT))))
     except (TypeError, ValueError):
@@ -936,13 +966,14 @@ def merged_state(group_no: int, monitoring: bool = True) -> dict:
     if monitoring:
         with database() as db:
             calls = db.execute(
-                "SELECT ts,group_no,level,model,latency_ms,status FROM ai_calls ORDER BY id DESC LIMIT 50"
+                "SELECT ts,group_no,level,model,latency_ms,status FROM ai_calls WHERE project_id=current_project() ORDER BY id DESC LIMIT 50"
             ).fetchall()
         value["aiCalls"] = [dict(row) for row in calls]
     else:
         value.pop("aiCalls", None)
     value["currentLesson"] = lesson_plans.current(sys.modules[__name__])
-    return value
+    value["briefNeedsReview"] = not value.get("taskBrief", {}).get("confirmed") or value.get("taskBrief", {}).get("source") != classroom.source_fingerprint(value)
+    return value if monitoring else classroom.student_view(value)
 
 
 def record_event(actor: str, group_no: int | None, event_type: str, stage: int | None, data: str) -> None:
@@ -1029,7 +1060,7 @@ def sync_builtin_knowledge() -> dict:
         stored = f"{file_id}{source.suffix.lower()}"
         target = UPLOAD_DIR / stored
         with database() as db:
-            existing = db.execute("SELECT extracted_text FROM files WHERE id=?", (file_id,)).fetchone()
+            existing = db.execute("SELECT extracted_text FROM files WHERE id=? AND (project_id=current_project() OR uploaded_by='builtin-knowledge')", (file_id,)).fetchone()
         if existing and target.is_file():
             result["indexed"] += bool(existing["extracted_text"])
             continue
@@ -1377,7 +1408,7 @@ def knowledge_image_urls(state: dict, query: str, limit: int = 2) -> list[str]:
     with database() as db:
         rows = db.execute(
             "SELECT original_name,extracted_text,uploaded_by FROM files "
-            "WHERE uploaded_by IN ('teacher','builtin-knowledge') AND extracted_text<>'' "
+            "WHERE (project_id=current_project() OR uploaded_by='builtin-knowledge') AND uploaded_by IN ('teacher','builtin-knowledge') AND extracted_text<>'' "
             "AND lower(original_name) LIKE '%.md' ORDER BY uploaded_at DESC"
         ).fetchall()
     ranked = []
@@ -1402,7 +1433,7 @@ def knowledge_context(state: dict, query: str, *, max_documents: int = 3, max_ch
     with database() as db:
         rows = db.execute(
             "SELECT original_name,extracted_text,uploaded_by FROM files "
-            "WHERE uploaded_by IN ('teacher','builtin-knowledge') AND extracted_text<>'' ORDER BY uploaded_at DESC"
+            "WHERE (project_id=current_project() OR uploaded_by='builtin-knowledge') AND uploaded_by IN ('teacher','builtin-knowledge') AND extracted_text<>'' ORDER BY uploaded_at DESC"
         ).fetchall()
         chunk_rows = db.execute(
             "SELECT f.original_name || '（第' || c.page_start || '-' || c.page_end || '页）' AS original_name,"
@@ -1511,6 +1542,7 @@ def deepseek_hint(
         + student_math_scope(state)
         + MATH_FORMAT_RULE
         + f"当前严格执行{level}：{contracts[level]}"
+        + f"只聚焦一个检查点，用一个问题推进。已学知识：{config.get('learnedKnowledge', '')}"
         "不得重复历史提示；信息不足时先澄清，不得猜测。材料冲突、数学结论不可靠或需要教师判断时，在nextAction中写明请教师核验。"
         "材料摘录存在时必须以其为依据，不得编造摘录中没有的结论；需要指出依据时使用材料文件名。"
         f"教师当前只开放到阶段{current_stage}，严禁建议学生进入{stage_boundary}的页面，也不得使用尚未开放页面的名称。"
@@ -1635,7 +1667,7 @@ def free_ai_context(state: dict, group: int) -> str:
         "项目": state.get("project", ""), "数学主题": config.get("mathTopic", ""),
         "课程目标": config.get("standard", ""), "最终成果": config.get("finalProduct", ""),
         "当前阶段": state.get("currentStage", 1), "小组": group, "共享工作区": workspace,
-        "数学项目任务书": project_charter(state),
+        "数学项目任务书": project_charter(state), "已学知识": config.get("learnedKnowledge", ""), "工具建议": config.get("toolSuggestions", ""),
     }
     return json.dumps(context, ensure_ascii=False)
 
@@ -1648,6 +1680,7 @@ def ark_free_messages(state: dict, group: int, prompt: str, history: list[dict])
     system = (
         "你是‘迈谱 Maple’学生小组自由工作区的初中数学助手。"
         + student_math_scope(state)
+        + classroom.AI_RULE
         + "你的任务是帮助学生减少机械性整理，把更多时间留给小组协作和高阶思考。"
         "你可以回答项目是什么、接下来做什么，解释概念、检查思路和书写数学表达，但不要替学生完成未经讨论的整个项目，"
         "不要伪造数据；缺少信息时明确列出需要补充的内容。"
@@ -1657,7 +1690,7 @@ def ark_free_messages(state: dict, group: int, prompt: str, history: list[dict])
         f"不得建议进入{stage_boundary}的页面，也不得使用尚未开放页面的名称。"
         + MATH_FORMAT_RULE
         + FREE_AI_STYLE_RULE
-        + "回答使用清晰的Markdown。默认直接回答核心问题，控制在2至4个要点、约300至500个汉字内；学生明确要求详细说明时再展开。"
+        + "回答使用清晰的Markdown。默认只给一个短问题或一个检查点，80字以内。"
         f"当前项目上下文：{free_ai_context(state, group)}"
         f"\n本次检索到的知识库来源：{json.dumps(sources, ensure_ascii=False)}"
         f"\n知识库摘录：\n{knowledge or '本次没有检索到可用正文摘录。'}"
@@ -2087,7 +2120,7 @@ def knowledge_snapshot() -> dict:
             "coalesce(p.expires_at,0) AS providerExpiresAt,coalesce(p.updated_at,'') AS providerUpdatedAt,"
             "coalesce(p.error,'') AS providerError "
             "FROM files f LEFT JOIN knowledge_provider_files p ON p.local_file_id=f.id "
-            "WHERE f.uploaded_by IN ('teacher','builtin-knowledge') "
+            "WHERE (f.project_id=current_project() OR f.uploaded_by='builtin-knowledge') AND f.uploaded_by IN ('teacher','builtin-knowledge') "
             "ORDER BY f.uploaded_by='builtin-knowledge' DESC,f.original_name"
         ).fetchall()
         chunks = db.execute("SELECT * FROM knowledge_chunks").fetchall()
@@ -2356,6 +2389,22 @@ class Handler(SimpleHTTPRequestHandler):
         if role and session["role"] != role:
             self.json_response({"error": "没有执行此操作的权限"}, HTTPStatus.FORBIDDEN)
             return None
+        project_id = session.get("projectId")
+        if not project_id and urlparse(self.path).path not in ("/api/projects", "/api/logout", "/api/admin/access", "/api/admin/factory-reset", "/api/state/reset"):
+            with database() as db:
+                has_projects = bool(db.execute("SELECT 1 FROM projects LIMIT 1").fetchone())
+            if has_projects:
+                self.json_response({"error": "请先选择项目。"}, HTTPStatus.CONFLICT)
+                return None
+        if project_id:
+            with database() as db:
+                project = db.execute("SELECT created_by FROM projects WHERE id=?", (project_id,)).fetchone()
+            if not project or (session["role"] == "teacher" and not session.get("isAdmin") and project["created_by"] not in (None, session.get("teacherId"))):
+                self.json_response({"error": "无权访问这个项目。"}, HTTPStatus.FORBIDDEN)
+                return None
+            if session["role"] == "student" and urlparse(self.path).path not in ("/api/projects", "/api/logout") and state_get("class").get("published") is False:
+                self.json_response({"error": "项目尚未发布。"}, HTTPStatus.FORBIDDEN)
+                return None
         return session
 
     def require_teacher(self) -> dict | None:
@@ -2373,6 +2422,8 @@ class Handler(SimpleHTTPRequestHandler):
     def do_GET(self) -> None:
         PROJECT_CONTEXT.set("")
         route = urlparse(self.path)
+        if classroom.route(sys.modules[__name__], self, 'GET', route.path):
+            return
         if lesson_plans.handle(sys.modules[__name__], self, 'GET', route.path):
             return
         if route.path == "/index.html":
@@ -2406,9 +2457,10 @@ class Handler(SimpleHTTPRequestHandler):
             session = self.require_session()
             if session:
                 with database() as db:
-                    rows = db.execute("SELECT id,name,created_at FROM projects ORDER BY created_at DESC,rowid DESC").fetchall()
+                    rows = db.execute("SELECT id,name,created_at,created_by FROM projects ORDER BY created_at DESC,rowid DESC").fetchall()
+                rows = [row for row in rows if (session["role"] == "teacher" and (session.get("isAdmin") or row["created_by"] in (None, session.get("teacherId")))) or (session["role"] == "student" and state_get_project_public(row["id"]))]
                 self.json_response({
-                    "projects": [{"id": row["id"], "name": row["name"], "createdAt": row["created_at"],
+                    "projects": [{**classroom.project_metadata(sys.modules[__name__], row["id"]), "id": row["id"], "name": row["name"], "createdAt": row["created_at"],
                                   "label": f"{str(row['created_at'])[:10]} - {row['name']}"} for row in rows],
                     "selectedProjectId": session.get("projectId"),
                     "canCreate": session["role"] == "teacher",
@@ -2430,13 +2482,13 @@ class Handler(SimpleHTTPRequestHandler):
             with database() as db:
                 quick_check = db.execute("PRAGMA quick_check").fetchone()[0]
                 counts = {
-                    table: db.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+                    table: db.execute(f"SELECT COUNT(*) FROM {table}" + (" WHERE project_id=current_project()" if table in ("events", "files", "ai_calls") else "")).fetchone()[0]
                     for table in ("groups", "states", "events", "files", "ai_calls", "sessions")
                 }
-                failed_calls = db.execute("SELECT COUNT(*) FROM ai_calls WHERE status<>'returned'").fetchone()[0]
-                event_range = db.execute("SELECT MIN(ts),MAX(ts),COUNT(DISTINCT group_no) FROM events").fetchone()
+                failed_calls = db.execute("SELECT COUNT(*) FROM ai_calls WHERE project_id=current_project() AND status<>'returned'").fetchone()[0]
+                event_range = db.execute("SELECT MIN(ts),MAX(ts),COUNT(DISTINCT group_no) FROM events WHERE project_id=current_project()").fetchone()
                 recent = db.execute(
-                    "SELECT ts,actor,group_no,event_type,stage,data FROM events ORDER BY id DESC LIMIT 30"
+                    "SELECT ts,actor,group_no,event_type,stage,data FROM events WHERE project_id=current_project() ORDER BY id DESC LIMIT 30"
                 ).fetchall()
             self.json_response({
                 "environment": os.environ.get("MPT_ENV", "development").lower(),
@@ -2504,13 +2556,13 @@ class Handler(SimpleHTTPRequestHandler):
                 if session["role"] == "student":
                     rows = db.execute(
                         "SELECT id,original_name AS name,mime,size,uploaded_at,uploaded_by,extracted_text<>'' AS indexed "
-                        "FROM files WHERE group_no=? OR uploaded_by IN ('teacher','builtin-knowledge') ORDER BY uploaded_at DESC",
+                        "FROM files WHERE (project_id=current_project() AND group_no=? OR uploaded_by='builtin-knowledge') ORDER BY uploaded_at DESC",
                         (session["groupId"],),
                     ).fetchall()
                 else:
                     rows = db.execute(
                         "SELECT id,original_name AS name,mime,size,uploaded_at,uploaded_by,extracted_text<>'' AS indexed "
-                        "FROM files ORDER BY uploaded_at DESC"
+                        "FROM files WHERE project_id=current_project() OR uploaded_by='builtin-knowledge' ORDER BY uploaded_at DESC"
                     ).fetchall()
             self.json_response({"files": [dict(row) for row in rows]})
             return
@@ -2526,11 +2578,11 @@ class Handler(SimpleHTTPRequestHandler):
                 if session["role"] == "student":
                     row = db.execute(
                         "SELECT original_name,stored_name,mime,size FROM files "
-                        "WHERE id=? AND (group_no=? OR uploaded_by IN ('teacher','builtin-knowledge'))",
+                        "WHERE id=? AND (project_id=current_project() AND group_no=? OR uploaded_by='builtin-knowledge')",
                         (file_id, session["groupId"]),
                     ).fetchone()
                 else:
-                    row = db.execute("SELECT original_name,stored_name,mime,size FROM files WHERE id=?", (file_id,)).fetchone()
+                    row = db.execute("SELECT original_name,stored_name,mime,size FROM files WHERE id=? AND (project_id=current_project() OR uploaded_by='builtin-knowledge')", (file_id,)).fetchone()
             target = UPLOAD_DIR / row["stored_name"] if row else None
             if not row or not target.is_file() or target.resolve().parent != UPLOAD_DIR.resolve():
                 self.json_response({"error": "文件不存在"}, HTTPStatus.NOT_FOUND)
@@ -2557,12 +2609,12 @@ class Handler(SimpleHTTPRequestHandler):
                 if session["role"] == "student":
                     row = db.execute(
                         "SELECT original_name,stored_name,mime,size FROM files "
-                        "WHERE id=? AND uploaded_by='student-ai' AND group_no=?",
+                        "WHERE id=? AND project_id=current_project() AND uploaded_by='student-ai' AND group_no=?",
                         (file_id, session["groupId"]),
                     ).fetchone()
                 else:
                     row = db.execute(
-                        "SELECT original_name,stored_name,mime,size FROM files WHERE id=? AND uploaded_by='student-ai'",
+                        "SELECT original_name,stored_name,mime,size FROM files WHERE id=? AND project_id=current_project() AND uploaded_by='student-ai'",
                         (file_id,),
                     ).fetchone()
             target = UPLOAD_DIR / row["stored_name"] if row else None
@@ -2587,7 +2639,7 @@ class Handler(SimpleHTTPRequestHandler):
             self.json_response({"error": "接口不存在"}, HTTPStatus.NOT_FOUND)
             return
         session = self.current_session()
-        if student_stage_page_locked(route.path, session, class_current_stage()):
+        if student_stage_page_locked(route.path, session, classroom.effective_stage(state_get("class"), (session or {}).get("groupId") or 1)):
             self.send_response(HTTPStatus.FOUND)
             self.send_header("Location", "/student/dashboard.html")
             self.send_header("Cache-Control", "no-store, max-age=0")
@@ -2595,11 +2647,14 @@ class Handler(SimpleHTTPRequestHandler):
             return
         super().do_GET()
 
+    @classroom.serialized
     def do_POST(self) -> None:
         PROJECT_CONTEXT.set("")
         if not self.check_origin():
             return
         route = urlparse(self.path).path
+        if classroom.route(sys.modules[__name__], self, 'POST', route):
+            return
         if lesson_plans.handle(sys.modules[__name__], self, 'POST', route):
             return
         try:
@@ -2641,7 +2696,10 @@ class Handler(SimpleHTTPRequestHandler):
                         raise ValueError("广播内容须为文本，最多2000字")
                     if kind not in ("教师广播", "统一答疑", "阶段提醒", "时间提醒", "成果要求"):
                         raise ValueError("广播类型无效")
-                    message = {"broadcast": content.strip(), "broadcastType": kind, "broadcastId": secrets.token_hex(12), "seenGroups": []}
+                    targets = body.get("targets", list(range(1, group_count() + 1)))
+                    if not isinstance(targets, list) or any(type(n) is not int or not 1 <= n <= group_count() for n in targets):
+                        raise ValueError("接收小组无效")
+                    message = {"targets": sorted(set(targets)), "broadcast": content.strip(), "broadcastType": kind, "broadcastId": secrets.token_hex(12), "seenGroups": []}
                     state_put("broadcast", message)
                     record_event("teacher", None, "broadcast" if message["broadcast"] else "broadcast_clear", None, message["broadcast"])
                     self.json_response(broadcast_for_session(session))
@@ -2759,21 +2817,27 @@ class Handler(SimpleHTTPRequestHandler):
         with database() as db:
             if session["role"] == "student":
                 row = db.execute(
-                    "SELECT original_name,stored_name FROM files WHERE id=? AND uploaded_by IN ('student-evidence','student-math-stage','student-math-lab') AND group_no=?",
+                    "SELECT original_name,stored_name FROM files WHERE id=? AND project_id=current_project() AND uploaded_by IN ('student-evidence','student-math-stage','student-math-lab') AND group_no=?",
                     (file_id, session["groupId"]),
                 ).fetchone()
             else:
                 row = db.execute(
-                    "SELECT original_name,stored_name FROM files WHERE id=? AND uploaded_by<>'builtin-knowledge'",
+                    "SELECT original_name,stored_name FROM files WHERE id=? AND project_id=current_project() AND uploaded_by<>'builtin-knowledge'",
                     (file_id,),
                 ).fetchone()
             if not row:
                 self.json_response({"error": "文件不存在或无权删除"}, HTTPStatus.NOT_FOUND)
                 return
+            for number in range(1, group_count() + 1):
+                saved = state_get(f"group:{number}")
+                history = {k: saved.get(k) for k in ("versions", "thoughtHistory", "productHistory")}
+                if file_id in json.dumps(history):
+                    self.json_response({"error": "该文件已关联历史版本，请保留原始证据。"}, HTTPStatus.CONFLICT)
+                    return
             target = UPLOAD_DIR / row["stored_name"]
             if target.resolve().parent == UPLOAD_DIR.resolve() and target.exists():
                 target.unlink()
-            db.execute("DELETE FROM files WHERE id=?", (file_id,))
+            db.execute("DELETE FROM files WHERE id=? AND (project_id=current_project() OR uploaded_by='builtin-knowledge')", (file_id,))
         if session["role"] == "student":
             group = state_get(f"group:{session['groupId']}")
             evidence_before = group.get("evidence", [])
@@ -2806,6 +2870,7 @@ class Handler(SimpleHTTPRequestHandler):
         record_event(session["role"], session.get("groupId"), "file_delete", 4 if session["role"] == "student" else None, row["original_name"])
         self.json_response({"ok": True})
 
+    @classroom.serialized
     def do_PUT(self) -> None:
         PROJECT_CONTEXT.set("")
         if not self.check_origin():
@@ -2828,6 +2893,10 @@ class Handler(SimpleHTTPRequestHandler):
         group = int(session.get("groupId") or incoming.get("groupId") or 1)
         group = max(1, min(count, group))
         group_state = state_get(f"group:{group}")
+        class_snapshot = state_get("class")
+        if (incoming.get("_revision") != classroom.revision(group_state)) or (session["role"] == "teacher" and incoming.get("_classRevision") != classroom.revision(class_snapshot)):
+            self.json_response({"error": "内容已有更新，请比较后保存新版本。", "code": "revision_conflict", "state": merged_state(group, session["role"] == "teacher")}, HTTPStatus.CONFLICT)
+            return
         if session["role"] == "student":
             if "members" in incoming and incoming["members"] != group_state.get("members", []):
                 self.json_response({"error": "成员名单请在成员与角色页面提交"}, HTTPStatus.CONFLICT)
@@ -2860,12 +2929,40 @@ class Handler(SimpleHTTPRequestHandler):
                 if product_changed or outcome_changed:
                     self.json_response({"error": "阶段5已提交，成果内容已经锁定"}, HTTPStatus.CONFLICT)
                     return
+        for key in ("workspace", "product", "firstThoughts", "comparison", "mathTools"):
+            if key in incoming and not isinstance(incoming[key], dict):
+                self.json_response({"error": "记录格式无效。"}, HTTPStatus.BAD_REQUEST)
+                return
+        if session["role"] == "student":
+            effective = classroom.effective_stage(class_snapshot, group)
+            incoming_work = incoming.get("workspace", {})
+            saved_work = group_state.get("workspace", {})
+            if effective < 3 and any(incoming_work.get(key, saved_work.get(key, "")) != saved_work.get(key, "") for key in ("variables", "relation", "model", "modelFiles")):
+                self.json_response({"error": "这一阶段还没开始，请继续当前任务。"}, HTTPStatus.CONFLICT)
+                return
+            locked_fields = {"firstThoughts": 2, "questionTree": 2, "viewpoints": 3, "comparison": 3, "checklist": 3, "evidence": 4, "debate": 4, "product": 5}
+            for key, minimum in locked_fields.items():
+                if key in incoming and effective < minimum and incoming[key] != group_state.get(key, {} if key in ("product", "firstThoughts", "checklist", "comparison") else []):
+                    self.json_response({"error": "这一阶段还没开始，请继续当前任务。"}, HTTPStatus.CONFLICT)
+                    return
         candidate = dict(group_state)
         candidate.update({key: incoming[key] for key in GROUP_KEYS if key in incoming})
         # Version history is append-only and derived from the model actually saved.
         # Old clients cannot erase history or complete a task with empty versions.
         candidate["versions"] = group_state.get("versions", [])
+        try:
+            candidate = classroom.immutable_records(sys.modules[__name__], group_state, candidate, str(session.get("teacherId") or f"G{group}"))
+        except ValueError as exc:
+            self.json_response({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
+            return
+        before_model = group_state.get("workspace", {})
+        after_model = candidate.get("workspace", {})
+        if model_versions(group_state) and any(after_model.get(k) != before_model.get(k) for k in ("model", "variables", "relation", "constraints", "modelFiles")) and not str(after_model.get("revisionReason", "")).strip():
+            self.json_response({"error": "请填写这次修改方案的原因。"}, HTTPStatus.BAD_REQUEST)
+            return
         ensure_model_version(candidate, utc_now())
+        for key in ("thoughtHistory", "comparisonHistory", "productHistory", "roleAssignments", "evidence"):
+            incoming[key] = candidate.get(key, [])
         incoming["versions"] = candidate.get("versions", [])
         requested = incoming.get("stageSubmitted", {}) if isinstance(incoming.get("stageSubmitted"), dict) else {}
         saved_submissions = group_state.get("stageSubmitted", {}) if isinstance(group_state.get("stageSubmitted"), dict) else {}
@@ -2874,8 +2971,8 @@ class Handler(SimpleHTTPRequestHandler):
             wants_submit = bool(requested.get(str(number), requested.get(number, False)))
             was_submitted = bool(saved_submissions.get(str(number), saved_submissions.get(number, False)))
             if session["role"] == "student" and wants_submit and not was_submitted:
-                classroom = state_get("class")
-                if classroom.get("stagePaused") or number != int(classroom.get("currentStage", 1)):
+                class_check = state_get("class")
+                if class_check.get("stagePaused") or classroom.control(class_check, group).get("hold") or number != classroom.effective_stage(class_check, group):
                     self.json_response({"error": "只能提交当前开放且未暂停的阶段"}, HTTPStatus.CONFLICT)
                     return
             if wants_submit and not was_submitted and not valid_submissions[number]:
@@ -2901,10 +2998,17 @@ class Handler(SimpleHTTPRequestHandler):
             incoming["hintPolicy"] = checked_policy
         group_state.update({key: incoming[key] for key in GROUP_KEYS if key in incoming})
         group_state["groupId"] = group
-        state_put(f"group:{group}", group_state, preserve_roles=True)
+        if session["role"] == "student" or any(incoming.get(k, group_state.get(k)) != group_state.get(k) for k in GROUP_KEYS):
+            state_put(f"group:{group}", group_state, preserve_roles=True)
         if session["role"] == "teacher":
             class_state = state_get("class")
-            class_state.update({key: incoming[key] for key in CLASS_KEYS - {"project", "groups", "queue", "common"} if key in incoming})
+            old_target = class_current_stage(class_state)
+            if incoming.get("currentStage", old_target) != old_target:
+                for number in range(1, group_count() + 1):
+                    if classroom.control(class_state, number):
+                        continue
+                    class_state.setdefault("groupControls", {})[str(number)] = {"stage": old_target, "hold": False}
+            class_state.update({key: incoming[key] for key in CLASS_KEYS - {"project", "groups", "queue", "common", "evaluations", "evaluationHistory", "groupControls", "groupOverrides", "hintStageLimit", "taskBrief", "teachingReview"} if key in incoming})
             if session.get("projectName"):
                 class_state["project"] = session["projectName"]
             elif "project" in incoming:
@@ -2951,12 +3055,11 @@ class Handler(SimpleHTTPRequestHandler):
                     threads = item_state.get("helpThreads", []) if isinstance(item_state.get("helpThreads"), list) else []
                     thread = next((row for row in threads if isinstance(row, dict) and str(row.get("id")) == thread_id), None)
                     if thread:
-                        thread["status"] = "resolved"
-                        thread["resolvedAt"] = item["resolvedAt"]
+                        thread["status"] = "teacher"
+                        thread["respondedAt"] = item["resolvedAt"]
                         thread["teacherFeedback"] = item["feedback"] or "教师已处理，请根据课堂中的反馈继续完成。"
                         thread["resolvedBy"] = item["resolvedBy"]
-                        if item_state.get("activeHelpThreadId") == thread_id:
-                            item_state["activeHelpThreadId"] = ""
+
                         item_state["helpThreads"] = threads
                         state_put(f"group:{item_group}", item_state)
                         self.sync_group_summary(item_group, item_state)
@@ -3033,7 +3136,7 @@ class Handler(SimpleHTTPRequestHandler):
                     for number in range(1, group_count() + 1)
                 ]
                 initial = {"project": name, "groupCount": group_count(), "groups": summaries,
-                           "currentStage": 1, "aiOpen": True, "freeAiEnabled": True}
+                           "currentStage": 1, "aiOpen": True, "freeAiEnabled": True, "published": False, "hintStageLimit": 2}
                 db.execute(
                     "INSERT INTO states(scope,data,updated_at) VALUES(?,?,?)",
                     (state_scope("class", project_id), json.dumps(initial, ensure_ascii=False, separators=(",", ":")), created_at),
@@ -3044,9 +3147,12 @@ class Handler(SimpleHTTPRequestHandler):
                     self.json_response({"error": "只有教师可以修改项目名称"}, HTTPStatus.FORBIDDEN)
                     return
                 project_id = str(body.get("projectId", ""))
-                project = db.execute("SELECT id FROM projects WHERE id=?", (project_id,)).fetchone()
+                project = db.execute("SELECT id,created_by FROM projects WHERE id=?", (project_id,)).fetchone()
                 if not project:
                     raise ValueError("项目不存在，请刷新项目列表后重试")
+                if not session.get("isAdmin") and project["created_by"] not in (None, session.get("teacherId")):
+                    self.json_response({"error": "无权修改这个项目。"}, HTTPStatus.FORBIDDEN)
+                    return
                 name = re.sub(r"\s+", " ", str(body.get("name", "")).strip())
                 if not 1 <= len(name) <= 80:
                     raise ValueError("请填写1—80字的项目名称")
@@ -3078,9 +3184,12 @@ class Handler(SimpleHTTPRequestHandler):
                 renamed = True
             elif action == "select":
                 project_id = str(body.get("projectId", ""))
-                row = db.execute("SELECT id FROM projects WHERE id=?", (project_id,)).fetchone()
+                row = db.execute("SELECT id,created_by FROM projects WHERE id=?", (project_id,)).fetchone()
                 if not row:
                     raise ValueError("项目不存在，请刷新项目列表后重试")
+                if (session["role"] == "teacher" and not session.get("isAdmin") and row["created_by"] not in (None, session.get("teacherId"))) or (session["role"] == "student" and not state_get_project_public(project_id)):
+                    self.json_response({"error": "无权进入这个项目。"}, HTTPStatus.FORBIDDEN)
+                    return
             else:
                 raise ValueError("项目操作无效")
             if deleted_project is None:
@@ -3278,7 +3387,7 @@ class Handler(SimpleHTTPRequestHandler):
                 self.json_response({"error": "管理员恢复码不正确"}, HTTPStatus.UNAUTHORIZED)
                 return
             db.execute("DELETE FROM states")
-            db.execute("DELETE FROM events")
+            db.execute("DELETE FROM events WHERE project_id=current_project()")
             db.execute("DELETE FROM ai_calls")
             db.execute("DELETE FROM files")
             db.execute("DELETE FROM lesson_jobs")
@@ -3529,20 +3638,37 @@ class Handler(SimpleHTTPRequestHandler):
                  model, latency, "failed", status[:1000]),
             )
         if status == "not_configured":
-            return UpstreamServiceError("豆包文本服务未配置 ARK_API_KEY", HTTPStatus.SERVICE_UNAVAILABLE)
+            return UpstreamServiceError("AI暂时不可用，请稍后重试或请老师帮助。", HTTPStatus.SERVICE_UNAVAILABLE)
         match = re.match(r"HTTP (\d+):?\s*(.*)", status)
         if match:
             upstream_status = int(match.group(1))
             detail = match.group(2) or "方舟未返回错误详情"
             response_status = upstream_status if 400 <= upstream_status < 500 else HTTPStatus.BAD_GATEWAY
             return UpstreamServiceError(
-                f"豆包文本接口HTTP {upstream_status}: {detail}", int(response_status),
+                "AI暂时没有回答，你们的文字已保留，请稍后重试。", int(response_status),
             )
-        return UpstreamServiceError(f"豆包文本接口请求失败：{status}", HTTPStatus.BAD_GATEWAY)
+        return UpstreamServiceError("AI暂时没有回答，你们的文字已保留，请稍后重试。", HTTPStatus.BAD_GATEWAY)
 
+    @classroom.serialized
     def commit_free_ai_chat(self, context: dict, answer: str, model: str, status: str,
                             latency: int, file_metadata: dict | None = None) -> dict:
+        if not file_metadata:
+            answer, blocked = classroom.scan_answer(answer, context["state"], context["prompt"])
+            if blocked:
+                status = "output_blocked:" + blocked
+        fresh = merged_state(context["group"], False)
+        if not fresh.get("freeAiEnabled", True) or not fresh.get("aiOpen", True):
+            raise UpstreamServiceError("请向老师求助。", HTTPStatus.CONFLICT)
+        latest = state_get(f"group:{context['group']}")
+        context["group_state"] = latest
+        latest_free = free_ai_state(latest)
         conversation = context["conversation"]
+        saved = next((c for c in latest_free["conversations"] if c["id"] == conversation["id"]), None)
+        if saved:
+            context["conversation"] = conversation = saved
+        else:
+            latest_free["conversations"].append(conversation)
+        context["workspace"] = latest_free
         workspace = context["workspace"]
         assistant_message = {
             "role": "assistant", "kind": "image" if file_metadata else "text", "content": answer,
@@ -3571,7 +3697,7 @@ class Handler(SimpleHTTPRequestHandler):
                 (utc_now(), context["group"], "FREE_IMAGE" if intent == "image" else "FREE_TEXT",
                  model, latency, "returned", ("image_saved" if intent == "image" else status)[:1000]),
             )
-        record_event("student", context["group"], "free_ai_chat", context["state"].get("currentStage"), f"{intent}|{status}")
+        record_event("student", context["group"], "ai_boundary" if "blocked" in status else "free_ai_chat", context["state"].get("currentStage"), f"{intent}|{status}")
         response = {
             "ok": True, "answer": answer, "intent": intent, "source": "ark", "model": model,
             "conversationId": conversation["id"], "usage": workspace["usage"], "quota": context["quota"],
@@ -3591,6 +3717,8 @@ class Handler(SimpleHTTPRequestHandler):
             raise ValueError("阶段参数无效") from exc
         if stage not in {3, 4}:
             raise ValueError("方案比较仅支持阶段3或阶段4")
+        if stage > state.get("currentStage", 1) or state.get("stagePaused"):
+            raise UpstreamServiceError("这一阶段还没开始，请继续当前任务。", HTTPStatus.CONFLICT)
         raw_viewpoints = body.get("viewpoints")
         if not isinstance(raw_viewpoints, list) or len(raw_viewpoints) != 2:
             raise ValueError("请提供两个待比较方案")
@@ -3612,7 +3740,7 @@ class Handler(SimpleHTTPRequestHandler):
             "只根据学生提供的信息分析，不虚构数据，也不替小组直接决定最终方案。"
             "请依次给出：1. 可比性检查；2. 各方案依据的强项与不足；"
             "3. 风险、限制和缺失证据；4. 小组下一步应核验的2至4个具体问题。"
-            f"两个方案如下：{json.dumps(viewpoints, ensure_ascii=False)}"
+            f"共同条件：{json.dumps(body.get('conditions', {}), ensure_ascii=False)}。两个方案如下：{json.dumps(viewpoints, ensure_ascii=False)}"
         )
         answer, latency, status, model = ark_free_chat(state, group, prompt, [])
         result = "returned" if answer else "failed"
@@ -3621,6 +3749,10 @@ class Handler(SimpleHTTPRequestHandler):
                 "INSERT INTO ai_calls(ts,group_no,level,model,latency_ms,status,detail) VALUES(?,?,?,?,?,?,?)",
                 (utc_now(), group, "COMPARE", model, latency, result, status[:1000]),
             )
+        if answer:
+            answer, blocked = classroom.scan_answer(answer, state)
+            if blocked:
+                record_event("system", group, "ai_boundary", stage, blocked)
         if not answer:
             if status == "not_configured":
                 raise UpstreamServiceError("方案比较AI尚未配置", HTTPStatus.SERVICE_UNAVAILABLE)
@@ -3630,6 +3762,9 @@ class Handler(SimpleHTTPRequestHandler):
 
     def free_ai_chat(self, session: dict, body: dict) -> None:
         context = self.prepare_free_ai_chat(session, body)
+        if classroom.answer_intent(context["prompt"]):
+            self.json_response(self.commit_free_ai_chat(context, classroom.SAFE_REPLY, "teaching-boundary", "input_blocked", 0))
+            return
         if context["intent"] == "image":
             file_metadata, latency = ark_generate_image(context["group"], context["prompt"])
             response = self.commit_free_ai_chat(
@@ -3662,6 +3797,9 @@ class Handler(SimpleHTTPRequestHandler):
     def free_ai_chat_stream(self, session: dict, body: dict) -> None:
         context = self.prepare_free_ai_chat(session, body)
         self.sse_start()
+        if classroom.answer_intent(context["prompt"]):
+            self.sse_event({"type": "done", **self.commit_free_ai_chat(context, classroom.SAFE_REPLY, "teaching-boundary", "input_blocked", 0)})
+            return
         self.sse_event({"type": "start", "conversationId": context["conversation"]["id"], "intent": context["intent"]})
         try:
             if context["intent"] == "image":
@@ -3673,7 +3811,7 @@ class Handler(SimpleHTTPRequestHandler):
                 answer, latency, status, model = ark_free_chat_stream(
                     context["state"], context["group"], context["prompt"],
                     context["conversation"]["messages"],
-                    lambda delta: self.sse_event({"type": "delta", "content": delta}),
+                    lambda delta: None,
                 )
                 if not answer:
                     raise self.free_ai_failure(context, model, latency, status)
@@ -3687,6 +3825,7 @@ class Handler(SimpleHTTPRequestHandler):
             return
 
 
+    @classroom.idempotent
     def hint(self, session: dict, body: dict) -> None:
         group = int(session["groupId"])
         state = merged_state(group, monitoring=False)
@@ -3727,12 +3866,20 @@ class Handler(SimpleHTTPRequestHandler):
             thread["status"] = "resolved"
             thread["resolvedAt"] = utc_now()
             group_state["activeHelpThreadId"] = ""
+            class_saved = state_get("class")
+            for q in class_saved.get("queue", []):
+                if q.get("threadId") == thread["id"] and q.get("group") == group:
+                    q["resolved"] = True
+                    q["closedAt"] = utc_now()
+            state_put("class", class_saved)
             group_state["helpThreads"] = threads[-30:]
-            state_put(f"group:{group}", group_state)
+            classroom.store_help_state(sys.modules[__name__], group, group_state)
             record_event("student", group, "help_resolved", state.get("currentStage"), str(thread.get("id")))
             self.json_response({"ok": True, "message": "当前问题已关闭，可以从L1开始新的求助主题"})
             return
 
+        if action in {"ask", "advance"} and state.get("stageHintUsed", 0) >= state.get("hintStageLimit", 2):
+            raise UpstreamServiceError("这一步的AI提示已用完，请老师帮助。", HTTPStatus.CONFLICT)
         if action == "advance":
             if not thread or thread.get("status") not in {"active", "resolved"}:
                 raise ValueError("请先建立并使用当前求助主题")
@@ -3768,7 +3915,7 @@ class Handler(SimpleHTTPRequestHandler):
                 reply = static_hint(state, next_level_no)
             entry = {
                 "time": datetime.now().strftime("%H:%M"), "ts": utc_now(), "threadId": thread["id"],
-                "level": next_level, "type": issue_type,
+                "level": next_level, "type": issue_type, "stage": state.get("currentStage", 1),
                 "prompt": issue, "question": issue,
                 "done": attempt, "reply": reply, "source": "deepseek" if result == "returned" else "teacher_fallback",
             }
@@ -3790,8 +3937,8 @@ class Handler(SimpleHTTPRequestHandler):
             group_state["helpThreads"] = threads[-30:]
             group_state["hintUsage"] = usage
             group_state["hintUsed"] = sum(usage.values())
-            state_put(f"group:{group}", group_state)
-            self.sync_group_summary(group, group_state, issue_type)
+            classroom.store_help_state(sys.modules[__name__], group, group_state)
+            self.sync_group_summary(group, state_get(f"group:{group}"), issue_type)
             record_event("student", group, "hint_level_advanced", state.get("currentStage"), f"{level_no}->{next_level_no}")
             self.json_response({
                 "ok": True, "reply": reply, "level": next_level, "source": "deepseek" if result == "returned" else "teacher_fallback",
@@ -3826,8 +3973,8 @@ class Handler(SimpleHTTPRequestHandler):
             group_state["hintUsage"] = usage
             group_state["hintUsed"] = sum(usage.values())
             group_state["helpThreads"] = threads[-30:]
-            state_put(f"group:{group}", group_state)
-            self.sync_group_summary(group, group_state, issue_type)
+            classroom.store_help_state(sys.modules[__name__], group, group_state)
+            self.sync_group_summary(group, state_get(f"group:{group}"), issue_type)
             self.json_response({"ok": True, "created": created, "message": "已提交教师介入", "threadId": thread["id"], "hintUsage": usage, "hintPolicy": policy})
             return
 
@@ -3885,7 +4032,7 @@ class Handler(SimpleHTTPRequestHandler):
             history = []
         entry = {
             "time": datetime.now().strftime("%H:%M"), "ts": utc_now(), "threadId": thread["id"],
-            "level": level, "type": issue_type, "prompt": issue, "question": issue, "done": done,
+            "level": level, "type": issue_type, "stage": state.get("currentStage", 1), "prompt": issue, "question": issue, "done": done,
             "reply": reply, "source": "deepseek" if result == "returned" else "teacher_fallback",
         }
         history.append(entry)
@@ -3898,8 +4045,8 @@ class Handler(SimpleHTTPRequestHandler):
         group_state["helpThreads"] = threads[-30:]
         group_state["hintUsage"] = usage
         group_state["hintUsed"] = sum(usage.values())
-        state_put(f"group:{group}", group_state)
-        self.sync_group_summary(group, group_state, issue_type)
+        classroom.store_help_state(sys.modules[__name__], group, group_state)
+        self.sync_group_summary(group, state_get(f"group:{group}"), issue_type)
         record_event("student", group, "hint_return" if result == "returned" else "fallback_hint", state.get("currentStage"), f"{level}|{issue_type}")
         self.json_response({
             "reply": reply, "level": level, "source": "deepseek" if result == "returned" else "teacher_fallback",
@@ -3913,7 +4060,7 @@ class Handler(SimpleHTTPRequestHandler):
             queue = []
         if thread_id and any(item.get("threadId") == thread_id and not item.get("resolved") for item in queue if isinstance(item, dict)):
             return False
-        queue.append({"id": f"Q-{time.time_ns()}", "group": group, "threadId": thread_id, "type": "教师介入", "reason": f"{reason}：{issue}"[:300], "priority": "高", "time": datetime.now().strftime("%H:%M"), "resolved": False})
+        queue.append({"createdAt": utc_now(), "stage": state.get("currentStage", 1), "attempt": (active_help_thread(state) or {}).get("messages", [{}])[-1].get("done", "") if (active_help_thread(state) or {}).get("messages") else state.get("workspace", {}).get("next", ""), "topic": (active_help_thread(state) or {}).get("type", "其他"), "handling": "received", "id": f"Q-{time.time_ns()}", "group": group, "threadId": thread_id, "type": "教师介入", "reason": f"{reason}：{issue}"[:300], "priority": "高", "time": datetime.now().strftime("%H:%M"), "resolved": False})
         class_state["queue"] = queue[-100:]
         state_put("class", class_state)
         record_event("system", group, "teacher_escalate", state.get("currentStage"), reason)
@@ -3957,12 +4104,12 @@ class Handler(SimpleHTTPRequestHandler):
     def submit_stage(self, session: dict, body: dict) -> None:
         group = int(session["groupId"])
         class_state = state_get("class")
-        stage_no = class_current_stage(class_state)
+        stage_no = classroom.effective_stage(class_state, group)
         try:
             requested_stage = int(body.get("stage", stage_no))
         except (TypeError, ValueError) as exc:
             raise ValueError("阶段编号无效") from exc
-        if requested_stage != stage_no or class_state.get("stagePaused"):
+        if requested_stage != stage_no or class_state.get("stagePaused") or classroom.control(class_state, group).get("hold"):
             self.json_response({"error": "只能提交当前开放且未暂停的阶段"}, HTTPStatus.CONFLICT)
             return
         group_state = state_get(f"group:{group}")
@@ -3973,6 +4120,8 @@ class Handler(SimpleHTTPRequestHandler):
         submissions = dict(submissions) if isinstance(submissions, dict) else {}
         submissions[str(stage_no)] = True
         group_state["stageSubmitted"] = submissions
+        group_state.setdefault("submissionHistory", []).append({"id": secrets.token_hex(8), "stage": stage_no, "time": utc_now(),
+            "version": (group_state.get("versions") or [{}])[-1].get("v", ""), "workspace": dict(group_state.get("workspace", {})), "product": dict(group_state.get("product", {}))})
         state_put(f"group:{group}", group_state)
         self.sync_group_summary(group, group_state)
         record_event("student", group, "stage_submit", stage_no, f"阶段{stage_no}产出")
@@ -3984,13 +4133,13 @@ class Handler(SimpleHTTPRequestHandler):
             raise ValueError("材料名称无效")
         with database() as db:
             rows = db.execute(
-                "SELECT id,stored_name FROM files WHERE original_name=? AND uploaded_by='teacher'", (name,)
+                "SELECT id,stored_name FROM files WHERE original_name=? AND project_id=current_project() AND uploaded_by='teacher'", (name,)
             ).fetchall()
             for row in rows:
                 target = UPLOAD_DIR / row["stored_name"]
                 if target.resolve().parent == UPLOAD_DIR.resolve() and target.exists():
                     target.unlink()
-            db.execute("DELETE FROM files WHERE original_name=? AND uploaded_by='teacher'", (name,))
+            db.execute("DELETE FROM files WHERE original_name=? AND project_id=current_project() AND uploaded_by='teacher'", (name,))
         class_state = state_get("class")
         config = class_state.get("teacherConfig", {}) if isinstance(class_state.get("teacherConfig"), dict) else {}
         config["knowledge"] = [item for item in config.get("knowledge", []) if item != name]
@@ -4058,16 +4207,17 @@ class Handler(SimpleHTTPRequestHandler):
 
     def export_events(self, fmt: str) -> None:
         with database() as db:
-            rows = db.execute("SELECT ts,group_no,event_type,stage,data FROM events ORDER BY id").fetchall()
+            rows = db.execute("SELECT id,ts,group_no,event_type,stage,data FROM events WHERE project_id=current_project() ORDER BY id").fetchall()
+        rows = classroom.export_records(sys.modules[__name__], rows)
         if fmt == "json":
             raw = json.dumps([dict(row) for row in rows], ensure_ascii=False, indent=2).encode()
             mime, name = "application/json; charset=utf-8", "课堂过程事件.json"
         else:
             output = io.StringIO(newline="")
             writer = csv.writer(output)
-            writer.writerow(["timestamp", "group", "stage", "event_type", "data"])
+            writer.writerow(["id", "timestamp", "group", "stage", "event_type", "data"])
             for row in rows:
-                writer.writerow([row["ts"], f"G{row['group_no']:02d}" if row["group_no"] else "CLASS", row["stage"] or "", row["event_type"], row["data"]])
+                writer.writerow([row["id"], row["ts"], row["group_no"] or "CLASS", row["stage"] or "", row["event_type"], row["data"]])
             raw = ("\ufeff" + output.getvalue()).encode("utf-8")
             mime, name = "text/csv; charset=utf-8", "课堂过程事件.csv"
         self.send_response(200)
