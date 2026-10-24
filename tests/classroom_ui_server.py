@@ -11,6 +11,10 @@ import platform_server as app
 for key in ('ARK_API_KEY', 'DEEPSEEK_API_KEY', 'MPT_TEACHER_USERNAME', 'MPT_TEACHER_PASSWORD', 'MPT_CLASS_CODE', 'MPT_GROUP_CODE_PREFIX', 'MPT_GROUP_COUNT'):
     os.environ.pop(key, None)
 os.environ['MPT_ENV'] = 'development'
+if '--camera-ui' in sys.argv:
+    # Only this isolated fixture uses deterministic visual responses.
+    app.ark_recognize_images = lambda urls: '预算100元；单价8元；数量10个。'
+    app.ark_free_chat_stream = lambda state, group, prompt, history, on_delta: ('请核对照片中的单位。', 1, 'ok', 'test-vision')
 with tempfile.TemporaryDirectory(prefix='classroom-ui-') as folder:
     app.DATA_DIR = Path(folder); app.UPLOAD_DIR = app.DATA_DIR / 'uploads'
     app.DB_PATH = app.DATA_DIR / 'test.db'; app.SETUP_TOKEN_FILE = app.DATA_DIR / 'setup-token'

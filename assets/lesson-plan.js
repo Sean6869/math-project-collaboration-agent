@@ -13,7 +13,7 @@ function normalize(source){
  plan.lessons=plan.lessons.map(l=>({projectInfo:info(l.projectInfo||{...plan,title:plan.title||l.title,mathTopic:l.mathFocus||plan.mathTopic||'',standard:l.objectives||plan.standard||''})}));
  return plan;
 }
-async function mount({s,api,esc,toast,refreshState,teacherId}){
+async function mount({s,api,esc,toast,refreshState,teacherId,prepareImage=async file=>file}){
  const $=id=>document.getElementById(id),snapshot=await api('/api/lesson-plan');
  const fields=snapshot.fields,fieldId=key=>key==='title'?'pcProject':'pc-'+key;
  let revision=snapshot.published.revision||0,job=snapshot.job,selected=snapshot.published.selectedLesson||1,publishedSourceJobId=snapshot.published.sourceJobId||null;
@@ -49,10 +49,11 @@ async function mount({s,api,esc,toast,refreshState,teacherId}){
  $('pcLesson').onchange=()=>{read();selected=Number($('pcLesson').value);paint();dirty=true;stash();$('planSaveStatus').textContent='未保存'};
  $('resourceUpload').onclick=async()=>{
   const files=[...$('resourceFile').files];if(!files.length){toast('请选择课程材料');return}
-  if(files.some(file=>!file.size||file.size>10*1024*1024)){toast('每份材料必须为10MB以内的非空文件');return}
+  if(files.some(file=>!file.size||!file.type.startsWith('image/')&&file.size>10*1024*1024)){toast('每份材料必须为10MB以内的非空文件');return}
   const button=$('resourceUpload');button.disabled=true;button.textContent='正在上传…';
   try{
-   for(const file of files){
+   for(const original of files){
+    const file=await prepareImage(original);
     const content=await new Promise((resolve,reject)=>{const reader=new FileReader();reader.onload=()=>resolve(String(reader.result).split(',')[1]);reader.onerror=()=>reject(new Error('文件读取失败'));reader.readAsDataURL(file)});
     const saved=await api('/api/lesson-plan/resources',{method:'POST',body:JSON.stringify({name:file.name,content})});resources.unshift(saved);resourceIds.unshift(saved.id);
    }

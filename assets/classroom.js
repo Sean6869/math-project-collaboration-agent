@@ -29,7 +29,7 @@ window.MPT_CLASSROOM=function(C){
   $('thoughtMember').onchange=()=>{$('thoughtContent').value='';$('thoughtConfirmed').checked=false};
   $('saveThoughtOne').onclick=async()=>{
    const mode=value('thoughtMode');if(mode==='proxy'&&!$('thoughtConfirmed').checked){toast('请先向这位成员复述并确认');return}
-   let fileId='';if($('thoughtPhoto').files.length){try{const files=await uploadEvidenceFiles([...$('thoughtPhoto').files]);fileId=files[0]?.id||''}catch(error){toast(error.message);return}}
+   let fileId='';if(mode==='photo'&&$('thoughtPhoto').files.length){try{const files=await uploadEvidenceFiles([...$('thoughtPhoto').files]);fileId=files[0]?.id||''}catch(error){toast(error.message);return}}
    const result=await request('thought',{groupRevision:true,member:Number(value('thoughtMember')),content:value('thoughtContent'),mode,fileId,confirmed:$('thoughtConfirmed').checked},s);
    if(result){toast(result.draft?'草稿内容还在':'已保存到服务器');understanding()}
   };
@@ -37,7 +37,7 @@ window.MPT_CLASSROOM=function(C){
  }
  function model(){
   const s=load(),w=s.workspace||{},number=(s.versions?.length||0)+1;
-  page('student','s3','设计数学方案',`<div class="grid cols-2"><section class="card"><h2>1 · 用到哪些数量或数据？</h2>${field('modelVariables','数量、数据与单位',w.variables)}<h2 class="mt16">2 · 这些量怎样联系？</h2><div class="symbol-toolbar" role="toolbar" aria-label="数学符号">${['x','y','²','＋','−','×','÷','＝','（','）','＜','＞'].map(v=>`<button type="button" class="btn sm" data-symbol="${v}">${v}</button>`).join('')}</div>${field('modelRelation','写式子或列表',w.relation)}<label class="check mt12"><input id="modelPhotoMode" type="checkbox" ${w.modelFiles?.length?'checked':''}>拍照记录</label><input id="modelPhoto" type="file" accept="image/*" multiple capture="environment"><h2 class="mt16">3 · 在什么条件下成立？</h2>${field('modelConditions','条件与范围',w.constraints)}${field('modelReason','这次改了什么？')}${button('saveModelNew',`保存数学方案 V${number}`)}<a class="btn" href="stage3-graph.html">用图、表或算式说明</a></section><section class="card"><h2>已有方案</h2>${timeline(s)}</section></div>`);
+  page('student','s3','设计数学方案',`<div class="grid cols-2"><section class="card"><h2>1 · 用到哪些数量或数据？</h2>${field('modelVariables','数量、数据与单位',w.variables)}<h2 class="mt16">2 · 这些量怎样联系？</h2><div class="symbol-toolbar" role="toolbar" aria-label="数学符号">${['x','y','²','＋','−','×','÷','＝','（','）','＜','＞'].map(v=>`<button type="button" class="btn sm" data-symbol="${v}">${v}</button>`).join('')}</div>${field('modelRelation','写式子或列表',w.relation)}<div class="field mt12"><label for="modelPhoto">纸笔照片</label><input id="modelPhoto" type="file" accept="image/*" multiple capture="environment"></div><h2 class="mt16">3 · 在什么条件下成立？</h2>${field('modelConditions','条件与范围',w.constraints)}${field('modelReason','这次改了什么？')}${button('saveModelNew',`保存数学方案 V${number}`)}<a class="btn" href="stage3-graph.html">用图、表或算式说明</a></section><section class="card"><h2>已有方案</h2>${timeline(s)}</section></div>`);
   document.querySelectorAll('[data-symbol]').forEach(b=>b.onpointerdown=e=>{e.preventDefault();const input=$('modelRelation'),at=input.selectionStart,end=input.selectionEnd;input.setRangeText(b.dataset.symbol,at,end,'end');input.focus();input.dispatchEvent(new Event('input',{bubbles:true}))});
   $('saveModelNew').onclick=async()=>{
    if(number>1&&!value('modelReason')){toast('请填写这次改了什么');return}

@@ -200,6 +200,23 @@ paths:
         '422': {description: 非初中数学问题；不会调用模型或消耗提示额度}
         '409': {description: 当前层额度已用完、AI暂停或主题状态不允许该操作}
         '403': {description: 仅学生小组可调用}
+  /api/ai/images/recognize:
+    post:
+      summary: 学生主动识别本组图片；结果由用户核对，不自动写入数学记录
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [imageFileIds]
+              properties:
+                imageFileIds: {type: array, minItems: 1, maxItems: 3, items: {type: string}}
+      responses:
+        '200': {description: 返回 text、files 和 usage；成功才扣除一次额度}
+        '400': {description: 图片格式、数量或归属无效}
+        '409': {description: 教师暂停或额度不足}
+        '502': {description: 识别失败，可保留图片重试}
   /api/ai/chat:
     post:
       summary: 学生自由AI工作区的初中数学多轮对话

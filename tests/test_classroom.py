@@ -261,5 +261,70 @@ class ClassroomTest(unittest.TestCase):
         self.assertFalse(self.state()['briefNeedsReview'])
 
 
+    def upload_image(self):
+        import io
+        from PIL import Image
+        content = io.BytesIO(); Image.new('RGB', (2200, 1200), 'white').save(content, format='JPEG')
+        code, result = self.req(self.student, '/api/files', {'name': '纸笔记录.jpg', 'content': base64.b64encode(content.getvalue()).decode()})
+        self.assertEqual(code, 200)
+        return result['file']['id']
+
+    def test_image_recognition_scope_controls_failure_and_confirmable_transcript(self):
+        image = self.upload_image()
+        endpoint = '/api/ai/images/recognize'
+        with mock.patch.object(app, 'ark_recognize_images', return_value='预算100元，8×10＝80') as recognize:
+            self.assertEqual(self.req(self.login(2), endpoint, {'imageFileIds': [image]})[0], 400)
+            self.assertEqual(self.req(self.student, endpoint, {'imageFileIds': [image]*4})[0], 400)
+            self.assertFalse(recognize.called)
+            self.assertEqual(self.req(self.student, endpoint, {'imageFileIds': [image]})[1]['text'], '预算100元，8×10＝80')
+            self.assertEqual(self.state()['freeAi']['usage'], 1)
+            self.assertEqual(self.state()['workspace'], {}, '识别不能自动改写学生数学记录')
+        before = self.state()['freeAi']['usage']
+        with mock.patch.object(app, 'ark_recognize_images', side_effect=app.UpstreamServiceError('稍后重试', 502)):
+            self.assertEqual(self.req(self.student, endpoint, {'imageFileIds': [image]})[0], 502)
+        self.assertEqual(self.state()['freeAi']['usage'], before)
+        self.command('ai-access', {'group': 1, 'enabled': False})
+        with mock.patch.object(app, 'ark_recognize_images') as recognize:
+            self.assertEqual(self.req(self.student, endpoint, {'imageFileIds': [image]})[0], 409)
+            self.assertFalse(recognize.called)
+
+    def test_image_chat_forwards_pixels_to_vision_and_keeps_only_scoped_file_references(self):
+        import io
+        from PIL import Image
+        image = self.upload_image()
+        captured = []
+        def respond(request, **kwargs):
+            captured.append(json.loads(request.data))
+            return io.BytesIO(json.dumps({'choices': [{'message': {'content': '请核对图中的单位。'}}]}).encode())
+        with mock.patch.dict(os.environ, {'ARK_API_KEY': 'unit-test-only'}), mock.patch.object(app, 'ARK_VISION_MODEL', 'test-vision'), mock.patch.object(app.urllib.request, 'urlopen', side_effect=respond):
+            code, result = self.req(self.student, '/api/ai/chat', {'prompt': '读一下图中的单位', 'imageFileIds': [image]})
+        self.assertEqual(code, 200)
+        self.assertEqual(captured[0]['model'], 'test-vision')
+        self.assertEqual(captured[0]['thinking']['type'], 'disabled')
+        content = captured[0]['messages'][-1]['content']
+        url = next(item['image_url']['url'] for item in content if item['type'] == 'image_url')
+        with Image.open(io.BytesIO(base64.b64decode(url.split(',')[1]))) as resized:
+            self.assertLessEqual(max(resized.size), 1800)
+        saved = self.state()['freeAi']['conversations'][0]['messages'][0]
+        self.assertEqual(saved['files'][0]['id'], image)
+        self.assertNotIn('data:image', json.dumps(self.state()))
+        self.assertEqual(self.req(self.student, '/api/files/'+image, method='DELETE')[0], 409)
+        with mock.patch.object(app, 'ark_free_chat') as upstream:
+            self.assertEqual(self.req(self.login(2), '/api/ai/chat', {'prompt': '读图', 'imageFileIds': [image]})[0], 400)
+            self.assertFalse(upstream.called)
+
+    def test_image_ocr_uses_visual_payload_without_reasoning(self):
+        import io
+        requests = []
+        def respond(request, **kwargs):
+            requests.append(json.loads(request.data))
+            return io.BytesIO(json.dumps({'choices': [{'message': {'content': '100元'}}]}).encode())
+        with mock.patch.dict(os.environ, {'ARK_API_KEY': 'unit-test-only'}), mock.patch.object(app.urllib.request, 'urlopen', side_effect=respond):
+            self.assertEqual(app.ark_recognize_images(['data:image/jpeg;base64,unit']), '100元')
+        self.assertEqual(requests[0]['model'], app.ARK_VISION_MODEL)
+        self.assertEqual(requests[0]['thinking'], {'type': 'disabled'})
+        self.assertEqual(requests[0]['messages'][1]['content'][1]['type'], 'image_url')
+
+
 if __name__ == '__main__':
     unittest.main()

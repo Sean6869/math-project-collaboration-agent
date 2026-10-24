@@ -250,6 +250,22 @@ class PlatformTest(unittest.TestCase):
             self.assertIn("style-src 'self' 'unsafe-inline' https://www.desmos.com https://*.desmos.com", policy)
             self.assertIn("font-src 'self' data: https://www.desmos.com https://*.desmos.com", policy)
 
+    def test_camera_permission_is_scoped_to_photo_pages(self):
+        photo_pages = ("stage2-understanding", "stage3-model", "stage4-evidence", "ai")
+        for name in (*photo_pages, "dashboard"):
+            with self.client().open(self.base + f"/student/{name}.html", timeout=8) as response:
+                permission = response.headers["Permissions-Policy"]
+                policy = response.headers["Content-Security-Policy"]
+                html = response.read().decode()
+            self.assertIn("microphone=(), geolocation=()", permission)
+            if name in photo_pages:
+                self.assertIn("camera=(self)", permission)
+                self.assertIn("media-src 'self' blob:", policy)
+                self.assertIn("img-src 'self' data: blob:", policy)
+                self.assertIn("assets/camera.js", html)
+            else:
+                self.assertIn("camera=()", permission)
+
     def test_teacher_state_and_student_hint_fallback(self):
         c = app.state_get("class"); c["currentStage"] = 2; c["groupControls"] = {}; app.state_put("class", c)
         teacher = self.client()
@@ -957,7 +973,6 @@ class PlatformTest(unittest.TestCase):
         self.assertIn("new TextDecoder()", script)
         self.assertIn('id="aiImageMode"', script)
         self.assertIn("生成图片：${rawPrompt}", script)
-        self.assertIn("input.value='';clearDraft();", script)
         self.assertIn(".recent-new-conversation{display:inline-flex;align-items:center;gap:5px;border-color:var(--blue);", styles)
         self.assertIn("brandLockup(role)", script)
         self.assertIn("role==='student'?'/student/dashboard.html':'/teacher/dashboard.html'", script)

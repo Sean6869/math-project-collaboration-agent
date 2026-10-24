@@ -21,7 +21,7 @@ def serialized(fn):
     @functools.wraps(fn)
     def run(*args, **kwargs):
         # Upstream model latency must not block unrelated classroom saves.
-        if fn.__name__ == 'do_POST' and args[0].path.split('?')[0] in ('/api/ai/chat', '/api/ai/chat/stream', '/api/ai/compare', '/api/hints'):
+        if fn.__name__ == 'do_POST' and args[0].path.split('?')[0] in ('/api/ai/chat', '/api/ai/chat/stream', '/api/ai/compare', '/api/ai/images/recognize', '/api/hints'):
             return fn(*args, **kwargs)
         with WRITE_LOCK:
             return fn(*args, **kwargs)
