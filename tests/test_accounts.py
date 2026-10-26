@@ -141,5 +141,33 @@ class AccountsTest(unittest.TestCase):
         self.assertEqual(self.req(self.admin,'/api/admin/access',{'action':'teacher_invite'})[0],400)
         self.assertEqual(self.req(self.client(),'/api/login',{'role':'student','groupId':1,'classCode':'OLD','groupCode':'TEAM01'})[0],401)
 
+    def test_registered_teacher_code_keeps_classless_student_session(self):
+        status, registered = self.req(self.client(), '/api/teacher/register', {
+            'username': 'self_registered_teacher',
+            'password': 'RegisteredPassword#2026',
+        })
+        self.assertEqual(status, 201)
+        teacher = self.client()
+        self.assertEqual(self.req(teacher, '/api/login', {
+            'role': 'teacher',
+            'username': 'self_registered_teacher',
+            'password': 'RegisteredPassword#2026',
+        })[0], 200)
+        self.assertEqual(self.req(teacher, '/api/projects', {
+            'action': 'create', 'name': '注册教师项目', 'school': '测试学校',
+            'grade': '七年级', 'className': '2班', 'groupCount': 3,
+        })[0], 201)
+        student = self.client()
+        self.assertEqual(self.req(student, '/api/login', {
+            'role': 'student', 'groupId': 1,
+            'studentCode': registered['studentLoginCode'],
+        })[0], 200)
+        session_status, session = self.req(student, '/api/session')
+        self.assertEqual(session_status, 200)
+        self.assertTrue(session['authenticated'])
+        projects_status, projects = self.req(student, '/api/projects')
+        self.assertEqual(projects_status, 200)
+        self.assertEqual([item['name'] for item in projects['projects']], ['注册教师项目'])
+
 
 if __name__=='__main__':unittest.main()

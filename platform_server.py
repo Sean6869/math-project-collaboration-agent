@@ -892,8 +892,13 @@ def session_from_cookie(raw_cookie: str | None) -> dict | None:
         return None
     if row['role'] == 'teacher' and classroom_row and not teacher['is_admin'] and classroom_row['teacher_id'] != row['teacher_id']:
         return None
-    if row['role'] == 'student' and (not classroom_row or not 1 <= int(row['group_no'] or 0) <= classroom_row['group_count']):
-        return None
+    if row['role'] == 'student':
+        # Student codes identify the teacher; class is selected per project.
+        # A class-less session is therefore valid in the current login flow.
+        if not row['teacher_id']:
+            return None
+        if classroom_row and not 1 <= int(row['group_no'] or 0) <= classroom_row['group_count']:
+            return None
     accounts.CLASS_CONTEXT.set(str(row['class_id'] or ''))
     PROJECT_CONTEXT.set(str(row["project_id"] or ""))
     project_label = ""
