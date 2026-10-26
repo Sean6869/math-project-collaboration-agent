@@ -146,8 +146,9 @@ def can_project(app, session, project_id):
     if not row:
         return False
     if session['role']=='student':
-        # 学生登录码绑定教师，而不是某一个班级；登录后再从该教师的项目中选择。
-        return row['teacher_id']==session.get('teacherId') and app.state_get_project_public(project_id)
+        # 学生登录码绑定教师，而不是某一个班级；登录后可从该教师创建的
+        # 项目中选择。项目是否发布是课堂阶段控制，不应让项目选择页变空。
+        return row['teacher_id']==session.get('teacherId')
     return bool(session.get('isAdmin') or row['teacher_id']==session.get('teacherId'))
 
 
