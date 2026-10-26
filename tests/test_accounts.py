@@ -64,14 +64,14 @@ class AccountsTest(unittest.TestCase):
         state=app.state_get('class');state.update(published=True,currentStage=5);app.state_put('class',state)
         app.state_put('group:1',{'workspace':{'problem':text}});app.PROJECT_CONTEXT.reset(token)
 
-    def test_two_field_login_and_class_context_are_required_when_ambiguous(self):
+    def test_student_code_login_does_not_require_class_context(self):
         first=self.student();self.assertEqual(self.req(first,'/api/session')[1]['classId'],'default')
         _,cid,_=self.teacher_class()
         self.assertEqual(self.req(self.client(),'/api/login',{'role':'student','groupId':1,'studentCode':'0000'})[0],401)
         second=self.student(cid);self.assertEqual(self.req(second,'/api/session')[1]['classId'],cid)
         with app.database() as db: code=db.execute('SELECT student_login_code FROM teachers WHERE id=(SELECT teacher_id FROM school_classes WHERE id=?)',(cid,)).fetchone()[0]
         self.assertEqual(self.req(self.client(),'/api/login',{'role':'student','classId':cid,'groupId':99,'studentCode':code})[0],401)
-        self.assertEqual(self.req(self.client(),'/api/login',{'role':'student','classId':'missing','groupId':1,'studentCode':code})[0],401)
+        self.assertEqual(self.req(self.client(),'/api/login',{'role':'student','classId':'missing','groupId':1,'studentCode':code})[0],200)
 
     def test_teacher_and_student_project_and_group_data_are_bound_to_class(self):
         _,cid,teacher=self.teacher_class()

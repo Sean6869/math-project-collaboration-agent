@@ -146,7 +146,8 @@ def can_project(app, session, project_id):
     if not row:
         return False
     if session['role']=='student':
-        return row['id']==session.get('classId') and row['teacher_id']==session.get('teacherId') and app.state_get_project_public(project_id)
+        # 学生登录码绑定教师，而不是某一个班级；登录后再从该教师的项目中选择。
+        return row['teacher_id']==session.get('teacherId') and app.state_get_project_public(project_id)
     return bool(session.get('isAdmin') or row['teacher_id']==session.get('teacherId'))
 
 
@@ -313,14 +314,14 @@ def login(app, handler, body):
                 cid=''
             try: group=int(body.get('groupId'))
             except (ValueError,TypeError): group=0
-            row=db.execute('SELECT 1 FROM class_groups g JOIN school_classes c ON c.id=g.class_id WHERE g.class_id=? AND g.group_no=? AND g.group_no<=c.group_count',(cid,group)).fetchone()
+            row=db.execute('SELECT 1 FROM class_groups g JOIN school_classes c ON c.id=g.class_id WHERE c.teacher_id=? AND g.group_no=? AND g.group_no<=c.group_count',(teacher_id,group)).fetchone()
             valid=bool(teacher and row)
         if not valid:
             with app.LOGIN_LOCK:app.LOGIN_FAILURES.setdefault(client,[]).append(time.time())
             handler.json_response({'error':'学生登录码或小组选择不正确' if role=='student' else '教师账号或密码不正确'},401);return
         token=secrets.token_urlsafe(32)
         session={'role':role,'classId':cid,'teacherId':teacher_id,'isAdmin':bool(role=='teacher' and teacher['is_admin'])}
-        projects=[r['id'] for r in db.execute('SELECT id FROM projects ORDER BY created_at DESC') if can_project(app,session,r['id']) and (not cid or db.execute('SELECT 1 FROM project_classes WHERE project_id=? AND class_id=?',(r['id'],cid)).fetchone())]
+        projects=[r['id'] for r in db.execute('SELECT id FROM projects ORDER BY created_at DESC') if can_project(app,session,r['id']) and (role=='student' or not cid or db.execute('SELECT 1 FROM project_classes WHERE project_id=? AND class_id=?',(r['id'],cid)).fetchone())]
         selected=projects[0] if len(projects)==1 else None
         db.execute('INSERT INTO sessions(token_hash,role,teacher_id,group_no,expires_at,created_at,project_id,class_id) VALUES(?,?,?,?,?,?,?,?)',(app.token_hash(token),role,teacher_id,group,int(time.time())+app.SESSION_SECONDS,app.utc_now(),selected,cid or None))
     with app.LOGIN_LOCK:app.LOGIN_FAILURES.pop(client,None)
