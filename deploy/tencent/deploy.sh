@@ -41,11 +41,16 @@ if [[ ! -f "${ENV_FILE}" ]]; then
     exit 1
   fi
   umask 077
+  COOKIE_SECURE=1
+  if [[ "${MAPLE_DOMAIN_INPUT}" == :* || "${MAPLE_DOMAIN_INPUT}" == http://* ]]; then
+    COOKIE_SECURE=0
+  fi
   {
     printf 'MAPLE_DOMAIN=%s\n' "${MAPLE_DOMAIN_INPUT}"
     printf 'MPT_TEACHER_USERNAME=%s\n' "${MPT_TEACHER_USERNAME_INPUT}"
     printf 'MPT_TEACHER_PASSWORD=%s\n' "${MPT_TEACHER_PASSWORD_INPUT}"
     printf 'MPT_CLASS_NAME=默认班级\nMPT_GROUP_COUNT=3\n'
+    printf 'MPT_COOKIE_SECURE=%s\n' "${COOKIE_SECURE}"
     printf 'ARK_API_KEY=%s\n' "${ARK_API_KEY_INPUT}"
     printf 'ARK_TEXT_MODEL=doubao-seed-2-1-turbo-260628\n'
     printf 'ARK_IMAGE_MODEL=doubao-seedream-5-0-260128\n'
