@@ -897,7 +897,7 @@ def session_from_cookie(raw_cookie: str | None) -> dict | None:
     teacher = None
     if row["role"] == "teacher":
         with database() as db:
-            teacher = db.execute("SELECT username,is_admin FROM teachers WHERE id=?", (row["teacher_id"] or 1,)).fetchone()
+            teacher = db.execute("SELECT username,is_admin,student_login_code FROM teachers WHERE id=?", (row["teacher_id"] or 1,)).fetchone()
     if row['role'] == 'teacher' and not teacher:
         return None
     with database() as db:
@@ -918,6 +918,7 @@ def session_from_cookie(raw_cookie: str | None) -> dict | None:
         "teacherId": row["teacher_id"],
         "username": teacher["username"] if teacher else None,
         "isAdmin": bool(teacher and teacher["is_admin"]),
+        "studentLoginCode": teacher["student_login_code"] if teacher else None,
         "projectId": row["project_id"], "projectName": row["project_name"],
         "projectLabel": project_label,
     }
@@ -3053,6 +3054,9 @@ class Handler(SimpleHTTPRequestHandler):
                 name = re.sub(r"\s+", " ", str(body.get("name", "")).strip())
                 if not 1 <= len(name) <= 80:
                     raise ValueError("请填写1—80字的项目名称")
+                grade = re.sub(r"\s+", " ", str(body.get("grade", "")).strip())
+                if not 1 <= len(grade) <= 30:
+                    raise ValueError("请填写项目年级")
                 project_id = secrets.token_hex(12)
                 created_at = utc_now()
                 db.execute(
@@ -3064,7 +3068,7 @@ class Handler(SimpleHTTPRequestHandler):
                      "teacher": False, "latest": "尚未保存", "issue": "", "progress": 0}
                     for number in range(1, group_count() + 1)
                 ]
-                initial = {"project": name, "className": session.get("className", ""), "groupCount": group_count(), "groups": summaries,
+                initial = {"project": name, "grade": grade, "className": session.get("className", ""), "groupCount": group_count(), "groups": summaries,
                            "currentStage": 1, "aiOpen": True, "freeAiEnabled": True, "published": False, "hintStageLimit": 2}
                 db.execute(
                     "INSERT INTO states(scope,data,updated_at) VALUES(?,?,?)",
