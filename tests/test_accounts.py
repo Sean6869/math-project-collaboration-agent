@@ -67,6 +67,10 @@ class AccountsTest(unittest.TestCase):
     def test_student_code_login_does_not_require_class_context(self):
         first=self.student();self.assertEqual(self.req(first,'/api/session')[1]['classId'],'default')
         _,cid,_=self.teacher_class()
+        with app.database() as db:
+            teacher_code=db.execute('SELECT student_login_code FROM teachers WHERE username=?',('second_teacher',)).fetchone()[0]
+            db.execute('DELETE FROM class_groups WHERE class_id=?',(cid,))
+        self.assertEqual(self.req(self.client(),'/api/login',{'role':'student','groupId':1,'studentCode':teacher_code})[0],200)
         self.assertEqual(self.req(self.client(),'/api/login',{'role':'student','groupId':1,'studentCode':'0000'})[0],401)
         second=self.student(cid);self.assertEqual(self.req(second,'/api/session')[1]['classId'],cid)
         with app.database() as db: code=db.execute('SELECT student_login_code FROM teachers WHERE id=(SELECT teacher_id FROM school_classes WHERE id=?)',(cid,)).fetchone()[0]
@@ -111,7 +115,7 @@ class AccountsTest(unittest.TestCase):
         self.assertFalse(self.req(student,'/api/session')[1]['authenticated'])
         self.assertTrue(self.req(other,'/api/session')[1]['authenticated'])
         with app.database() as db: code=db.execute('SELECT student_login_code FROM teachers WHERE id=?',(tid,)).fetchone()[0]
-        self.assertEqual(self.req(self.client(),'/api/login',{'role':'student','classId':cid,'groupId':3,'studentCode':code})[0],401)
+        self.assertEqual(self.req(self.client(),'/api/login',{'role':'student','classId':cid,'groupId':3,'studentCode':code})[0],200)
         self.student(cid,1,'11')
         self.manage({'action':'class_save','classId':cid,'name':'二班','teacherId':tid,'groupCount':4,'codes':['11','22','03','04']})
         token=app.PROJECT_CONTEXT.set(pid);self.assertEqual(app.state_get('group:4')['workspace']['problem'],'第4组原始记录');app.PROJECT_CONTEXT.reset(token)

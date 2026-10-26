@@ -314,8 +314,11 @@ def login(app, handler, body):
                 cid=''
             try: group=int(body.get('groupId'))
             except (ValueError,TypeError): group=0
-            row=db.execute('SELECT 1 FROM class_groups g JOIN school_classes c ON c.id=g.class_id WHERE c.teacher_id=? AND g.group_no=? AND g.group_no<=c.group_count',(teacher_id,group)).fetchone()
-            valid=bool(teacher and row)
+            # 学生登录码只负责定位教师；小组号在项目页选择，不应依赖
+            # class_groups 的历史行。旧教师/旧数据可能尚未生成这些行，
+            # 之前因此会把有效教师码误判为 401（管理员因有默认小组不受影响）。
+            # 统一接受平台支持的 1—20 组，项目权限仍由 can_project() 校验。
+            valid=bool(teacher and 1 <= group <= 20)
         if not valid:
             with app.LOGIN_LOCK:app.LOGIN_FAILURES.setdefault(client,[]).append(time.time())
             handler.json_response({'error':'学生登录码或小组选择不正确' if role=='student' else '教师账号或密码不正确'},401);return
