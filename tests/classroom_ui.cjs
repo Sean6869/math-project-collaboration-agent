@@ -8,7 +8,7 @@ const {chromium}=require('playwright');
  try{
   browser=await chromium.launch({headless:true,...(fs.existsSync(chromium.executablePath())?{}:{channel:'msedge'})});
   const student=await browser.newContext({viewport:{width:1680,height:945}}),teacher=await browser.newContext({viewport:{width:1680,height:945}});
-  assert((await student.request.post(base+'/api/login',{data:{role:'student',classCode:'CLASSROOM',groupId:1,groupCode:'01'}})).ok());
+  assert((await student.request.post(base+'/api/login',{data:{role:'student',classId:'default',groupId:1,studentCode:'9512'}})).ok());
   assert((await teacher.request.post(base+'/api/login',{data:{role:'teacher',username:'ui_teacher',password:'ClassroomTeacher#2026'}})).ok());
   const p=await student.newPage(),t=await teacher.newPage(),errors=[];p.on('dialog',d=>d.accept('核对条件'));t.on('dialog',d=>d.accept('核对条件'));p.on('pageerror',e=>errors.push(e.message));t.on('pageerror',e=>errors.push(e.message));
   await p.goto(base+'/student/stage2-understanding.html');await p.locator('#thoughtContent').fill('先核对预算');await p.locator('#thoughtMode').selectOption('proxy');await p.locator('#thoughtConfirmed').check();await p.locator('#saveThoughtOne').click();await p.getByText('第1版',{exact:false}).waitFor({state:'attached'});

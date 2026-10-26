@@ -20,15 +20,14 @@ sys.path.insert(0, str(ROOT))
 import platform_server as app
 
 
-class DeepSeekConfigurationTest(unittest.TestCase):
+class ArkConfigurationTest(unittest.TestCase):
     def test_current_model_and_deprecated_aliases(self):
-        self.assertEqual(app.normalize_deepseek_model(None), "deepseek-flash")
-        self.assertEqual(app.normalize_deepseek_model("deepseek-flash"), "deepseek-flash")
-        self.assertEqual(app.normalize_deepseek_model("deepseek-chat"), "deepseek-flash")
-        self.assertEqual(app.normalize_deepseek_model("deepseek-reasoner"), "deepseek-flash")
-        self.assertEqual(app.normalize_deepseek_model("deepseek-v4-flash"), "deepseek-flash")
-        self.assertEqual(app.normalize_deepseek_model("deepseek-v4-flash-vision-exp"), "deepseek-flash")
-        self.assertEqual(app.normalize_deepseek_model("deepseek-v4-pro"), "deepseek-v4-pro")
+        default = "doubao-seed-2-1-turbo-260628"
+        self.assertEqual(app.normalize_ark_text_model(None), default)
+        self.assertEqual(app.normalize_ark_text_model("doubao-seed-2-0-mini-260428"), default)
+        self.assertEqual(app.normalize_ark_text_model("doubao-seed-2.0-mini"), default)
+        self.assertEqual(app.normalize_ark_text_model("doubao-seed-2-1-turbo"), default)
+        self.assertEqual(app.normalize_ark_text_model("custom-endpoint-id"), "custom-endpoint-id")
 
 
 class LegacyMigrationTest(unittest.TestCase):
@@ -79,8 +78,7 @@ class PlatformTest(unittest.TestCase):
         app.DB_PATH = app.DATA_DIR / "test.db"
         app.SETUP_TOKEN_FILE = app.DATA_DIR / "setup-token.txt"
         app.SETUP_TOKEN_DISPLAY = ""
-        for key in ("DEEPSEEK_API_KEY", "MPT_TEACHER_USERNAME", "MPT_TEACHER_PASSWORD",
-                    "MPT_CLASS_CODE", "MPT_GROUP_CODE_PREFIX", "MPT_GROUP_COUNT"):
+        for key in ("ARK_API_KEY", "MPT_TEACHER_USERNAME", "MPT_TEACHER_PASSWORD", "MPT_GROUP_COUNT"):
             os.environ.pop(key, None)
         os.environ["MPT_ENV"] = "development"
         os.environ["MPT_SETUP_TOKEN"] = "TEST-SETUP-TOKEN-2026"
@@ -102,8 +100,7 @@ class PlatformTest(unittest.TestCase):
                 raise
         payload = json.dumps({
             "setupToken": "TEST-SETUP-TOKEN-2026", "username": "test_teacher",
-            "password": "StrongTeacher#2026", "recoveryCode": "RECOVERY-CODE-TEST-2026", "classCode": "CLASS2026",
-            "groupCodePrefix": "01", "groupCount": 3,
+            "password": "StrongTeacher#2026", "groupCount": 3,
         }).encode()
         request = urllib.request.Request(
             cls.base + "/api/setup", data=payload, method="POST",
@@ -112,6 +109,10 @@ class PlatformTest(unittest.TestCase):
         with urllib.request.urlopen(request, timeout=3) as response:
             if response.status != 201:
                 raise AssertionError(f"setup failed with status {response.status}")
+        with app.database() as db:
+            cls.student_code = db.execute(
+                "SELECT student_login_code FROM teachers WHERE username='test_teacher'"
+            ).fetchone()[0]
 
     @classmethod
     def tearDownClass(cls):
@@ -147,7 +148,7 @@ class PlatformTest(unittest.TestCase):
 
         student = self.client()
         self.json_request(student, "/api/login", "POST", {
-            "role": "student", "classCode": "CLASS2026", "groupId": 1, "groupCode": "01",
+            "role": "student", "classId": "default", "groupId": 1, "studentCode": self.student_code,
         })
         with self.assertRaises(urllib.error.HTTPError) as denied:
             self.json_request(student, "/api/knowledge")
@@ -271,7 +272,7 @@ class PlatformTest(unittest.TestCase):
         student = self.client()
         status, login = self.json_request(
             student, "/api/login", "POST",
-            {"role": "student", "classCode": "CLASS2026", "groupId": 1, "groupCode": "01"},
+            {"role": "student", "classId": "default", "groupId": 1, "studentCode": self.student_code},
         )
         self.assertEqual(status, 200)
         self.assertEqual(login["groupId"], 1)
@@ -283,7 +284,7 @@ class PlatformTest(unittest.TestCase):
         self.assertEqual(data["state"]["currentStage"], 2, "小组刷新不能被默认阶段1覆盖")
         self.assertEqual(data["state"]["project"], "集成测试项目")
         self.assertNotIn("classGrade",data["state"],"年级由管理员班级名称决定，不能从已移除的班级码推断")
-        with mock.patch.object(app, "deepseek_hint", return_value=(None, 0, "not_configured")) as upstream:
+        with mock.patch.object(app, "ark_hint", return_value=(None, 0, "not_configured")) as upstream:
             status, project_hint = self.json_request(
                 student, "/api/hints", "POST",
                 {"action": "ask", "newThread": True, "done": "我已经了解项目材料", "type": "项目流程", "issue": "项目是什么，接下来要做什么"},
@@ -332,7 +333,7 @@ class PlatformTest(unittest.TestCase):
         student = self.client()
         status, _ = self.json_request(
             student, "/api/login", "POST",
-            {"role": "student", "classCode": "CLASS2026", "groupId": 3, "groupCode": "03"},
+            {"role": "student", "classId": "default", "groupId": 3, "studentCode": self.student_code},
         )
         self.assertEqual(status, 200)
         replies = [
@@ -343,7 +344,7 @@ class PlatformTest(unittest.TestCase):
             ("诊断：你们回到前一层重新检查对象关系，说明没有急于接受结论，这是很好的核验习惯。\n支架：请重新观察当前模型中每个量的现实含义，并追问它是否真正对应题目中的一个条件。\n下一步：选择一个变量写出它的含义、单位和来源，再由小组判断是否需要修改。", 90, "ok"),
             ("诊断：你们已经把当前层的变量关系重新核对，说明能够根据证据修正思路。\n支架：请把变量、关系式和现实条件逐一对应，判断哪一项仍然缺少验证依据。\n下一步：任选一处关系做一次边界或单位核验，并由小组说明核验结果支持或否定了什么。", 90, "ok"),
         ]
-        with mock.patch.object(app, "deepseek_hint", side_effect=replies):
+        with mock.patch.object(app, "ark_hint", side_effect=replies):
             for question in ("优化目标到底是哪一个面积", "小路宽度属于哪个条件"):
                 status, result = self.json_request(
                     student, "/api/hints", "POST",
@@ -428,12 +429,12 @@ class PlatformTest(unittest.TestCase):
         student = self.client()
         status, _ = self.json_request(
             student, "/api/login", "POST",
-            {"role": "student", "classCode": "CLASS2026", "groupId": 2, "groupCode": "02"},
+            {"role": "student", "classId": "default", "groupId": 2, "studentCode": self.student_code},
         )
         self.assertEqual(status, 200)
         reply = ("诊断：当前问题需要先区分对象。\n支架：请只核对这个主题中的条件。\n下一步：记录一次独立尝试。", 20, "ok")
         thread_ids = []
-        with mock.patch.object(app, "deepseek_hint", return_value=reply):
+        with mock.patch.object(app, "ark_hint", return_value=reply):
             for topic, issue in (
                 ("数据处理", "如何用平均数比较XY两组数据"),
                 ("计算核验", "12÷3的计算结果是否正确"),
@@ -492,7 +493,7 @@ class PlatformTest(unittest.TestCase):
         self.assertIn("阶段1", fallback)
         self.assertNotIn("阶段2", fallback)
         self.assertFalse(app.hint_within_open_stage("打开阶段2任务理解表继续填写", 1))
-        guarded = app.visible_help_entries([{"reply": "打开任务理解表填写已知信息", "source": "deepseek"}], 1)
+        guarded = app.visible_help_entries([{"reply": "打开任务理解表填写已知信息", "source": "ark"}], 1)
         self.assertIn("尚未开放", guarded[0]["reply"])
         self.assertEqual(guarded[0]["source"], "stage_guard")
 
@@ -512,10 +513,10 @@ class PlatformTest(unittest.TestCase):
             def read(self):
                 return json.dumps({"choices": [{"message": {"content": model_reply.decode()}}]}).encode()
 
-        with mock.patch.dict(os.environ, {"DEEPSEEK_API_KEY": "test-key"}), mock.patch.object(
+        with mock.patch.dict(os.environ, {"ARK_API_KEY": "test-key"}), mock.patch.object(
             app.urllib.request, "urlopen", return_value=FakeResponse(),
         ):
-            reply, _, status = app.deepseek_hint(stage_one, "L1", "已查看项目材料", "任务理解", "下一步做什么")
+            reply, _, status = app.ark_hint(stage_one, "L1", "已查看项目材料", "任务理解", "下一步做什么")
         self.assertIsNone(reply)
         self.assertEqual(status, "future_stage")
 
@@ -589,7 +590,7 @@ class PlatformTest(unittest.TestCase):
             "role": "teacher", "username": "test_teacher", "password": "StrongTeacher#2026",
         })
         self.json_request(student, "/api/login", "POST", {
-            "role": "student", "classCode": "CLASS2026", "groupId": 1, "groupCode": "01",
+            "role": "student", "classId": "default", "groupId": 1, "studentCode": self.student_code,
         })
         project_id = None
         try:
@@ -686,7 +687,7 @@ class PlatformTest(unittest.TestCase):
     def test_broadcast_publish_permissions_and_stale_state(self):
         teacher, student = self.client(), self.client()
         self.json_request(teacher, "/api/login", "POST", {"role": "teacher", "username": "test_teacher", "password": "StrongTeacher#2026"})
-        self.json_request(student, "/api/login", "POST", {"role": "student", "classCode": "CLASS2026", "groupId": 1, "groupCode": "01"})
+        self.json_request(student, "/api/login", "POST", {"role": "student", "classId": "default", "groupId": 1, "studentCode": self.student_code})
         for client, method, expected in [(self.client(), "GET", 401), (student, "POST", 403)]:
             with self.assertRaises(urllib.error.HTTPError) as denied:
                 self.json_request(client, "/api/broadcast", method, {"broadcast": "越权"} if method == "POST" else None)
@@ -798,7 +799,7 @@ class PlatformTest(unittest.TestCase):
         self.assertTrue(app.validated_stage_submissions(state)[1])
 
         student = self.client()
-        self.json_request(student, "/api/login", "POST", {"role": "student", "classCode": "CLASS2026", "groupId": 1, "groupCode": "01"})
+        self.json_request(student, "/api/login", "POST", {"role": "student", "classId": "default", "groupId": 1, "studentCode": self.student_code})
         current = self.json_request(student, "/api/state")[1]["state"]
         current["stageSubmitted"]["1"] = True
         with self.assertRaises(urllib.error.HTTPError) as incomplete:
@@ -823,7 +824,7 @@ class PlatformTest(unittest.TestCase):
         student = self.client()
         status, _ = self.json_request(
             student, "/api/login", "POST",
-            {"role": "student", "classCode": "CLASS2026", "groupId": 2, "groupCode": "02"},
+            {"role": "student", "classId": "default", "groupId": 2, "studentCode": self.student_code},
         )
         self.assertEqual(status, 200)
         raw = b"\xff\xd8\xff\xe0" + b"camera-evidence" * 100
@@ -977,17 +978,18 @@ class PlatformTest(unittest.TestCase):
         student = self.client()
         status, _ = self.json_request(
             student, "/api/login", "POST",
-            {"role": "student", "classCode": "CLASS2026", "groupId": 2, "groupCode": "02"},
+            {"role": "student", "classId": "default", "groupId": 2, "studentCode": self.student_code},
         )
         self.assertEqual(status, 200)
         fake_project = mock.MagicMock()
         fake_project.__enter__.return_value = fake_project
         fake_project.read.return_value = json.dumps({"choices": [{"message": {"content": "当前项目是数学项目式学习，下一步先查看本阶段任务。"}}]}).encode()
-        with mock.patch.object(app.urllib.request, "urlopen", return_value=fake_project) as upstream:
-            status, project_result = self.json_request(
-                student, "/api/ai/chat", "POST",
-                {"prompt": "项目是什么，接下来要做什么", "newConversation": True},
-            )
+        with mock.patch.dict(os.environ, {"ARK_API_KEY": "test-key"}):
+            with mock.patch.object(app.urllib.request, "urlopen", return_value=fake_project) as upstream:
+                status, project_result = self.json_request(
+                    student, "/api/ai/chat", "POST",
+                    {"prompt": "项目是什么，接下来要做什么", "newConversation": True},
+                )
         self.assertEqual(status, 200)
         self.assertEqual(project_result["source"], "ark")
         self.assertIn("数学项目任务书", json.loads(upstream.call_args.args[0].data)["messages"][0]["content"])
@@ -1105,7 +1107,7 @@ class PlatformTest(unittest.TestCase):
         other_student = self.client()
         status, _ = self.json_request(
             other_student, "/api/login", "POST",
-            {"role": "student", "classCode": "CLASS2026", "groupId": 3, "groupCode": "03"},
+            {"role": "student", "classId": "default", "groupId": 3, "studentCode": self.student_code},
         )
         self.assertEqual(status, 200)
         with self.assertRaises(urllib.error.HTTPError) as context:
@@ -1181,7 +1183,7 @@ class PlatformTest(unittest.TestCase):
         student = self.client()
         status, _ = self.json_request(
             student, "/api/login", "POST",
-            {"role": "student", "classCode": "CLASS2026", "groupId": 3, "groupCode": "03"},
+            {"role": "student", "classId": "default", "groupId": 3, "studentCode": self.student_code},
         )
         self.assertEqual(status, 200)
 
@@ -1285,7 +1287,7 @@ class PlatformTest(unittest.TestCase):
 
         status, result = self.json_request(
             teacher, "/api/groups/configure", "POST",
-            {"groupCount": 5, "groupCodePrefix": "NEWG"},
+            {"groupCount": 5},
         )
         self.assertEqual(status, 200)
         self.assertEqual(result["addedCodes"], [
@@ -1295,7 +1297,7 @@ class PlatformTest(unittest.TestCase):
         fifth = self.client()
         status, login = self.json_request(
             fifth, "/api/login", "POST",
-            {"role": "student", "classCode": "CLASS2026", "groupId": 5, "groupCode": "05"},
+            {"role": "student", "classId": "default", "groupId": 5, "studentCode": self.student_code},
         )
         self.assertEqual(status, 200)
         self.assertEqual(login["groupId"], 5)
@@ -1316,7 +1318,7 @@ class PlatformTest(unittest.TestCase):
 
     def test_z_removed_invite_recovery_routes_are_disabled(self):
         anonymous=self.client()
-        for route in ('/api/admin/recover','/api/teacher/register','/api/classroom/join-token'):
+        for route in ('/api/admin/recover','/api/classroom/join-token'):
             with self.assertRaises(urllib.error.HTTPError) as error:
                 self.json_request(anonymous,route,'POST',{})
             self.assertEqual(error.exception.code,410)

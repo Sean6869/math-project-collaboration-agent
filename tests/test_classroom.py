@@ -28,7 +28,9 @@ class ClassroomTest(unittest.TestCase):
         for patch in cls.patches:
             patch.start()
         app.init_database()
-        app.initialize_platform('classroom_teacher', 'TeacherClassroom#2026', 'RECOVERY-Classroom-2026', 'CLASSROOM', 'TEAM', 3)
+        app.initialize_platform('classroom_teacher', 'TeacherClassroom#2026', count=3)
+        with app.database() as db:
+            cls.student_code = db.execute("SELECT student_login_code FROM teachers WHERE username='classroom_teacher'").fetchone()[0]
         cls.server = app.ThreadingHTTPServer(('127.0.0.1', 0), app.Handler)
         cls.thread = threading.Thread(target=cls.server.serve_forever, daemon=True)
         cls.thread.start()
@@ -52,7 +54,7 @@ class ClassroomTest(unittest.TestCase):
 
     def login(self, group=None):
         client = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()))
-        body = {'role': 'student', 'classCode': 'CLASSROOM', 'groupId': group, 'groupCode': f'{group:02}'} if group else {'role': 'teacher', 'username': 'classroom_teacher', 'password': 'TeacherClassroom#2026'}
+        body = {'role': 'student', 'classId': 'default', 'groupId': group, 'studentCode': self.student_code} if group else {'role': 'teacher', 'username': 'classroom_teacher', 'password': 'TeacherClassroom#2026'}
         self.assertEqual(self.req(client, '/api/login', body)[0], 200)
         return client
 
@@ -131,7 +133,7 @@ class ClassroomTest(unittest.TestCase):
 
     def test_hints_stage_limit_retry_idempotent_and_teacher_extra(self):
         reply = ('先检查一个单位是否与题目一致？', 1, 'ok')
-        with mock.patch.object(app, 'deepseek_hint', return_value=reply) as upstream:
+        with mock.patch.object(app, 'ark_hint', return_value=reply) as upstream:
             body = {'newThread': True, 'done': '写了单位', 'issue': '预算单位怎么核验', 'requestId': 'first'}
             first = self.req(self.student, '/api/hints', body)
             again = self.req(self.student, '/api/hints', body)
@@ -226,7 +228,7 @@ class ClassroomTest(unittest.TestCase):
             return '检查单位是否一致？', 1, 'ok'
         def ask():
             result.append(self.req(self.student, '/api/hints', {'done': '写了单位', 'issue': '预算单位', 'requestId': 'slow'}))
-        with mock.patch.object(app, 'deepseek_hint', side_effect=upstream):
+        with mock.patch.object(app, 'ark_hint', side_effect=upstream):
             worker = threading.Thread(target=ask); worker.start()
             try:
                 self.assertTrue(entered.wait(3))

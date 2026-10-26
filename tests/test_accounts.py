@@ -54,7 +54,10 @@ class AccountsTest(unittest.TestCase):
         return tid,cid,teacher
 
     def student(self,cid='default',group=1,code='01'):
-        client=self.client();self.assertEqual(self.req(client,'/api/login',{'role':'student','classId':cid,'groupId':group,'groupCode':code})[0],200);return client
+        with app.database() as db:
+            row=db.execute('SELECT t.student_login_code FROM teachers t JOIN school_classes c ON c.teacher_id=t.id WHERE c.id=?',(cid,)).fetchone()
+        student_code=row[0] if row else ''
+        client=self.client();self.assertEqual(self.req(client,'/api/login',{'role':'student','classId':cid,'groupId':group,'studentCode':student_code})[0],200);return client
 
     def publish(self,pid,text):
         token=app.PROJECT_CONTEXT.set(pid)
@@ -64,10 +67,11 @@ class AccountsTest(unittest.TestCase):
     def test_two_field_login_and_class_context_are_required_when_ambiguous(self):
         first=self.student();self.assertEqual(self.req(first,'/api/session')[1]['classId'],'default')
         _,cid,_=self.teacher_class()
-        self.assertEqual(self.req(self.client(),'/api/login',{'role':'student','groupId':1,'groupCode':'01'})[0],401)
+        self.assertEqual(self.req(self.client(),'/api/login',{'role':'student','groupId':1,'studentCode':'0000'})[0],401)
         second=self.student(cid);self.assertEqual(self.req(second,'/api/session')[1]['classId'],cid)
-        self.assertEqual(self.req(self.client(),'/api/login',{'role':'student','classId':cid,'groupId':2,'groupCode':'01'})[0],401)
-        self.assertEqual(self.req(self.client(),'/api/login',{'role':'student','classId':'missing','groupId':1,'groupCode':'01'})[0],401)
+        with app.database() as db: code=db.execute('SELECT student_login_code FROM teachers WHERE id=(SELECT teacher_id FROM school_classes WHERE id=?)',(cid,)).fetchone()[0]
+        self.assertEqual(self.req(self.client(),'/api/login',{'role':'student','classId':cid,'groupId':99,'studentCode':code})[0],401)
+        self.assertEqual(self.req(self.client(),'/api/login',{'role':'student','classId':'missing','groupId':1,'studentCode':code})[0],401)
 
     def test_teacher_and_student_project_and_group_data_are_bound_to_class(self):
         _,cid,teacher=self.teacher_class()
@@ -106,7 +110,8 @@ class AccountsTest(unittest.TestCase):
         self.manage({'action':'class_save','classId':cid,'name':'二班','teacherId':tid,'groupCount':2,'codes':['11','22']})
         self.assertFalse(self.req(student,'/api/session')[1]['authenticated'])
         self.assertTrue(self.req(other,'/api/session')[1]['authenticated'])
-        self.assertEqual(self.req(self.client(),'/api/login',{'role':'student','classId':cid,'groupId':1,'groupCode':'01'})[0],401)
+        with app.database() as db: code=db.execute('SELECT student_login_code FROM teachers WHERE id=?',(tid,)).fetchone()[0]
+        self.assertEqual(self.req(self.client(),'/api/login',{'role':'student','classId':cid,'groupId':3,'studentCode':code})[0],401)
         self.student(cid,1,'11')
         self.manage({'action':'class_save','classId':cid,'name':'二班','teacherId':tid,'groupCount':4,'codes':['11','22','03','04']})
         token=app.PROJECT_CONTEXT.set(pid);self.assertEqual(app.state_get('group:4')['workspace']['problem'],'第4组原始记录');app.PROJECT_CONTEXT.reset(token)
@@ -125,8 +130,10 @@ class AccountsTest(unittest.TestCase):
         self.assertEqual(self.req(self.client(),'/api/login',{'role':'teacher','username':'admin_teacher','password':'AdminPassword#2026'})[0],200)
 
     def test_old_codes_and_join_tokens_are_not_authentication_paths(self):
-        for path in ('/api/admin/recover','/api/teacher/register','/api/classroom/join','/api/classroom/join-token','/api/admin/factory-reset'):
+        for path in ('/api/admin/recover','/api/classroom/join','/api/classroom/join-token','/api/admin/factory-reset'):
             self.assertEqual(self.req(self.client(),path,{})[0],410)
+        status, registered=self.req(self.client(),'/api/teacher/register',{'username':'registered_teacher','password':'RegisteredPassword#2026'})
+        self.assertEqual(status,201);self.assertRegex(registered['studentLoginCode'],r'^\d{4}$')
         self.assertEqual(self.req(self.admin,'/api/admin/access',{'action':'teacher_invite'})[0],400)
         self.assertEqual(self.req(self.client(),'/api/login',{'role':'student','groupId':1,'classCode':'OLD','groupCode':'TEAM01'})[0],401)
 

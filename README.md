@@ -33,16 +33,16 @@ python start_server.py
 - 不再显示“本课时任务”或分钟分配表。课堂首页直接展示项目概要、知识点和学习目标。已发布课时与材料每3秒同步；两种学生AI读取同一项目信息，切换课时不清空学生产出、提交、角色或对话。
 - 发布使用事务与版本检查；旧页面全量状态保存不能覆盖已发布信息。材料接口要求登录，只允许同站嵌入预览；数据目录、配置和源码不公开。
 
-## DeepSeek配置
+## 豆包 API 配置
 
 密钥只配置在服务器环境变量中：
 
 ```powershell
-$env:DEEPSEEK_API_KEY="你的密钥"
+$env:ARK_API_KEY="你的火山方舟密钥"
 python start_server.py
 ```
 
-默认调用 `https://api.deepseek.com/chat/completions`，模型为 `deepseek-flash`（V4.1 Flash），可通过 `DEEPSEEK_BASE_URL` 和 `DEEPSEEK_MODEL` 调整。旧配置中的 `deepseek-chat`、`deepseek-reasoner`、`deepseek-v4-flash` 和 `deepseek-v4-flash-vision-exp` 会自动迁移到当前 Flash 模型。由于当前模型默认开启思考，平台会显式关闭思考输出并要求结构化 JSON，以继续支持稳定的分层提示；L1、L2、L3 分别执行“定位—拆解—局部示范”契约，学生可在同一级连续提问并主动升级，L4 为独立教师求助额度。超时、错误或越界回答会使用教师支架且不扣除 AI 额度。
+平台的分层提示、自由对话、图片识别、教案解析和图片生成统一使用火山方舟。文本能力默认使用 `ARK_TEXT_MODEL`，视觉输入可用 `ARK_VISION_MODEL` 单独指定，生图使用 `ARK_IMAGE_MODEL`。模型调用显式关闭深度思考；超时、错误或越界回答会使用教师支架且不扣除 AI 额度。平台只需要配置火山方舟密钥，不需要其他大模型密钥。
 
 ## 学生自由AI工作区
 
@@ -51,10 +51,10 @@ python start_server.py
 可选环境变量：
 
 ```text
-DEEPSEEK_REASONING_MODEL=deepseek-v4-pro
 ARK_API_KEY=你的火山方舟密钥
 ARK_TEXT_URL=https://ark.cn-beijing.volces.com/api/v3/chat/completions
 ARK_TEXT_MODEL=doubao-seed-2-1-turbo-260628
+ARK_VISION_MODEL=doubao-seed-2-1-turbo-260628
 ARK_RESPONSES_URL=https://ark.cn-beijing.volces.com/api/v3/responses
 MPT_KNOWLEDGE_SOURCE_DIR=/path/to/必须要的教材、教师用书和课标
 ARK_IMAGE_URL=https://ark.cn-beijing.volces.com/api/v3/images/generations
@@ -89,7 +89,7 @@ docker run --env-file .env -p 8000:8000 -v math-project-data:/app/data math-proj
 - 教师密码使用慢哈希完成登录验证；为满足管理员显式查看需求，另用 `/app/data/account-encryption.key` 加密保存可查看副本。必须同时备份数据目录和该密钥；
 - 设置 `MPT_COOKIE_SECURE=1`，仅通过 HTTPS 提供服务；本地 `127.0.0.1` 预览会自动使用非 Secure 会话 Cookie；
 - 持久化并定期备份 `/app/data`；
-- 不把 `.env`、数据库、上传文件或 DeepSeek 密钥提交到代码仓库；
+- 不把 `.env`、数据库、上传文件或火山方舟密钥提交到代码仓库；
 - 由学校或项目负责人完成数据告知、授权、保留期限与账号发放。
 
 ### Railway
@@ -107,10 +107,7 @@ python -m unittest discover -s tests -v
 python -m py_compile platform_server.py start_server.py
 node --check assets/app.js
 node --check assets/data.js
-python tests/evaluate_deepseek_hints.py
 ```
-
-最后一项使用服务器环境中已配置的 DeepSeek 密钥进行真实 L1—L3 教学支架验证，不会输出或写入密钥。
 
 详细接口见 `interfaces/openapi.yaml`。
 

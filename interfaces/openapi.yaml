@@ -18,14 +18,9 @@ paths:
         '200': {description: 会话状态}
   /api/classes:
     get:
-      summary: 获取登录入口可选班级；教师登录后仅返回可管理班级
+      summary: 获取学生登录可选的项目班级
       responses:
-        '200': {description: 班级名称、任课教师和小组数量}
-    post:
-      summary: 教师切换当前任教班级
-      responses:
-        '200': {description: 当前班级已切换，待重新选择项目}
-        '403': {description: 无权进入该班级}
+        '200': {description: 学校、年级、班级、项目教师和小组数量}
   /api/login:
     post:
       summary: 教师或学生小组登录
@@ -132,7 +127,7 @@ paths:
                 attempt: {type: string, maxLength: 1600}
                 checkedWork: {type: boolean}
       responses:
-        '200': {description: 当前层 DeepSeek 支架、无扣额静态支架、层级转换或教师升级结果}
+        '200': {description: 当前层豆包支架、无扣额静态支架、层级转换或教师升级结果}
         '422': {description: 非初中数学问题；不会调用模型或消耗提示额度}
         '409': {description: 当前层额度已用完、AI暂停或主题状态不允许该操作}
         '403': {description: 仅学生小组可调用}
@@ -330,38 +325,6 @@ paths:
   /api/classroom/review:
     post:
       summary: 教师保存课后复盘
-      responses:
-        '200': {description: 操作完成}
-        '400': {description: 输入需要补充或修正}
-        '403': {description: 权限不足或入口已失效}
-        '409': {description: 记录已有更新，需比较版本}
-  /api/classroom/join-token:
-    post:
-      summary: 教师生成短期一次性小组入口
-      responses:
-        '200': {description: 操作完成}
-        '400': {description: 输入需要补充或修正}
-        '403': {description: 权限不足或入口已失效}
-        '409': {description: 记录已有更新，需比较版本}
-  /api/classroom/join-revoke:
-    post:
-      summary: 教师撤销小组入口
-      responses:
-        '200': {description: 操作完成}
-        '400': {description: 输入需要补充或修正}
-        '403': {description: 权限不足或入口已失效}
-        '409': {description: 记录已有更新，需比较版本}
-  /api/classroom/join-info:
-    post:
-      summary: 读取一次性入口的小组信息
-      responses:
-        '200': {description: 操作完成}
-        '400': {description: 输入需要补充或修正}
-        '403': {description: 权限不足或入口已失效}
-        '409': {description: 记录已有更新，需比较版本}
-  /api/classroom/join:
-    post:
-      summary: 验证一次性令牌并建立小组会话
       responses:
         '200': {description: 操作完成}
         '400': {description: 输入需要补充或修正}

@@ -45,7 +45,7 @@ def initialize(app):
                        f"WHEN NEW.project_id='' {condition} BEGIN UPDATE {table} SET project_id=current_project() WHERE id=NEW.id; END")
             db.execute(f'CREATE INDEX IF NOT EXISTS {table}_project ON {table}(project_id)')
         db.execute('CREATE TABLE IF NOT EXISTS classroom_requests(project_id TEXT,group_no INTEGER,request_id TEXT,response TEXT,PRIMARY KEY(project_id,group_no,request_id))')
-        db.execute('CREATE TABLE IF NOT EXISTS join_tokens(token_hash TEXT PRIMARY KEY,project_id TEXT,group_no INTEGER,expires_at INTEGER,used INTEGER NOT NULL DEFAULT 0)')
+        db.execute('DROP TABLE IF EXISTS join_tokens')
         db.execute("INSERT OR IGNORE INTO settings VALUES('classroom_isolation_v1','1')")
 
 

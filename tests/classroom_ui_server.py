@@ -8,7 +8,7 @@ import threading
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import platform_server as app
 
-for key in ('ARK_API_KEY', 'DEEPSEEK_API_KEY', 'MPT_TEACHER_USERNAME', 'MPT_TEACHER_PASSWORD', 'MPT_CLASS_CODE', 'MPT_GROUP_CODE_PREFIX', 'MPT_GROUP_COUNT'):
+for key in ('ARK_API_KEY', 'MPT_TEACHER_USERNAME', 'MPT_TEACHER_PASSWORD', 'MPT_GROUP_COUNT'):
     os.environ.pop(key, None)
 os.environ['MPT_ENV'] = 'development'
 if '--camera-ui' in sys.argv:
@@ -19,7 +19,9 @@ with tempfile.TemporaryDirectory(prefix='classroom-ui-') as folder:
     app.DATA_DIR = Path(folder); app.UPLOAD_DIR = app.DATA_DIR / 'uploads'
     app.DB_PATH = app.DATA_DIR / 'test.db'; app.SETUP_TOKEN_FILE = app.DATA_DIR / 'setup-token'
     app.init_database()
-    app.initialize_platform('ui_teacher', 'ClassroomTeacher#2026', 'UI-RECOVERY-2026', 'CLASSROOM', 'TEAM', 3)
+    app.initialize_platform('ui_teacher', 'ClassroomTeacher#2026', count=3)
+    with app.database() as db:
+        db.execute("UPDATE teachers SET student_login_code='9512' WHERE username='ui_teacher'")
     with app.database() as db:
         db.execute('INSERT INTO projects VALUES(?,?,?,?)', ('ui-project', '小小采购员', app.utc_now(), 1))
     app.PROJECT_CONTEXT.set('ui-project')

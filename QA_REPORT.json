@@ -9,11 +9,11 @@
   "output_guard": "passed",
   "page_smoke_test": "passed_44_pages",
   "blank_teacher_pages": "passed_17_pages",
-  "admin_access_recovery": "passed",
+  "admin_account_management": "passed",
   "runtime_backed_pages": "dashboard_export_governance_passed",
   "removed_static_routes": "return_404",
   "runtime_data_counts": "all_zero",
   "static_cache_policy": "passed",
   "public_temporary_copy_scan": "passed",
-  "live_deepseek": "requires_deployment_key"
+  "live_ark": "requires_deployment_key"
 }

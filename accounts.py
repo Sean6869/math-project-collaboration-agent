@@ -39,7 +39,8 @@ def initialize(app):
         db.executescript('''
             CREATE TABLE IF NOT EXISTS school_classes(
               id TEXT PRIMARY KEY,name TEXT NOT NULL,teacher_id INTEGER NOT NULL,
-              group_count INTEGER NOT NULL,created_at TEXT NOT NULL);
+              group_count INTEGER NOT NULL,created_at TEXT NOT NULL,
+              school TEXT NOT NULL DEFAULT '',grade TEXT NOT NULL DEFAULT '');
             CREATE TABLE IF NOT EXISTS class_groups(
               class_id TEXT NOT NULL,group_no INTEGER NOT NULL,code TEXT NOT NULL,
               PRIMARY KEY(class_id,group_no));
@@ -60,6 +61,11 @@ def initialize(app):
         ''')
         if 'class_id' not in {r[1] for r in db.execute('PRAGMA table_info(sessions)')}:
             db.execute('ALTER TABLE sessions ADD COLUMN class_id TEXT')
+        class_columns = {r[1] for r in db.execute('PRAGMA table_info(school_classes)')}
+        if 'school' not in class_columns:
+            db.execute("ALTER TABLE school_classes ADD COLUMN school TEXT NOT NULL DEFAULT ''")
+        if 'grade' not in class_columns:
+            db.execute("ALTER TABLE school_classes ADD COLUMN grade TEXT NOT NULL DEFAULT ''")
         teacher_columns = {r[1] for r in db.execute('PRAGMA table_info(teachers)')}
         if 'student_login_code' not in teacher_columns:
             db.execute('ALTER TABLE teachers ADD COLUMN student_login_code TEXT')
@@ -67,6 +73,21 @@ def initialize(app):
             db.execute('ALTER TABLE teachers ADD COLUMN school TEXT NOT NULL DEFAULT \'\'')
         if 'grade' not in teacher_columns:
             db.execute('ALTER TABLE teachers ADD COLUMN grade TEXT NOT NULL DEFAULT \'\'')
+        profile_migrated = db.execute("SELECT 1 FROM settings WHERE key='project_class_profile_v2'").fetchone()
+        if not profile_migrated:
+            db.execute(
+                "UPDATE school_classes SET school=COALESCE((SELECT school FROM teachers WHERE teachers.id=school_classes.teacher_id),'') "
+                "WHERE school=''"
+            )
+            db.execute(
+                "UPDATE school_classes SET grade=COALESCE((SELECT grade FROM teachers WHERE teachers.id=school_classes.teacher_id),'') "
+                "WHERE grade=''"
+            )
+            db.execute(
+                "UPDATE school_classes SET name=substr(name,length(grade)+2) "
+                "WHERE grade<>'' AND name LIKE grade||' %'"
+            )
+            db.execute("INSERT OR REPLACE INTO settings VALUES('project_class_profile_v2','1')")
         teachers = db.execute('SELECT id,student_login_code FROM teachers ORDER BY id').fetchall()
         used = {str(row['student_login_code']) for row in teachers if row['student_login_code']}
         for row in teachers:
@@ -81,7 +102,7 @@ def initialize(app):
             if admin:
                 count = db.execute("SELECT value FROM settings WHERE key='group_count'").fetchone()
                 count = max(1, min(20, int(count[0]) if count else 3))
-                db.execute('INSERT INTO school_classes VALUES(?,?,?,?,?)', ('default', '默认班级', admin[0], count, app.utc_now()))
+                db.execute('INSERT INTO school_classes(id,name,teacher_id,group_count,created_at) VALUES(?,?,?,?,?)', ('default', '默认班级', admin[0], count, app.utc_now()))
                 db.executemany('INSERT INTO class_groups VALUES(?,?,?)', [('default', n, f'{n:02}') for n in range(1, count+1)])
                 for project in db.execute('SELECT id,created_by FROM projects').fetchall():
                     owner = project['created_by'] or admin[0]
@@ -89,14 +110,16 @@ def initialize(app):
                     cid = row[0] if row else secrets.token_hex(12)
                     if not row:
                         teacher = db.execute('SELECT username FROM teachers WHERE id=?', (owner,)).fetchone()
-                        db.execute('INSERT INTO school_classes VALUES(?,?,?,?,?)', (cid, (teacher[0] if teacher else '教师')+'的班级', owner, count, app.utc_now()))
+                        db.execute('INSERT INTO school_classes(id,name,teacher_id,group_count,created_at) VALUES(?,?,?,?,?)', (cid, (teacher[0] if teacher else '教师')+'的班级', owner, count, app.utc_now()))
                         db.executemany('INSERT INTO class_groups VALUES(?,?,?)', [(cid, n, f'{n:02}') for n in range(1,count+1)])
                     db.execute('INSERT OR REPLACE INTO project_classes VALUES(?,?)', (project['id'], cid))
                 db.execute('DELETE FROM sessions')
                 db.execute("INSERT INTO settings VALUES('class_accounts_v1','1')")
         # No active path may authenticate through the removed codes.
         db.execute("DELETE FROM settings WHERE key IN ('class_code_hash','admin_recovery_hash','teacher_invite_hash','setup_token_hash','group_code_prefix')")
-        db.execute('DELETE FROM join_tokens')
+        # Remove the retired one-time join-token store during migration so a
+        # stale token can never become an authentication path again.
+        db.execute('DROP TABLE IF EXISTS join_tokens')
     if app.SETUP_TOKEN_FILE.exists():
         app.SETUP_TOKEN_FILE.unlink()
 
@@ -138,7 +161,7 @@ def create_admin(app, username, password, count=3, class_name='默认班级'):
         db.execute('INSERT INTO teachers(username,password_hash,created_at,is_admin,student_login_code,school,grade) VALUES(?,?,?,?,?,?,?)', (username.strip(), app.password_hash(password), app.utc_now(), 1, code, '', ''))
         teacher = db.execute('SELECT id FROM teachers').fetchone()[0]
         db.execute('INSERT INTO teacher_passwords VALUES(?,?)', (teacher, encrypted))
-        db.execute('INSERT INTO school_classes VALUES(?,?,?,?,?)', ('default', class_name.strip() or '默认班级', teacher, count, app.utc_now()))
+        db.execute('INSERT INTO school_classes(id,name,teacher_id,group_count,created_at) VALUES(?,?,?,?,?)', ('default', class_name.strip() or '默认班级', teacher, count, app.utc_now()))
         db.executemany('INSERT INTO class_groups VALUES(?,?,?)', [('default', n, f'{n:02}') for n in range(1,count+1)])
         db.execute("INSERT OR REPLACE INTO settings VALUES('class_accounts_v1','1')")
     app.state_put('class', {'groupCount':count})
@@ -184,10 +207,10 @@ def reset_data(app, admin_id):
         shutil.copytree(app.UPLOAD_DIR,upload_backup)
     with app.database() as db:
         db.execute('BEGIN IMMEDIATE')
-        for table in ('sessions','project_classes','projects','states','events','ai_calls','files','lesson_jobs','course_material','course_resources','knowledge_provider_files','knowledge_chunks','classroom_requests','join_tokens','class_groups','school_classes','groups'):
+        for table in ('sessions','project_classes','projects','states','events','ai_calls','files','lesson_jobs','course_material','course_resources','knowledge_provider_files','knowledge_chunks','classroom_requests','class_groups','school_classes','groups'):
             db.execute('DELETE FROM '+table)
         db.execute('DELETE FROM teachers WHERE id<>?',(admin_id,))
-        db.execute('INSERT INTO school_classes VALUES(?,?,?,?,?)',('default','默认班级',admin_id,3,app.utc_now()))
+        db.execute('INSERT INTO school_classes(id,name,teacher_id,group_count,created_at) VALUES(?,?,?,?,?)',('default','默认班级',admin_id,3,app.utc_now()))
         db.executemany('INSERT INTO class_groups VALUES(?,?,?)',[('default',n,f'{n:02}') for n in range(1,4)])
     if app.UPLOAD_DIR.exists():
         for path in app.UPLOAD_DIR.iterdir():
@@ -230,24 +253,15 @@ def _new_student_code(used):
 def register_teacher(app, body):
     username=str(body.get('username','')).strip()
     password=str(body.get('password',''))
-    school=str(body.get('school','')).strip()
-    grade=str(body.get('grade','')).strip()
-    class_name=str(body.get('className','')).strip()
     validate_teacher(username,password)
-    if not 1 <= len(school) <= 80: raise ValueError('请填写学校名称')
-    if not 1 <= len(grade) <= 30: raise ValueError('请填写年级')
-    if not 1 <= len(class_name) <= 60: raise ValueError('请填写班级')
     with app.database() as db:
         if db.execute('SELECT 1 FROM teachers WHERE username=?',(username,)).fetchone(): raise ValueError('教师账号已存在，请更换账号')
         used={str(r[0]) for r in db.execute('SELECT student_login_code FROM teachers').fetchall() if r[0]}
         code=_new_student_code(used)
-        row=db.execute('INSERT INTO teachers(username,password_hash,created_at,is_admin,student_login_code,school,grade) VALUES(?,?,?,?,?,?,?)',(username,app.password_hash(password),app.utc_now(),0,code,school,grade))
+        row=db.execute('INSERT INTO teachers(username,password_hash,created_at,is_admin,student_login_code,school,grade) VALUES(?,?,?,?,?,?,?)',(username,app.password_hash(password),app.utc_now(),0,code,'',''))
         tid=row.lastrowid
         db.execute('INSERT INTO teacher_passwords VALUES(?,?)',(tid,cipher(app).encrypt(password.encode()).decode()))
-        cid=secrets.token_hex(12)
-        db.execute('INSERT INTO school_classes VALUES(?,?,?,?,?)',(cid,f'{grade} {class_name}',tid,3,app.utc_now()))
-        db.executemany('INSERT INTO class_groups VALUES(?,?,?)',[(cid,n,f'{n:02}') for n in range(1,4)])
-    return {'teacherId':tid,'classId':cid,'studentLoginCode':code}
+    return {'teacherId':tid,'studentLoginCode':code}
 
 
 def resize(app, cid, count, codes=None):
@@ -326,7 +340,7 @@ def overview(app):
 
 
 def route(app, handler, method, path):
-    legacy=('/api/teacher/register','/api/admin/recover','/api/setup','/api/admin/factory-reset')
+    removed_routes=('/api/admin/recover','/api/setup','/api/admin/factory-reset')
     if path=='/api/teacher/register':
         if method!='POST':
             handler.json_response({'error':'仅支持注册提交'},405);return True
@@ -336,7 +350,7 @@ def route(app, handler, method, path):
         except (ValueError,sqlite3.IntegrityError) as error:
             handler.json_response({'error':str(error)},400)
         return True
-    if path in legacy or path.startswith('/api/classroom/join'):
+    if path in removed_routes or path.startswith('/api/classroom/join'):
         # Local first-run setup only; production bootstrap comes from Railway variables.
         if path=='/api/setup' and method=='POST' and not app.is_initialized() and os.environ.get('MPT_ENV','development')!='production' and handler.client_address[0] in ('127.0.0.1','::1'):
             try:
@@ -364,15 +378,9 @@ def route(app, handler, method, path):
                     handler.json_response({'ok':True,'studentLoginCode':code});return True
         if path=='/api/classes' and method=='GET':
             session=handler.current_session();rows=classes_for(app,session if session and session['role']=='teacher' else None)
-            handler.json_response({'classes':[{'id':c['id'],'name':c['name'],'groupCount':c['group_count'],'teacherName':c['teacher_name']} for c in rows]});return True
+            handler.json_response({'classes':[{'id':c['id'],'name':c['name'],'school':c['school'],'grade':c['grade'],'groupCount':c['group_count'],'teacherName':c['teacher_name']} for c in rows]});return True
         session=handler.require_session('teacher')
         if not session:return True
-        if path=='/api/classes' and method=='POST':
-            cid=str(handler.read_json().get('classId',''))
-            if not any(row['id']==cid for row in classes_for(app,session)):
-                handler.json_response({'error':'无权进入这个班级'},403);return True
-            with app.database() as db:db.execute('UPDATE sessions SET class_id=?,project_id=NULL WHERE token_hash=?',(cid,handler.session_token_hash()))
-            handler.json_response({'ok':True,'classId':cid});return True
         if not session.get('isAdmin'):
             handler.json_response({'error':'只有管理员可以管理教师和班级'},403);return True
         if method=='GET':
@@ -402,8 +410,10 @@ def route(app, handler, method, path):
             except InvalidToken as error:raise ValueError('密码保存密钥不匹配，请重新设置密码') from error
             handler.json_response({'password':password})
         elif action=='class_save':
-            cid=str(body.get('classId') or secrets.token_hex(12));name=str(body.get('name','')).strip();tid=int(body.get('teacherId') or 0);count=valid_count(body.get('groupCount'))
+            cid=str(body.get('classId') or secrets.token_hex(12));name=str(body.get('name','')).strip();school=str(body.get('school','')).strip();grade=str(body.get('grade','')).strip();tid=int(body.get('teacherId') or 0);count=valid_count(body.get('groupCount'))
             if not 1<=len(name)<=60:raise ValueError('班级名称需为1—60字')
+            if len(school)>80:raise ValueError('学校名称不能超过80字')
+            if len(grade)>30:raise ValueError('年级不能超过30字')
             codes=body.get('codes')
             if codes is not None and (not isinstance(codes,list) or len(codes)!=count or any(not re.fullmatch(r'[A-Za-z0-9]{2,20}',str(code)) for code in codes)):
                 raise ValueError('请为每组填写2—20位字母或数字小组码')
@@ -411,11 +421,11 @@ def route(app, handler, method, path):
                 if not db.execute('SELECT 1 FROM teachers WHERE id=?',(tid,)).fetchone():raise ValueError('请选择任课教师')
                 old=db.execute('SELECT * FROM school_classes WHERE id=?',(cid,)).fetchone()
                 if old:
-                    db.execute('UPDATE school_classes SET name=?,teacher_id=? WHERE id=?',(name,tid,cid))
+                    db.execute('UPDATE school_classes SET name=?,school=?,grade=?,teacher_id=? WHERE id=?',(name,school,grade,tid,cid))
                     if old['teacher_id']!=tid:
                         db.execute("DELETE FROM sessions WHERE class_id=? AND (role='student' OR teacher_id NOT IN (SELECT id FROM teachers WHERE is_admin=1))",(cid,))
                         db.execute('UPDATE projects SET created_by=? WHERE id IN (SELECT project_id FROM project_classes WHERE class_id=?)',(tid,cid))
-                else:db.execute('INSERT INTO school_classes VALUES(?,?,?,?,?)',(cid,name,tid,count,app.utc_now()))
+                else:db.execute('INSERT INTO school_classes(id,name,teacher_id,group_count,created_at,school,grade) VALUES(?,?,?,?,?,?,?)',(cid,name,tid,count,app.utc_now(),school,grade))
             resize(app,cid,count,codes)
             handler.json_response({'ok':True,'classId':cid})
         else:raise ValueError('不支持的管理操作')

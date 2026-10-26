@@ -68,17 +68,6 @@ def env_seconds(name: str, default: int, minimum: int = 5, maximum: int = 300) -
     return max(minimum, min(maximum, value))
 
 
-def normalize_deepseek_model(model: str | None) -> str:
-    configured = (model or "").strip() or "deepseek-flash"
-    aliases = {
-        "deepseek-chat": "deepseek-flash",
-        "deepseek-reasoner": "deepseek-flash",
-        "deepseek-v4-flash": "deepseek-flash",
-        "deepseek-v4-flash-vision-exp": "deepseek-flash",
-    }
-    return aliases.get(configured, configured)
-
-
 def normalize_ark_text_model(model: str | None) -> str:
     configured = (model or "").strip() or "doubao-seed-2-1-turbo-260628"
     aliases = {
@@ -102,10 +91,6 @@ PORT = int(os.environ.get("PORT") or os.environ.get("MPT_PORT", "8000"))
 SESSION_SECONDS = int(os.environ.get("MPT_SESSION_SECONDS", "28800"))
 MAX_JSON_BYTES = 2 * 1024 * 1024
 MAX_UPLOAD_BYTES = int(os.environ.get("MPT_MAX_UPLOAD_BYTES", str(10 * 1024 * 1024)))
-DEEPSEEK_BASE_URL = os.environ.get("DEEPSEEK_BASE_URL", "https://api.deepseek.com").rstrip("/")
-DEEPSEEK_URL = DEEPSEEK_BASE_URL + "/chat/completions"
-DEEPSEEK_MODEL = normalize_deepseek_model(os.environ.get("DEEPSEEK_MODEL"))
-DEEPSEEK_REASONING_MODEL = os.environ.get("DEEPSEEK_REASONING_MODEL", "deepseek-v4-pro")
 ARK_TEXT_URL = os.environ.get("ARK_TEXT_URL", "https://ark.cn-beijing.volces.com/api/v3/chat/completions")
 ARK_RESPONSES_URL = os.environ.get("ARK_RESPONSES_URL", "https://ark.cn-beijing.volces.com/api/v3/responses")
 ARK_TEXT_MODEL = normalize_ark_text_model(os.environ.get("ARK_TEXT_MODEL"))
@@ -113,6 +98,7 @@ ARK_VISION_MODEL = os.environ.get("ARK_VISION_MODEL", "").strip() or ARK_TEXT_MO
 ARK_IMAGE_URL = os.environ.get("ARK_IMAGE_URL", "https://ark.cn-beijing.volces.com/api/v3/images/generations")
 ARK_IMAGE_MODEL = os.environ.get("ARK_IMAGE_MODEL", "doubao-seedream-5-0-260128")
 ARK_IMAGE_RESPONSE_FORMAT = os.environ.get("ARK_IMAGE_RESPONSE_FORMAT", "b64_json").strip().lower()
+HINT_MODEL = ARK_TEXT_MODEL
 DESMOS_API_KEY = os.environ.get("DESMOS_API_KEY", "").strip()
 ARK_TEXT_TIMEOUT_SECONDS = env_seconds("ARK_TEXT_TIMEOUT_SECONDS", 60)
 ARK_IMAGE_TIMEOUT_SECONDS = env_seconds("ARK_IMAGE_TIMEOUT_SECONDS", 120)
@@ -342,8 +328,8 @@ def group_count() -> int:
     return int(current['group_count']) if current else 0
 
 
-def initialize_platform(username: str, teacher_password: str, recovery_code: str = '', class_code: str = '', group_prefix: str = '', count: int = 3) -> None:
-    # Kept as a callable initializer for local tools; legacy codes are ignored.
+def initialize_platform(username: str, teacher_password: str, count: int = 3) -> None:
+    """Initialize a local/test instance with one administrator account."""
     accounts.create_admin(sys.modules[__name__], username, teacher_password, count)
 
 
@@ -819,7 +805,7 @@ def merged_state(group_no: int, monitoring: bool = True) -> dict:
     value["_classRevision"] = classroom.revision(class_state)
     value["_projectId"] = PROJECT_CONTEXT.get()
     value["hintStageLimit"] = int(class_state.get("hintStageLimit", 2)) + int(override.get("hintExtra", {}).get(str(value["currentStage"]), 0))
-    value["stageHintUsed"] = sum(item.get("stage") == value["currentStage"] and item.get("source") == "deepseek" for item in group_state.get("helpHistory", []))
+    value["stageHintUsed"] = sum(item.get("stage") == value["currentStage"] and item.get("source") == "ark" for item in group_state.get("helpHistory", []))
     try:
         value["freeAiQuota"] = max(1, min(100, int(class_state.get("freeAiQuota", FREE_AI_QUOTA_DEFAULT))))
     except (TypeError, ValueError):
@@ -1426,11 +1412,11 @@ def ark_knowledge_documents(state: dict, query: str, limit: int = 2) -> list[dic
     return [{"name": name, "fileId": file_id} for _, name, file_id in ranked[:limit]]
 
 
-def deepseek_hint(
+def ark_hint(
     state: dict, level: str, done: str, issue_type: str, issue: str,
     history: list[dict] | None = None, checked_work: bool = False,
 ) -> tuple[str | None, int, str]:
-    api_key = os.environ.get("DEEPSEEK_API_KEY", "")
+    api_key = os.environ.get("ARK_API_KEY", "")
     if not api_key:
         return None, 0, "not_configured"
     config = state.get("teacherConfig", {})
@@ -1477,13 +1463,13 @@ def deepseek_hint(
         "同一求助主题的最近对话": recent, "已审核材料": knowledge_names, "材料摘录": knowledge,
     }
     payload = json.dumps({
-        "model": DEEPSEEK_MODEL,
+        "model": HINT_MODEL,
         "messages": [{"role": "system", "content": system}, {"role": "user", "content": json.dumps(user, ensure_ascii=False)}],
         "thinking": {"type": "disabled"}, "response_format": {"type": "json_object"},
         "stream": False, "temperature": 0.15, "max_tokens": 700,
     }, ensure_ascii=False).encode()
     request = urllib.request.Request(
-        DEEPSEEK_URL, data=payload,
+        ARK_TEXT_URL, data=payload,
         headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json", "User-Agent": "Maple-Platform/1"},
         method="POST",
     )
@@ -2406,7 +2392,7 @@ class Handler(SimpleHTTPRequestHandler):
             self.end_headers()
             return
         if route.path == "/api/health":
-            hint_ai_configured = bool(os.environ.get("DEEPSEEK_API_KEY"))
+            hint_ai_configured = bool(os.environ.get("ARK_API_KEY"))
             free_ai_configured = bool(os.environ.get("ARK_API_KEY"))
             self.json_response({
                 "status": "ok",
@@ -2429,15 +2415,22 @@ class Handler(SimpleHTTPRequestHandler):
             session = self.require_session()
             if session:
                 with database() as db:
-                    rows = db.execute("SELECT id,name,created_at,created_by FROM projects ORDER BY created_at DESC,rowid DESC").fetchall()
-                rows = [row for row in rows if accounts.can_project(sys.modules[__name__], session, row['id']) and (not session.get('classId') or db_project_class(row['id']) == session['classId'])]
+                    rows = db.execute(
+                        "SELECT p.id,p.name,p.created_at,p.created_by,c.name AS class_name,"
+                        "c.school,c.grade,c.group_count FROM projects p "
+                        "LEFT JOIN project_classes pc ON pc.project_id=p.id "
+                        "LEFT JOIN school_classes c ON c.id=pc.class_id "
+                        "ORDER BY p.created_at DESC,p.rowid DESC"
+                    ).fetchall()
+                rows = [row for row in rows if accounts.can_project(sys.modules[__name__], session, row['id'])]
                 self.json_response({
                     "projects": [{**classroom.project_metadata(sys.modules[__name__], row["id"]), "id": row["id"], "name": row["name"], "createdAt": row["created_at"],
+                                  "school": row["school"] or "", "grade": row["grade"] or "", "className": row["class_name"] or "",
+                                  "groupCount": row["group_count"] or 0,
                                   "label": f"{str(row['created_at'])[:10]} - {row['name']}"} for row in rows],
                     "selectedProjectId": session.get("projectId"),
-                    "classes": [{"id":c["id"],"name":c["name"]} for c in accounts.classes_for(sys.modules[__name__], session)] if session["role"]=="teacher" else [],
                     "classId": session.get("classId"), "className": session.get("className"),
-                    "canCreate": session["role"] == "teacher" and bool(session.get("classId")),
+                    "canCreate": session["role"] == "teacher",
                     "canDelete": bool(session.get("isAdmin")),
                 })
             return
@@ -2474,8 +2467,8 @@ class Handler(SimpleHTTPRequestHandler):
                     "sessionSeconds": SESSION_SECONDS,
                 },
                 "ai": {
-                    "configured": bool(os.environ.get("DEEPSEEK_API_KEY")),
-                    "model": DEEPSEEK_MODEL,
+                    "configured": bool(os.environ.get("ARK_API_KEY")),
+                    "model": HINT_MODEL,
                     "freeAiConfigured": bool(os.environ.get("ARK_API_KEY")),
                     "freeAiTextModel": ARK_TEXT_MODEL,
                     "freeAiImageModel": ARK_IMAGE_MODEL,
@@ -3046,29 +3039,59 @@ class Handler(SimpleHTTPRequestHandler):
                 )
                 deleted_project = project_id
             elif action == "create":
-                if not session.get("classId"):
-                    raise ValueError("请先选择任教班级")
                 if session["role"] != "teacher":
                     self.json_response({"error": "新项目由教师创建，学生请选择教师已经建立的项目"}, HTTPStatus.FORBIDDEN)
                     return
                 name = re.sub(r"\s+", " ", str(body.get("name", "")).strip())
                 if not 1 <= len(name) <= 80:
                     raise ValueError("请填写1—80字的项目名称")
-                grade = re.sub(r"\s+", " ", str(body.get("grade", "")).strip())
+                current_class = db.execute("SELECT * FROM school_classes WHERE id=?", (session.get("classId"),)).fetchone()
+                school = re.sub(r"\s+", " ", str(body.get("school", "")).strip()) or (current_class["school"] if current_class else "") or "未填写学校"
+                grade = re.sub(r"\s+", " ", str(body.get("grade", "")).strip()) or (current_class["grade"] if current_class else "") or "未填写年级"
+                class_name = re.sub(r"\s+", " ", str(body.get("className", "")).strip()) or (current_class["name"] if current_class else "") or "默认班级"
+                if not 1 <= len(school) <= 80:
+                    raise ValueError("请填写1—80字的学校名称")
                 if not 1 <= len(grade) <= 30:
-                    raise ValueError("请填写项目年级")
+                    raise ValueError("请填写1—30字的年级")
+                if not 1 <= len(class_name) <= 60:
+                    raise ValueError("请填写1—60字的班级")
+                requested_group_count = accounts.valid_count(body.get("groupCount", current_class["group_count"] if current_class else 3))
+                metadata_supplied = any(str(body.get(key, "")).strip() for key in ("school", "grade", "className"))
+                # Compatibility for programmatic/local callers that omit the
+                # new project metadata: keep the session's current class. The
+                # browser form always supplies all three fields, so normal
+                # teacher-created projects still bind to their explicit class.
+                classroom_row = current_class if current_class and not metadata_supplied else db.execute(
+                    "SELECT * FROM school_classes WHERE teacher_id=? AND school=? AND grade=? AND name=? ORDER BY created_at,id LIMIT 1",
+                    (session.get("teacherId"), school, grade, class_name),
+                ).fetchone()
+                if classroom_row:
+                    class_id = classroom_row["id"]
+                    project_group_count = classroom_row["group_count"]
+                else:
+                    class_id = secrets.token_hex(12)
+                    project_group_count = requested_group_count
+                    db.execute(
+                        "INSERT INTO school_classes(id,name,teacher_id,group_count,created_at,school,grade) VALUES(?,?,?,?,?,?,?)",
+                        (class_id, class_name, session.get("teacherId"), project_group_count, utc_now(), school, grade),
+                    )
+                    db.executemany(
+                        "INSERT INTO class_groups(class_id,group_no,code) VALUES(?,?,?)",
+                        [(class_id, number, f"{number:02}") for number in range(1, project_group_count + 1)],
+                    )
                 project_id = secrets.token_hex(12)
                 created_at = utc_now()
                 db.execute(
                     "INSERT INTO projects(id,name,created_at,created_by) VALUES(?,?,?,?)",
                     (project_id, name, created_at, session.get("teacherId")),
                 )
+                db.execute("INSERT OR REPLACE INTO project_classes(project_id,class_id) VALUES(?,?)", (project_id, class_id))
                 summaries = [
                     {"id": number, "stage": 1, "status": "准备中", "help": 0, "maxHint": 0,
                      "teacher": False, "latest": "尚未保存", "issue": "", "progress": 0}
-                    for number in range(1, group_count() + 1)
+                    for number in range(1, project_group_count + 1)
                 ]
-                initial = {"project": name, "grade": grade, "className": session.get("className", ""), "groupCount": group_count(), "groups": summaries,
+                initial = {"project": name, "school": school, "grade": grade, "className": class_name, "groupCount": project_group_count, "groups": summaries,
                            "currentStage": 1, "aiOpen": True, "freeAiEnabled": True, "published": False, "hintStageLimit": 2}
                 db.execute(
                     "INSERT INTO states(scope,data,updated_at) VALUES(?,?,?)",
@@ -3618,7 +3641,7 @@ class Handler(SimpleHTTPRequestHandler):
             thread["type"] = issue_type
             thread["currentLevel"] = next_level_no
             thread.setdefault("transitions", []).append({"time": utc_now(), "from": f"L{level_no}", "to": next_level, "attempt": attempt})
-            reply, latency, status = deepseek_hint(
+            reply, latency, status = ark_hint(
                 state, next_level, attempt, issue_type, issue, messages,
                 bool(body.get("checkedWork")),
             )
@@ -3629,7 +3652,7 @@ class Handler(SimpleHTTPRequestHandler):
                 "time": datetime.now().strftime("%H:%M"), "ts": utc_now(), "threadId": thread["id"],
                 "level": next_level, "type": issue_type, "stage": state.get("currentStage", 1),
                 "prompt": issue, "question": issue,
-                "done": attempt, "reply": reply, "source": "deepseek" if result == "returned" else "teacher_fallback",
+                "done": attempt, "reply": reply, "source": "ark" if result == "returned" else "teacher_fallback",
             }
             messages.append(entry)
             history = group_state.get("helpHistory", [])
@@ -3643,7 +3666,7 @@ class Handler(SimpleHTTPRequestHandler):
             with database() as db:
                 db.execute(
                     "INSERT INTO ai_calls(ts,group_no,level,model,latency_ms,status,detail) VALUES(?,?,?,?,?,?,?)",
-                    (utc_now(), group, next_level, DEEPSEEK_MODEL, latency, result, status[:200]),
+                    (utc_now(), group, next_level, HINT_MODEL, latency, result, status[:200]),
                 )
             group_state["helpHistory"] = history[-120:]
             group_state["helpThreads"] = threads[-30:]
@@ -3653,7 +3676,7 @@ class Handler(SimpleHTTPRequestHandler):
             self.sync_group_summary(group, state_get(f"group:{group}"), issue_type)
             record_event("student", group, "hint_level_advanced", state.get("currentStage"), f"{level_no}->{next_level_no}")
             self.json_response({
-                "ok": True, "reply": reply, "level": next_level, "source": "deepseek" if result == "returned" else "teacher_fallback",
+                "ok": True, "reply": reply, "level": next_level, "source": "ark" if result == "returned" else "teacher_fallback",
                 "currentLevel": next_level_no, "hintUsage": usage, "hintPolicy": policy, "threadId": thread["id"], "latencyMs": latency,
             })
             return
@@ -3728,7 +3751,7 @@ class Handler(SimpleHTTPRequestHandler):
             return
         thread["type"] = issue_type
         messages = thread.get("messages", []) if isinstance(thread.get("messages"), list) else []
-        reply, latency, status = deepseek_hint(
+        reply, latency, status = ark_hint(
             state, level, done, issue_type, issue, messages,
             bool(body.get("checkedWork")),
         )
@@ -3738,14 +3761,14 @@ class Handler(SimpleHTTPRequestHandler):
         else:
             result = "returned"
         with database() as db:
-            db.execute("INSERT INTO ai_calls(ts,group_no,level,model,latency_ms,status,detail) VALUES(?,?,?,?,?,?,?)", (utc_now(), group, level, DEEPSEEK_MODEL, latency, result, status[:200]))
+            db.execute("INSERT INTO ai_calls(ts,group_no,level,model,latency_ms,status,detail) VALUES(?,?,?,?,?,?,?)", (utc_now(), group, level, HINT_MODEL, latency, result, status[:200]))
         history = group_state.get("helpHistory", [])
         if not isinstance(history, list):
             history = []
         entry = {
             "time": datetime.now().strftime("%H:%M"), "ts": utc_now(), "threadId": thread["id"],
             "level": level, "type": issue_type, "stage": state.get("currentStage", 1), "prompt": issue, "question": issue, "done": done,
-            "reply": reply, "source": "deepseek" if result == "returned" else "teacher_fallback",
+            "reply": reply, "source": "ark" if result == "returned" else "teacher_fallback",
         }
         history.append(entry)
         messages.append(entry)
@@ -3761,7 +3784,7 @@ class Handler(SimpleHTTPRequestHandler):
         self.sync_group_summary(group, state_get(f"group:{group}"), issue_type)
         record_event("student", group, "hint_return" if result == "returned" else "fallback_hint", state.get("currentStage"), f"{level}|{issue_type}")
         self.json_response({
-            "reply": reply, "level": level, "source": "deepseek" if result == "returned" else "teacher_fallback",
+            "reply": reply, "level": level, "source": "ark" if result == "returned" else "teacher_fallback",
             "hintUsage": usage, "hintPolicy": policy, "currentLevel": level_no, "threadId": thread["id"], "latencyMs": latency,
         })
 
@@ -3958,7 +3981,7 @@ def main() -> None:
             f"知识库资料：发现{knowledge_sync['found']}份，新增{knowledge_sync['imported']}份，"
             f"可检索{knowledge_sync['indexed']}份"
         )
-    print(f"运行模式：{env}；DeepSeek：{'已配置' if os.environ.get('DEEPSEEK_API_KEY') else '未配置，将使用教师静态支架'}")
+    print(f"运行模式：{env}；豆包：{'已配置' if os.environ.get('ARK_API_KEY') else '未配置，将使用教师静态支架'}")
     if not is_initialized():
         print("本地首次启动请设置管理员账号；生产部署请配置 MPT_TEACHER_USERNAME 和 MPT_TEACHER_PASSWORD。")
     ThreadingHTTPServer((HOST, PORT), Handler).serve_forever()

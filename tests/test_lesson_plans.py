@@ -172,9 +172,9 @@ class LessonPlanTest(unittest.TestCase):
         self.assertEqual(app.state_get('class')['project'], '更新后的采购项目')
         self.assertFalse(app.state_get('class')['aiOpen'])
         self.assertIn('目标3', app.free_ai_context(app.merged_state(1), 1))
-        with mock.patch.dict(os.environ, {'DEEPSEEK_API_KEY': 'test'}), mock.patch.object(app.urllib.request, 'urlopen') as upstream:
+        with mock.patch.dict(os.environ, {'ARK_API_KEY': 'test'}), mock.patch.object(app.urllib.request, 'urlopen') as upstream:
             upstream.return_value.__enter__.return_value.read.return_value = b'{"choices":[{"message":{"content":"{}"}}]}'
-            app.deepseek_hint(app.merged_state(1), 'L1', '已读题', '任务理解', '预算怎么计算', [], False)
+            app.ark_hint(app.merged_state(1), 'L1', '已读题', '任务理解', '预算怎么计算', [], False)
             sent = json.loads(upstream.call_args.args[0].data)
             self.assertIn('目标3', sent['messages'][1]['content'])
 
@@ -281,7 +281,7 @@ class LessonPlanTest(unittest.TestCase):
             plans.validate_plan(value)
 
     def test_authenticated_async_upload_review_publish_and_source_is_private(self):
-        app.initialize_platform('lesson_teacher', 'LessonTeacher#2026', 'RECOVERY-LESSON-2026', 'CLASS2026', '01', 3)
+        app.initialize_platform('lesson_teacher', 'LessonTeacher#2026', count=3)
         self.server = app.ThreadingHTTPServer(('127.0.0.1', 0), app.Handler)
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.thread.start()
@@ -297,7 +297,9 @@ class LessonPlanTest(unittest.TestCase):
                 return exc.code, None
         teacher, student, anonymous = client(), client(), client()
         self.assertEqual(request(teacher, '/api/login', {'role': 'teacher', 'username': 'lesson_teacher', 'password': 'LessonTeacher#2026'})[0], 200)
-        self.assertEqual(request(student, '/api/login', {'role': 'student', 'classCode': 'CLASS2026', 'groupId': 1, 'groupCode': '01'})[0], 200)
+        with app.database() as db:
+            student_code = db.execute("SELECT student_login_code FROM teachers WHERE username='lesson_teacher'").fetchone()[0]
+        self.assertEqual(request(student, '/api/login', {'role': 'student', 'classId': 'default', 'groupId': 1, 'studentCode': student_code})[0], 200)
         self.assertEqual(request(student, '/api/lesson-plan')[0], 403)
         self.assertEqual(request(anonymous, '/api/lesson-plan/current')[0], 401)
         self.assertEqual(request(student, '/api/lesson-plan/publish', {})[0], 403)

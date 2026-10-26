@@ -2,12 +2,13 @@
   "name": "迈谱 Maple",
   "runtime": "Python 3.11+",
   "database": "SQLite",
-  "ai_provider": "DeepSeek",
+  "ai_provider": "Volcengine Ark (Doubao)",
   "entrypoint": "start_server.py",
   "healthcheck": "/api/health",
   "data_directory": "data",
   "required_production_environment": [
-    "MPT_SETUP_TOKEN",
-    "DEEPSEEK_API_KEY"
+    "MPT_TEACHER_USERNAME",
+    "MPT_TEACHER_PASSWORD",
+    "ARK_API_KEY"
   ]
 }

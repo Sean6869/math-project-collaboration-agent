@@ -53,6 +53,8 @@ if [[ ! -f "${ENV_FILE}" ]]; then
     printf 'MPT_COOKIE_SECURE=%s\n' "${COOKIE_SECURE}"
     printf 'ARK_API_KEY=%s\n' "${ARK_API_KEY_INPUT}"
     printf 'ARK_TEXT_MODEL=doubao-seed-2-1-turbo-260628\n'
+    printf 'ARK_VISION_MODEL=doubao-seed-2-1-turbo-260628\n'
+    printf 'ARK_PLAN_MODEL=doubao-seed-2-1-turbo-260628\n'
     printf 'ARK_IMAGE_MODEL=doubao-seedream-5-0-260128\n'
     printf 'MPT_RESET_DATA_ONCE=\n'
   } > "${ENV_FILE}"
