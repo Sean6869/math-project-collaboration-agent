@@ -24,6 +24,7 @@ class ClassroomTest(unittest.TestCase):
             'DATA_DIR': Path(cls.temp.name), 'UPLOAD_DIR': Path(cls.temp.name) / 'uploads',
             'DB_PATH': Path(cls.temp.name) / 'test.db', 'SETUP_TOKEN_FILE': Path(cls.temp.name) / 'token',
         }.items()]
+        cls.patches.append(mock.patch.dict(os.environ, {'MPT_ENV':'development'}))
         for patch in cls.patches:
             patch.start()
         app.init_database()
@@ -51,7 +52,7 @@ class ClassroomTest(unittest.TestCase):
 
     def login(self, group=None):
         client = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()))
-        body = {'role': 'student', 'classCode': 'CLASSROOM', 'groupId': group, 'groupCode': f'TEAM{group:02}'} if group else {'role': 'teacher', 'username': 'classroom_teacher', 'password': 'TeacherClassroom#2026'}
+        body = {'role': 'student', 'classCode': 'CLASSROOM', 'groupId': group, 'groupCode': f'{group:02}'} if group else {'role': 'teacher', 'username': 'classroom_teacher', 'password': 'TeacherClassroom#2026'}
         self.assertEqual(self.req(client, '/api/login', body)[0], 200)
         return client
 
@@ -185,22 +186,8 @@ class ClassroomTest(unittest.TestCase):
         self.assertNotIn('audit', self.state())
         self.assertNotIn('groupControls', self.state())
 
-    def test_one_time_group_entry_is_scoped_expires_and_can_be_revoked(self):
-        _, created = self.req(self.teacher, '/api/projects', {'action': 'create', 'name': '扫码课堂'})
-        token = app.PROJECT_CONTEXT.set(created['projectId'])
-        state = app.state_get('class'); state['published'] = True; app.state_put('class', state)
-        app.PROJECT_CONTEXT.reset(token)
-        status, entry = self.req(self.teacher, '/api/classroom/join-token', {'group': 2})
-        self.assertEqual(status, 200)
-        self.assertIn('<svg', entry['svg'])
-        join_token = entry['url'].split('#')[1]
-        anonymous = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()))
-        self.assertEqual(self.req(anonymous, '/api/classroom/join', {'token': join_token})[0], 200)
-        self.assertEqual(self.state(anonymous)['groupId'], 2)
-        self.assertEqual(self.req(anonymous, '/api/classroom/join', {'token': join_token})[0], 403)
-        _, entry = self.req(self.teacher, '/api/classroom/join-token', {'group': 2})
-        self.req(self.teacher, '/api/classroom/join-revoke', {'group': 2})
-        self.assertEqual(self.req(anonymous, '/api/classroom/join', {'token': entry['url'].split('#')[1]})[0], 403)
+    def test_removed_join_tokens_cannot_bypass_group_login(self):
+        self.assertEqual(self.req(self.student, '/api/classroom/join', {'token': 'old-token'})[0],410)
 
     def test_export_uses_ids_and_versions_without_names_keys_or_conversations(self):
         state = app.state_get('group:1')

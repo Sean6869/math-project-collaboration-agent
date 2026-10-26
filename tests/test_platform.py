@@ -64,35 +64,10 @@ class LegacyMigrationTest(unittest.TestCase):
 
 
 class GradeRecognitionTest(unittest.TestCase):
-    def test_platform_initialization_persists_only_grade_from_class_code(self):
-        original = (app.DATA_DIR, app.UPLOAD_DIR, app.DB_PATH, app.SETUP_TOKEN_FILE)
-        with tempfile.TemporaryDirectory() as directory:
-            try:
-                app.DATA_DIR = Path(directory)
-                app.UPLOAD_DIR = app.DATA_DIR / "uploads"
-                app.DB_PATH = app.DATA_DIR / "grade.db"
-                app.SETUP_TOKEN_FILE = app.DATA_DIR / "setup-token.txt"
-                with app.database() as db:
-                    db.executescript("""
-                        CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
-                        CREATE TABLE teachers (
-                          id INTEGER PRIMARY KEY AUTOINCREMENT, username TEXT UNIQUE NOT NULL,
-                          password_hash TEXT NOT NULL, created_at TEXT NOT NULL, is_admin INTEGER NOT NULL DEFAULT 0
-                        );
-                        CREATE TABLE groups (group_no INTEGER PRIMARY KEY, access_hash TEXT NOT NULL);
-                        CREATE TABLE states (scope TEXT PRIMARY KEY, data TEXT NOT NULL, updated_at TEXT NOT NULL);
-                    """)
-                app.initialize_platform(
-                    "grade_teacher", "GradeTeacher#2026", "GRADE-RECOVERY-CODE-2026",
-                    "2026八年级A班", "GRADE01", 1,
-                )
-                self.assertEqual(app.class_code_grade(), 8)
-                self.assertEqual(app.state_get("class")["classGrade"], 8)
-                with app.database() as db:
-                    settings = {row["key"]: row["value"] for row in db.execute("SELECT key,value FROM settings")}
-                self.assertNotIn("2026八年级A班", settings.values())
-            finally:
-                app.DATA_DIR, app.UPLOAD_DIR, app.DB_PATH, app.SETUP_TOKEN_FILE = original
+    def test_platform_initialization_uses_class_names_instead_of_access_codes(self):
+        self.assertEqual(app.grade_from_text('初二（1）班'), 8)
+        self.assertEqual(app.grade_from_text('G9 数学'), 9)
+        self.assertIsNone(app.grade_from_text('默认班级'))
 
 
 class PlatformTest(unittest.TestCase):
@@ -123,12 +98,12 @@ class PlatformTest(unittest.TestCase):
             urllib.request.urlopen(invalid_request, timeout=3)
             raise AssertionError("invalid setup token was accepted")
         except urllib.error.HTTPError as error:
-            if error.code != 403:
+            if error.code != 400:
                 raise
         payload = json.dumps({
             "setupToken": "TEST-SETUP-TOKEN-2026", "username": "test_teacher",
             "password": "StrongTeacher#2026", "recoveryCode": "RECOVERY-CODE-TEST-2026", "classCode": "CLASS2026",
-            "groupCodePrefix": "TEAM01", "groupCount": 3,
+            "groupCodePrefix": "01", "groupCount": 3,
         }).encode()
         request = urllib.request.Request(
             cls.base + "/api/setup", data=payload, method="POST",
@@ -137,10 +112,6 @@ class PlatformTest(unittest.TestCase):
         with urllib.request.urlopen(request, timeout=3) as response:
             if response.status != 201:
                 raise AssertionError(f"setup failed with status {response.status}")
-        with app.database() as db:
-            prefix = db.execute("SELECT value FROM settings WHERE key='group_code_prefix'").fetchone()
-        if not prefix or prefix["value"] != "TEAM":
-            raise AssertionError("initial group-code prefix was not persisted")
 
     @classmethod
     def tearDownClass(cls):
@@ -176,7 +147,7 @@ class PlatformTest(unittest.TestCase):
 
         student = self.client()
         self.json_request(student, "/api/login", "POST", {
-            "role": "student", "classCode": "CLASS2026", "groupId": 1, "groupCode": "TEAM01",
+            "role": "student", "classCode": "CLASS2026", "groupId": 1, "groupCode": "01",
         })
         with self.assertRaises(urllib.error.HTTPError) as denied:
             self.json_request(student, "/api/knowledge")
@@ -300,7 +271,7 @@ class PlatformTest(unittest.TestCase):
         student = self.client()
         status, login = self.json_request(
             student, "/api/login", "POST",
-            {"role": "student", "classCode": "CLASS2026", "groupId": 1, "groupCode": "TEAM01"},
+            {"role": "student", "classCode": "CLASS2026", "groupId": 1, "groupCode": "01"},
         )
         self.assertEqual(status, 200)
         self.assertEqual(login["groupId"], 1)
@@ -311,7 +282,7 @@ class PlatformTest(unittest.TestCase):
         status, data = self.json_request(student, "/api/state")
         self.assertEqual(data["state"]["currentStage"], 2, "小组刷新不能被默认阶段1覆盖")
         self.assertEqual(data["state"]["project"], "集成测试项目")
-        self.assertEqual(data["state"]["classGrade"], 8)
+        self.assertNotIn("classGrade",data["state"],"年级由管理员班级名称决定，不能从已移除的班级码推断")
         with mock.patch.object(app, "deepseek_hint", return_value=(None, 0, "not_configured")) as upstream:
             status, project_hint = self.json_request(
                 student, "/api/hints", "POST",
@@ -361,7 +332,7 @@ class PlatformTest(unittest.TestCase):
         student = self.client()
         status, _ = self.json_request(
             student, "/api/login", "POST",
-            {"role": "student", "classCode": "CLASS2026", "groupId": 3, "groupCode": "TEAM03"},
+            {"role": "student", "classCode": "CLASS2026", "groupId": 3, "groupCode": "03"},
         )
         self.assertEqual(status, 200)
         replies = [
@@ -457,7 +428,7 @@ class PlatformTest(unittest.TestCase):
         student = self.client()
         status, _ = self.json_request(
             student, "/api/login", "POST",
-            {"role": "student", "classCode": "CLASS2026", "groupId": 2, "groupCode": "TEAM02"},
+            {"role": "student", "classCode": "CLASS2026", "groupId": 2, "groupCode": "02"},
         )
         self.assertEqual(status, 200)
         reply = ("诊断：当前问题需要先区分对象。\n支架：请只核对这个主题中的条件。\n下一步：记录一次独立尝试。", 20, "ok")
@@ -549,12 +520,11 @@ class PlatformTest(unittest.TestCase):
         self.assertEqual(status, "future_stage")
 
     def test_login_portal_uses_one_selected_role_and_form_submit(self):
-        script = (ROOT / "assets" / "app.js").read_text(encoding="utf-8")
+        script = (ROOT / "assets" / "app.js").read_text(encoding="utf-8") + (ROOT / "assets" / "accounts.js").read_text(encoding="utf-8")
         styles = (ROOT / "assets" / "styles.css").read_text(encoding="utf-8")
         self.assertIn('class="auth-role-switch"', script)
         self.assertIn('<form id="studentAuthForm">', script)
         self.assertIn('<form id="teacherAuthForm">', script)
-        self.assertIn("const setAuthRole=role=>", script)
         self.assertIn("event.preventDefault()", script)
         self.assertIn('<h2>选择项目</h2>', script)
         self.assertIn('创建并进入', script)
@@ -602,7 +572,7 @@ class PlatformTest(unittest.TestCase):
                 "action": "select", "projectId": first["projectId"],
             })
             restored = self.json_request(teacher, "/api/state")[1]["state"]
-            self.assertEqual(restored["className"], "第一项目班级")
+            self.assertEqual(restored["className"], "默认班级", "项目不能覆盖管理员指定的班级")
             listing = self.json_request(teacher, "/api/projects")[1]
             self.assertEqual(listing["selectedProjectId"], first["projectId"])
             self.assertEqual(len([item for item in listing["projects"] if item["id"] in created_ids]), 2)
@@ -619,7 +589,7 @@ class PlatformTest(unittest.TestCase):
             "role": "teacher", "username": "test_teacher", "password": "StrongTeacher#2026",
         })
         self.json_request(student, "/api/login", "POST", {
-            "role": "student", "classCode": "CLASS2026", "groupId": 1, "groupCode": "TEAM01",
+            "role": "student", "classCode": "CLASS2026", "groupId": 1, "groupCode": "01",
         })
         project_id = None
         try:
@@ -716,7 +686,7 @@ class PlatformTest(unittest.TestCase):
     def test_broadcast_publish_permissions_and_stale_state(self):
         teacher, student = self.client(), self.client()
         self.json_request(teacher, "/api/login", "POST", {"role": "teacher", "username": "test_teacher", "password": "StrongTeacher#2026"})
-        self.json_request(student, "/api/login", "POST", {"role": "student", "classCode": "CLASS2026", "groupId": 1, "groupCode": "TEAM01"})
+        self.json_request(student, "/api/login", "POST", {"role": "student", "classCode": "CLASS2026", "groupId": 1, "groupCode": "01"})
         for client, method, expected in [(self.client(), "GET", 401), (student, "POST", 403)]:
             with self.assertRaises(urllib.error.HTTPError) as denied:
                 self.json_request(client, "/api/broadcast", method, {"broadcast": "越权"} if method == "POST" else None)
@@ -828,7 +798,7 @@ class PlatformTest(unittest.TestCase):
         self.assertTrue(app.validated_stage_submissions(state)[1])
 
         student = self.client()
-        self.json_request(student, "/api/login", "POST", {"role": "student", "classCode": "CLASS2026", "groupId": 1, "groupCode": "TEAM01"})
+        self.json_request(student, "/api/login", "POST", {"role": "student", "classCode": "CLASS2026", "groupId": 1, "groupCode": "01"})
         current = self.json_request(student, "/api/state")[1]["state"]
         current["stageSubmitted"]["1"] = True
         with self.assertRaises(urllib.error.HTTPError) as incomplete:
@@ -853,7 +823,7 @@ class PlatformTest(unittest.TestCase):
         student = self.client()
         status, _ = self.json_request(
             student, "/api/login", "POST",
-            {"role": "student", "classCode": "CLASS2026", "groupId": 2, "groupCode": "TEAM02"},
+            {"role": "student", "classCode": "CLASS2026", "groupId": 2, "groupCode": "02"},
         )
         self.assertEqual(status, 200)
         raw = b"\xff\xd8\xff\xe0" + b"camera-evidence" * 100
@@ -992,21 +962,12 @@ class PlatformTest(unittest.TestCase):
         self.assertIn("<strong>$1</strong>", script)
         self.assertGreaterEqual((ROOT / "platform_server.py").read_text(encoding="utf-8").count("MATH_FORMAT_RULE"), 3)
 
-    def test_setup_portal_uses_aligned_form_and_enter_submit(self):
-        script = (ROOT / "assets" / "app.js").read_text(encoding="utf-8")
-        styles = (ROOT / "assets" / "styles.css").read_text(encoding="utf-8")
-        self.assertIn('<form id="setupForm" class="setup-form">', script)
-        self.assertIn("document.querySelector('#setupForm').onsubmit=async event=>", script)
-        self.assertIn("document.querySelector('#setupGroupCode').value", script)
-        self.assertIn('class="icon-btn" id="copyRecovery"', script)
-        self.assertNotIn("document.querySelector('#setupGroupCount')", script)
-        self.assertNotIn("document.querySelector('#setupGroupPrefix')", script)
-        portal = script[script.index('function renderAccessPortal'):script.index('const pages=')]
-        self.assertNotIn('class="field span-2"', portal)
-        self.assertIn('.copy-field:focus-within', styles)
-        self.assertIn('.auth-card .toolbar{justify-content:flex-end}', styles)
-        self.assertEqual(app.group_prefix_from_code("TEAM01"), "TEAM")
-        self.assertEqual(app.group_prefix_from_code("TEAM"), "TEAM")
+    def test_login_and_admin_do_not_expose_removed_code_flows(self):
+        script = (ROOT/'assets/accounts.js').read_text(encoding='utf-8')
+        for removed in ('管理员恢复码','教师注册码','班级访问码','访问码前缀'):
+            self.assertNotIn(removed, script)
+        self.assertIn('选择小组',script)
+        self.assertIn('查看已设密码',script)
 
     def test_free_ai_conversations_text_image_routing_and_access(self):
         self.assertEqual(app.free_ai_intent("请解释如何生成函数图像"), "text")
@@ -1016,7 +977,7 @@ class PlatformTest(unittest.TestCase):
         student = self.client()
         status, _ = self.json_request(
             student, "/api/login", "POST",
-            {"role": "student", "classCode": "CLASS2026", "groupId": 2, "groupCode": "TEAM02"},
+            {"role": "student", "classCode": "CLASS2026", "groupId": 2, "groupCode": "02"},
         )
         self.assertEqual(status, 200)
         fake_project = mock.MagicMock()
@@ -1144,7 +1105,7 @@ class PlatformTest(unittest.TestCase):
         other_student = self.client()
         status, _ = self.json_request(
             other_student, "/api/login", "POST",
-            {"role": "student", "classCode": "CLASS2026", "groupId": 3, "groupCode": "TEAM03"},
+            {"role": "student", "classCode": "CLASS2026", "groupId": 3, "groupCode": "03"},
         )
         self.assertEqual(status, 200)
         with self.assertRaises(urllib.error.HTTPError) as context:
@@ -1220,7 +1181,7 @@ class PlatformTest(unittest.TestCase):
         student = self.client()
         status, _ = self.json_request(
             student, "/api/login", "POST",
-            {"role": "student", "classCode": "CLASS2026", "groupId": 3, "groupCode": "TEAM03"},
+            {"role": "student", "classCode": "CLASS2026", "groupId": 3, "groupCode": "03"},
         )
         self.assertEqual(status, 200)
 
@@ -1328,13 +1289,13 @@ class PlatformTest(unittest.TestCase):
         )
         self.assertEqual(status, 200)
         self.assertEqual(result["addedCodes"], [
-            {"groupNo": 4, "code": "TEAM04"},
-            {"groupNo": 5, "code": "TEAM05"},
+            {"groupNo": 4, "code": "04"},
+            {"groupNo": 5, "code": "05"},
         ])
         fifth = self.client()
         status, login = self.json_request(
             fifth, "/api/login", "POST",
-            {"role": "student", "classCode": "CLASS2026", "groupId": 5, "groupCode": "TEAM05"},
+            {"role": "student", "classCode": "CLASS2026", "groupId": 5, "groupCode": "05"},
         )
         self.assertEqual(status, 200)
         self.assertEqual(login["groupId"], 5)
@@ -1349,137 +1310,21 @@ class PlatformTest(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(result["groupCount"], 3)
         with app.database() as db:
-            self.assertIsNone(db.execute(
+            self.assertIsNotNone(db.execute(
                 "SELECT 1 FROM states WHERE scope='project:group-resize-test:group:5'"
-            ).fetchone())
+            ).fetchone(), "缩减小组保留原始记录")
 
-    def test_z_admin_access_reset_and_password_recovery(self):
-        teacher = self.client()
-        status, _ = self.json_request(
-            teacher, "/api/login", "POST",
-            {"role": "teacher", "username": "test_teacher", "password": "StrongTeacher#2026"},
-        )
-        self.assertEqual(status, 200)
-        status, access = self.json_request(teacher, "/api/admin/access")
-        self.assertEqual(status, 200)
-        self.assertEqual(access["username"], "test_teacher")
-        self.assertTrue(access["recoveryConfigured"])
+    def test_z_removed_invite_recovery_routes_are_disabled(self):
+        anonymous=self.client()
+        for route in ('/api/admin/recover','/api/teacher/register','/api/classroom/join-token'):
+            with self.assertRaises(urllib.error.HTTPError) as error:
+                self.json_request(anonymous,route,'POST',{})
+            self.assertEqual(error.exception.code,410)
 
-        status, result = self.json_request(
-            teacher, "/api/admin/access", "POST",
-            {"action": "group_code", "currentPassword": "StrongTeacher#2026", "groupNo": 1, "groupCode": "RESET01"},
-        )
-        self.assertEqual(status, 200)
-        self.assertEqual(result["logoutRole"], "student")
-        student = self.client()
-        status, login = self.json_request(
-            student, "/api/login", "POST",
-            {"role": "student", "classCode": "CLASS2026", "groupId": 1, "groupCode": "RESET01"},
-        )
-        self.assertEqual(status, 200)
-        self.assertEqual(login["groupId"], 1)
-
-        status, result = self.json_request(
-            teacher, "/api/admin/access", "POST",
-            {"action": "teacher", "currentPassword": "StrongTeacher#2026", "username": "admin_teacher", "newPassword": "ChangedTeacher#2026"},
-        )
-        self.assertEqual(status, 200)
-        self.assertEqual(result["logoutRole"], "teacher")
-        anonymous = self.client()
-        status, recovered = self.json_request(
-            anonymous, "/api/admin/recover", "POST",
-            {"username": "admin_teacher", "recoveryCode": "RECOVERY-CODE-TEST-2026", "newPassword": "RecoveredTeacher#2026"},
-        )
-        self.assertEqual(status, 200)
-        self.assertTrue(recovered["ok"])
-        status, login = self.json_request(
-            anonymous, "/api/login", "POST",
-            {"role": "teacher", "username": "admin_teacher", "password": "RecoveredTeacher#2026"},
-        )
-        self.assertEqual(status, 200)
-        self.assertEqual(login["role"], "teacher")
-
-        status, invite = self.json_request(
-            anonymous, "/api/admin/access", "POST",
-            {"action": "teacher_invite", "currentPassword": "RecoveredTeacher#2026"},
-        )
-        self.assertEqual(status, 200)
-        self.assertTrue(invite["inviteCode"])
-        second = self.client()
-        status, registered = self.json_request(
-            second, "/api/teacher/register", "POST",
-            {"inviteCode": invite["inviteCode"], "username": "second_teacher", "password": "SecondTeacher#2026"},
-        )
-        self.assertEqual(status, 201)
-        self.assertEqual(registered["username"], "second_teacher")
-        status, second_login = self.json_request(
-            second, "/api/login", "POST",
-            {"role": "teacher", "username": "second_teacher", "password": "SecondTeacher#2026"},
-        )
-        self.assertEqual(status, 200)
-        self.assertEqual(second_login["role"], "teacher")
-        status, session = self.json_request(second, "/api/session")
-        self.assertEqual(status, 200)
-        self.assertEqual(session["username"], "second_teacher")
-        self.assertFalse(session["isAdmin"])
-        with self.assertRaises(urllib.error.HTTPError) as forbidden:
-            self.json_request(second, "/api/admin/access")
-        self.assertEqual(forbidden.exception.code, 403)
-
-        reused = self.client()
-        with self.assertRaises(urllib.error.HTTPError) as reuse_error:
-            self.json_request(
-                reused, "/api/teacher/register", "POST",
-                {"inviteCode": invite["inviteCode"], "username": "third_teacher", "password": "ThirdTeacher#2026"},
-            )
-        self.assertEqual(reuse_error.exception.code, 403)
-
-    def test_zz_admin_factory_reset_requires_recovery_code_and_clears_classroom(self):
-        admin = self.client()
-        status, login = self.json_request(
-            admin, "/api/login", "POST",
-            {"role": "teacher", "username": "admin_teacher", "password": "RecoveredTeacher#2026"},
-        )
-        self.assertEqual(status, 200)
-        status, _ = self.json_request(
-            admin, "/api/state", "PUT",
-            {"state": {"project": "temporary project", "className": "temporary class"}},
-        )
-        self.assertEqual(status, 200)
-
-        with self.assertRaises(urllib.error.HTTPError) as wrong_code:
-            self.json_request(
-                admin, "/api/admin/factory-reset", "POST",
-                {"recoveryCode": "WRONG-RECOVERY-CODE", "confirmation": "RESET"},
-            )
-        self.assertEqual(wrong_code.exception.code, 401)
-        with self.assertRaises(urllib.error.HTTPError) as wrong_confirmation:
-            self.json_request(
-                admin, "/api/admin/factory-reset", "POST",
-                {"recoveryCode": "RECOVERY-CODE-TEST-2026", "confirmation": "NO"},
-            )
-        self.assertEqual(wrong_confirmation.exception.code, 400)
-
-        status, result = self.json_request(
-            admin, "/api/admin/factory-reset", "POST",
-            {"recoveryCode": "RECOVERY-CODE-TEST-2026", "confirmation": "RESET"},
-        )
-        self.assertEqual(status, 200)
-        self.assertIn("admin", result["preserved"])
-        with app.database() as db:
-            self.assertEqual(db.execute("SELECT COUNT(*) FROM states").fetchone()[0], 0)
-            self.assertEqual(db.execute("SELECT COUNT(*) FROM teachers").fetchone()[0], 1)
-            self.assertEqual(db.execute("SELECT event_type FROM events ORDER BY id DESC LIMIT 1").fetchone()[0], "factory_reset")
-
-        fresh_admin = self.client()
-        status, login = self.json_request(
-            fresh_admin, "/api/login", "POST",
-            {"role": "teacher", "username": "admin_teacher", "password": "RecoveredTeacher#2026"},
-        )
-        self.assertEqual(status, 200)
-        status, data = self.json_request(fresh_admin, "/api/state")
-        self.assertEqual(status, 200)
-        self.assertNotIn("project", data["state"])
+    def test_zz_reset_requires_explicit_railway_startup_operation(self):
+        with self.assertRaises(urllib.error.HTTPError) as error:
+            self.json_request(self.client(),'/api/admin/factory-reset','POST',{})
+        self.assertEqual(error.exception.code,410)
 
 
 if __name__ == "__main__":

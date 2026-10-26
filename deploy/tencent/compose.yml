@@ -1,0 +1,47 @@
+services:
+  app:
+    build:
+      context: ../..
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      MPT_ENV: production
+      MPT_HOST: 0.0.0.0
+      MPT_PORT: 8000
+      MPT_COOKIE_SECURE: 1
+    volumes:
+      - maple_data:/app/data
+    expose:
+      - "8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    deploy:
+      resources:
+        limits:
+          memory: 2304M
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    depends_on:
+      app:
+        condition: service_healthy
+    environment:
+      MAPLE_DOMAIN: ${MAPLE_DOMAIN}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+
+volumes:
+  maple_data:
+  caddy_data:
+  caddy_config:

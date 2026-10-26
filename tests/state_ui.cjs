@@ -10,7 +10,7 @@ const root=path.resolve(__dirname,'..');
   const base=await new Promise((resolve,reject)=>{let output='';const timer=setTimeout(()=>reject(Error('Server startup timeout: '+log)),20000);child.stdout.on('data',part=>{output+=part;const match=output.match(/http:\/\/127\.0\.0\.1:\d+/);if(match){clearTimeout(timer);resolve(match[0])}});child.once('exit',()=>reject(Error(log)))});
   browser=await chromium.launch({headless:true,...(fs.existsSync(chromium.executablePath())?{}:{channel:'msedge'})});
   const student=await browser.newContext(),teacher=await browser.newContext();
-  assert((await student.request.post(base+'/api/login',{data:{role:'student',classCode:'STATECLASS',groupId:1,groupCode:'TEAM01'}})).ok());
+  assert((await student.request.post(base+'/api/login',{data:{role:'student',classCode:'STATECLASS',groupId:1,groupCode:'01'}})).ok());
   assert((await teacher.request.post(base+'/api/login',{data:{role:'teacher',username:'state_teacher',password:'StateTeacher#2026'}})).ok());
   const createdProject=await (await teacher.request.post(base+'/api/projects',{data:{action:'create',name:'状态测试项目'}})).json();
   assert((await student.request.post(base+'/api/projects',{data:{action:'select',projectId:createdProject.projectId}})).ok());

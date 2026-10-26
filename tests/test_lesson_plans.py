@@ -281,7 +281,7 @@ class LessonPlanTest(unittest.TestCase):
             plans.validate_plan(value)
 
     def test_authenticated_async_upload_review_publish_and_source_is_private(self):
-        app.initialize_platform('lesson_teacher', 'LessonTeacher#2026', 'RECOVERY-LESSON-2026', 'CLASS2026', 'TEAM01', 3)
+        app.initialize_platform('lesson_teacher', 'LessonTeacher#2026', 'RECOVERY-LESSON-2026', 'CLASS2026', '01', 3)
         self.server = app.ThreadingHTTPServer(('127.0.0.1', 0), app.Handler)
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.thread.start()
@@ -297,7 +297,7 @@ class LessonPlanTest(unittest.TestCase):
                 return exc.code, None
         teacher, student, anonymous = client(), client(), client()
         self.assertEqual(request(teacher, '/api/login', {'role': 'teacher', 'username': 'lesson_teacher', 'password': 'LessonTeacher#2026'})[0], 200)
-        self.assertEqual(request(student, '/api/login', {'role': 'student', 'classCode': 'CLASS2026', 'groupId': 1, 'groupCode': 'TEAM01'})[0], 200)
+        self.assertEqual(request(student, '/api/login', {'role': 'student', 'classCode': 'CLASS2026', 'groupId': 1, 'groupCode': '01'})[0], 200)
         self.assertEqual(request(student, '/api/lesson-plan')[0], 403)
         self.assertEqual(request(anonymous, '/api/lesson-plan/current')[0], 401)
         self.assertEqual(request(student, '/api/lesson-plan/publish', {})[0], 403)

@@ -23,7 +23,7 @@ const measureButtons=()=>{
   browser=await chromium.launch({headless:true,...(fs.existsSync(chromium.executablePath())?{}:{channel:'msedge'})});
   for(const role of ['student','teacher']){
    const context=await browser.newContext();await context.route('https://**',route=>route.abort());
-   const login=role==='student'?{role,classCode:'CLASSROOM',groupId:1,groupCode:'TEAM01'}:{role,username:'ui_teacher',password:'ClassroomTeacher#2026'};
+   const login=role==='student'?{role,classCode:'CLASSROOM',groupId:1,groupCode:'01'}:{role,username:'ui_teacher',password:'ClassroomTeacher#2026'};
    assert((await context.request.post(base+'/api/login',{data:login})).ok());
    const page=await context.newPage();page.on('pageerror',error=>errors.push({url:page.url(),message:error.message}));
    const pages=process.env.LAYOUT_SCOPE==='ai'?(role==='student'?['ai.html']:[]):fs.readdirSync(path.join(root,role)).filter(name=>name.endsWith('.html'));

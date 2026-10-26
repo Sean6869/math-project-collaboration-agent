@@ -16,28 +16,16 @@ paths:
       summary: 当前会话
       responses:
         '200': {description: 会话状态}
-  /api/setup:
-    post:
-      summary: 首次运行时注册首位教师并初始化班级访问规则
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [setupToken, username, password, recoveryCode, classCode, groupCodePrefix, groupCount]
-              properties:
-                setupToken: {type: string, minLength: 12}
-                username: {type: string, minLength: 3, maxLength: 40}
-                password: {type: string, minLength: 12}
-                recoveryCode: {type: string, minLength: 16}
-                classCode: {type: string, minLength: 6, description: 可包含“七年级/八年级/九年级”等年级标识；服务端仅持久化其哈希及识别出的年级}
-                groupCodePrefix: {type: string, minLength: 4}
-                groupCount: {type: integer, minimum: 1, maximum: 20}
+  /api/classes:
+    get:
+      summary: 获取登录入口可选班级；教师登录后仅返回可管理班级
       responses:
-        '201': {description: 初始化完成，教师注册码随即失效}
-        '403': {description: 教师注册码无效}
-        '409': {description: 平台已经初始化}
+        '200': {description: 班级名称、任课教师和小组数量}
+    post:
+      summary: 教师切换当前任教班级
+      responses:
+        '200': {description: 当前班级已切换，待重新选择项目}
+        '403': {description: 无权进入该班级}
   /api/login:
     post:
       summary: 教师或学生小组登录
@@ -50,83 +38,31 @@ paths:
       responses:
         '200': {description: 登录成功}
         '401': {description: 登录信息错误}
-  /api/teacher/register:
-    post:
-      summary: 使用管理员生成的一次性注册码注册教师账号
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [inviteCode, username, password]
-              properties:
-                inviteCode: {type: string}
-                username: {type: string, minLength: 3, maxLength: 40}
-                password: {type: string, minLength: 12}
-      responses:
-        '201': {description: 教师账号已创建，注册码随即失效}
-        '403': {description: 注册码无效或已使用}
   /api/logout:
     post:
       summary: 退出登录
       responses:
         '200': {description: 已退出}
-  /api/admin/recover:
-    post:
-      summary: 使用管理员恢复码重置教师密码并注销全部会话
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [username, recoveryCode, newPassword]
-              properties:
-                username: {type: string}
-                recoveryCode: {type: string, minLength: 16}
-                newPassword: {type: string, minLength: 12}
-      responses:
-        '200': {description: 密码已重置}
-        '401': {description: 管理员账号或恢复码错误}
-  /api/admin/factory-reset:
-    post:
-      summary: 使用管理员恢复码清空课堂数据并保留管理员身份
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [recoveryCode, confirmation]
-              properties:
-                recoveryCode: {type: string, minLength: 16}
-                confirmation: {type: string, enum: [RESET]}
-      responses:
-        '200': {description: 课堂数据已清空，管理员账号、恢复码和访问规则保留}
-        '401': {description: 管理员恢复码错误}
-        '403': {description: 仅管理员教师可执行}
   /api/admin/access:
     get:
-      summary: 获取管理员账号与访问配置状态
+      summary: 获取教师账号、班级、小组数量及小组码
       responses:
-        '200': {description: 不含任何明文凭据的配置状态}
+        '200': {description: 概览不包含教师明文密码；仅标记是否有可查看副本}
         '403': {description: 仅教师管理员可访问}
     post:
-      summary: 重置管理员账号、访问码、恢复码或生成教师注册码
+      summary: 创建或修改教师账号、显式查看密码，或创建修改班级与小组码
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: object
-              required: [action, currentPassword]
+              required: [action]
               properties:
-                action: {type: string, enum: [teacher, class_code, group_code, all_group_codes, recovery_code, teacher_invite]}
-                currentPassword: {type: string}
+                action: {type: string, enum: [teacher_save, teacher_password, class_save]}
       responses:
-        '200': {description: 已更新并注销相关会话}
-        '401': {description: 当前教师密码错误}
+        '200': {description: 已更新；账号或小组码变化时注销受影响会话}
+        '403': {description: 仅教师管理员可访问}
   /api/state:
     get:
       summary: 获取当前班级配置与本组状态

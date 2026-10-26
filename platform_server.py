@@ -27,6 +27,7 @@ import urllib.request
 import zipfile
 import lesson_plans
 import classroom
+import accounts
 from datetime import datetime, timezone
 from http import HTTPStatus
 from http.cookies import SimpleCookie
@@ -177,6 +178,7 @@ class UpstreamServiceError(ValueError):
 def database() -> sqlite3.Connection:
     db = sqlite3.connect(DB_PATH, timeout=20, factory=ClosingConnection)
     db.create_function("current_project", 0, lambda: PROJECT_CONTEXT.get())
+    db.create_function("current_class", 0, lambda: accounts.CLASS_CONTEXT.get())
     db.row_factory = sqlite3.Row
     db.execute("PRAGMA foreign_keys=ON")
     db.execute("PRAGMA busy_timeout=5000")
@@ -225,35 +227,8 @@ def grade_from_text(*values: object) -> int | None:
 
 
 def class_code_grade() -> int | None:
-    with database() as db:
-        row = db.execute("SELECT value FROM settings WHERE key='class_grade'").fetchone()
-    try:
-        grade = int(row["value"]) if row else 0
-    except (TypeError, ValueError):
-        grade = 0
-    return grade if grade in {7, 8, 9} else None
-
-
-def persist_class_grade(code: str) -> int | None:
-    """Persist only the grade inferred from a valid class code, never the code."""
-    grade = grade_from_text(code)
-    with database() as db:
-        if grade:
-            db.execute(
-                "INSERT INTO settings(key,value) VALUES('class_grade',?) "
-                "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-                (str(grade),),
-            )
-        else:
-            db.execute("DELETE FROM settings WHERE key='class_grade'")
-    class_state = state_get("class")
-    resolved = grade or grade_from_text(class_state.get("className", ""))
-    if resolved:
-        class_state["classGrade"] = resolved
-    else:
-        class_state.pop("classGrade", None)
-    state_put("class", class_state)
-    return resolved
+    current = accounts.active_class(sys.modules[__name__])
+    return grade_from_text(current['name']) if current else None
 
 
 def student_grade(state: dict) -> int | None:
@@ -359,90 +334,17 @@ def roles_for_members(existing: object, count: int) -> list[str]:
 
 def is_initialized() -> bool:
     with database() as db:
-        teacher = db.execute("SELECT 1 FROM teachers LIMIT 1").fetchone()
-        class_code = db.execute("SELECT 1 FROM settings WHERE key='class_code_hash'").fetchone()
-        groups = db.execute("SELECT COUNT(*) AS count FROM groups").fetchone()["count"]
-    return bool(teacher and class_code and groups)
+        return bool(db.execute("SELECT 1 FROM teachers LIMIT 1").fetchone())
 
 
 def group_count() -> int:
-    with database() as db:
-        row = db.execute("SELECT value FROM settings WHERE key='group_count'").fetchone()
-    return int(row["value"]) if row else 0
+    current = accounts.active_class(sys.modules[__name__])
+    return int(current['group_count']) if current else 0
 
 
-def group_code_prefix() -> str:
-    """Return the immutable prefix used to issue sequential group access codes."""
-    with database() as db:
-        row = db.execute("SELECT value FROM settings WHERE key='group_code_prefix'").fetchone()
-    stored = clean_code(row["value"]) if row else ""
-    if len(stored) >= 4:
-        return stored
-
-    # Upgrade installations created before the prefix was persisted. The
-    # fallback is only accepted from the existing deployment configuration and
-    # is immediately persisted; expansion never trusts a request field.
-    legacy_prefix = clean_code(os.environ.get("MPT_GROUP_CODE_PREFIX", ""))
-    if len(legacy_prefix) < 4:
-        return ""
-    with database() as db:
-        db.execute(
-            "INSERT INTO settings(key,value) VALUES('group_code_prefix',?) "
-            "ON CONFLICT(key) DO NOTHING",
-            (legacy_prefix,),
-        )
-    return legacy_prefix
-
-
-def initialize_platform(username: str, teacher_password: str, recovery_code: str, class_code: str, group_prefix: str, count: int) -> None:
-    username = username.strip()
-    recovery_code = recovery_code.strip()
-    class_code = clean_code(class_code)
-    group_prefix = group_prefix_from_code(group_prefix)
-    if len(username) < 3 or len(username) > 40:
-        raise ValueError("教师账号长度应为3—40个字符")
-    if len(teacher_password) < 12:
-        raise ValueError("教师密码至少需要12个字符")
-    if len(recovery_code) < 16:
-        raise ValueError("管理员恢复码至少需要16个字符")
-    if len(class_code) < 6:
-        raise ValueError("班级访问码至少需要6个字符")
-    if len(group_prefix) < 4:
-        raise ValueError("小组访问码前缀至少需要4个字符")
-    if not 1 <= count <= 20:
-        raise ValueError("小组数量应为1—20组")
-    with database() as db:
-        if db.execute("SELECT 1 FROM teachers LIMIT 1").fetchone():
-            raise ValueError("平台已经完成初始化")
-        db.execute(
-            "INSERT INTO teachers(id,username,password_hash,created_at,is_admin) VALUES(1,?,?,?,1)",
-            (username, password_hash(teacher_password), utc_now()),
-        )
-        db.execute("INSERT INTO settings(key,value) VALUES('class_code_hash',?)", (password_hash(class_code),))
-        db.execute("INSERT INTO settings(key,value) VALUES('admin_recovery_hash',?)", (password_hash(recovery_code),))
-        db.execute("INSERT INTO settings(key,value) VALUES('group_count',?)", (str(count),))
-        db.execute("INSERT INTO settings(key,value) VALUES('group_code_prefix',?)", (group_prefix,))
-        db.execute("DELETE FROM settings WHERE key='setup_token_hash'")
-        for number in range(1, count + 1):
-            db.execute(
-                "INSERT INTO groups(group_no,access_hash) VALUES(?,?)",
-                (number, password_hash(f"{group_prefix}{number:02d}")),
-            )
-    summaries = [
-        {"id": number, "stage": 1, "status": "准备中", "help": 0, "maxHint": 0,
-         "teacher": False, "latest": "尚未保存", "issue": "", "progress": 0}
-        for number in range(1, count + 1)
-    ]
-    grade = grade_from_text(class_code)
-    if grade:
-        with database() as db:
-            db.execute("INSERT INTO settings(key,value) VALUES('class_grade',?)", (str(grade),))
-    class_state = {"groupCount": count, "groups": summaries}
-    if grade:
-        class_state["classGrade"] = grade
-    state_put("class", class_state)
-    if SETUP_TOKEN_FILE.exists():
-        SETUP_TOKEN_FILE.unlink()
+def initialize_platform(username: str, teacher_password: str, recovery_code: str = '', class_code: str = '', group_prefix: str = '', count: int = 3) -> None:
+    # Kept as a callable initializer for local tools; legacy codes are ignored.
+    accounts.create_admin(sys.modules[__name__], username, teacher_password, count)
 
 
 def init_database() -> None:
@@ -551,39 +453,23 @@ def init_database() -> None:
                     )
     classroom.initialize(sys.modules[__name__])
     lesson_plans.initialize(sys.modules[__name__])
-    env = os.environ.get("MPT_ENV", "development").lower()
-    supplied = {
-        "username": os.environ.get("MPT_TEACHER_USERNAME", ""),
-        "password": os.environ.get("MPT_TEACHER_PASSWORD", ""),
-        "recovery_code": os.environ.get("MPT_ADMIN_RECOVERY_CODE", ""),
-        "class_code": os.environ.get("MPT_CLASS_CODE", ""),
-        "group_prefix": os.environ.get("MPT_GROUP_CODE_PREFIX", ""),
-        "group_count": os.environ.get("MPT_GROUP_COUNT", ""),
-    }
-    if not is_initialized() and all(supplied.values()):
-        initialize_platform(
-            supplied["username"], supplied["password"], supplied["recovery_code"], supplied["class_code"],
-            supplied["group_prefix"], int(supplied["group_count"]),
-        )
-    elif not is_initialized():
-        configured_token = clean_code(os.environ.get("MPT_SETUP_TOKEN", ""))
-        if env == "production" and len(configured_token) < 12:
-            raise RuntimeError("生产环境首次启动必须设置完整初始化环境变量，或设置至少12位的 MPT_SETUP_TOKEN")
-        with database() as db:
-            row = db.execute("SELECT 1 FROM settings WHERE key='setup_token_hash'").fetchone()
-            if not row:
-                token = configured_token or secrets.token_urlsafe(12).upper()
-                db.execute("INSERT INTO settings(key,value) VALUES('setup_token_hash',?)", (password_hash(token),))
-                if not configured_token:
-                    SETUP_TOKEN_FILE.write_text(token, encoding="utf-8")
-                    SETUP_TOKEN_DISPLAY = token
-            elif env != "production" and SETUP_TOKEN_FILE.exists():
-                SETUP_TOKEN_DISPLAY = SETUP_TOKEN_FILE.read_text(encoding="utf-8").strip()
+    accounts.initialize(sys.modules[__name__])
+    accounts.reset_on_startup(sys.modules[__name__])
+    accounts.bootstrap(sys.modules[__name__])
 
 
 def state_scope(scope: str, project_id: str | None = None) -> str:
     selected = PROJECT_CONTEXT.get() if project_id is None else project_id
-    return f"project:{selected}:{scope}" if selected else scope
+    if selected:
+        return f"project:{selected}:{scope}"
+    cid = accounts.CLASS_CONTEXT.get()
+    return f"class:{cid}:{scope}" if cid and cid != "default" else scope
+
+
+def db_project_class(project_id):
+    with database() as db:
+        row = db.execute('SELECT class_id FROM project_classes WHERE project_id=?', (project_id,)).fetchone()
+    return row[0] if row else None
 
 
 def state_get_project_public(project_id: str) -> bool:
@@ -938,6 +824,14 @@ def merged_state(group_no: int, monitoring: bool = True) -> dict:
         value["freeAiQuota"] = max(1, min(100, int(class_state.get("freeAiQuota", FREE_AI_QUOTA_DEFAULT))))
     except (TypeError, ValueError):
         value["freeAiQuota"] = FREE_AI_QUOTA_DEFAULT
+    bound = accounts.active_class(sys.modules[__name__])
+    if bound:
+        value['classId'] = bound['id']
+        value['className'] = bound['name']
+        value['groupCount'] = bound['group_count']
+        grade = grade_from_text(bound['name'])
+        if grade: value['classGrade'] = grade
+        else: value.pop('classGrade', None)
     value["groupId"] = group_no
     value["hintPolicy"] = hint_policy(value)
     value["hintUsage"] = hint_usage(group_state)
@@ -994,7 +888,7 @@ def session_from_cookie(raw_cookie: str | None) -> dict | None:
         return None
     with database() as db:
         row = db.execute(
-            "SELECT s.role,s.teacher_id,s.group_no,s.expires_at,s.project_id,p.name AS project_name,p.created_at AS project_created_at "
+            "SELECT s.role,s.teacher_id,s.group_no,s.expires_at,s.project_id,s.class_id,p.name AS project_name,p.created_at AS project_created_at "
             "FROM sessions s LEFT JOIN projects p ON p.id=s.project_id WHERE s.token_hash=?",
             (token_hash(token),),
         ).fetchone()
@@ -1004,12 +898,23 @@ def session_from_cookie(raw_cookie: str | None) -> dict | None:
     if row["role"] == "teacher":
         with database() as db:
             teacher = db.execute("SELECT username,is_admin FROM teachers WHERE id=?", (row["teacher_id"] or 1,)).fetchone()
+    if row['role'] == 'teacher' and not teacher:
+        return None
+    with database() as db:
+        classroom_row = db.execute('SELECT * FROM school_classes WHERE id=?', (row['class_id'],)).fetchone()
+    if row['class_id'] and not classroom_row:
+        return None
+    if row['role'] == 'teacher' and classroom_row and not teacher['is_admin'] and classroom_row['teacher_id'] != row['teacher_id']:
+        return None
+    if row['role'] == 'student' and (not classroom_row or not 1 <= int(row['group_no'] or 0) <= classroom_row['group_count']):
+        return None
+    accounts.CLASS_CONTEXT.set(str(row['class_id'] or ''))
     PROJECT_CONTEXT.set(str(row["project_id"] or ""))
     project_label = ""
     if row["project_id"] and row["project_name"]:
         project_label = f"{str(row['project_created_at'])[:10]} - {row['project_name']}"
     return {
-        "role": row["role"], "groupId": row["group_no"],
+        "role": row["role"], "groupId": row["group_no"], "classId": row["class_id"], "className": classroom_row["name"] if classroom_row else "",
         "teacherId": row["teacher_id"],
         "username": teacher["username"] if teacher else None,
         "isAdmin": bool(teacher and teacher["is_admin"]),
@@ -2453,17 +2358,17 @@ class Handler(SimpleHTTPRequestHandler):
             self.json_response({"error": "没有执行此操作的权限"}, HTTPStatus.FORBIDDEN)
             return None
         project_id = session.get("projectId")
-        if not project_id and urlparse(self.path).path not in ("/api/projects", "/api/logout", "/api/admin/access", "/api/admin/factory-reset", "/api/state/reset"):
+        if not project_id and urlparse(self.path).path not in ("/api/projects", "/api/logout", "/api/admin/access", "/api/state/reset", "/api/classes"):
             with database() as db:
-                has_projects = bool(db.execute("SELECT 1 FROM projects LIMIT 1").fetchone())
+                has_projects = any(accounts.can_project(sys.modules[__name__], session, row[0]) for row in db.execute("SELECT id FROM projects"))
             if has_projects:
                 self.json_response({"error": "请先选择项目。"}, HTTPStatus.CONFLICT)
                 return None
         if project_id:
             with database() as db:
                 project = db.execute("SELECT created_by FROM projects WHERE id=?", (project_id,)).fetchone()
-            if not project or (session["role"] == "teacher" and not session.get("isAdmin") and project["created_by"] not in (None, session.get("teacherId"))):
-                self.json_response({"error": "无权访问这个项目。"}, HTTPStatus.FORBIDDEN)
+            if not project or not accounts.can_project(sys.modules[__name__], session, project_id):
+                self.json_response({"error": "无权访问这个班级的项目。"}, HTTPStatus.FORBIDDEN)
                 return None
             if session["role"] == "student" and urlparse(self.path).path not in ("/api/projects", "/api/logout") and state_get("class").get("published") is False:
                 self.json_response({"error": "项目尚未发布。"}, HTTPStatus.FORBIDDEN)
@@ -2484,7 +2389,10 @@ class Handler(SimpleHTTPRequestHandler):
 
     def do_GET(self) -> None:
         PROJECT_CONTEXT.set("")
+        accounts.CLASS_CONTEXT.set("")
         route = urlparse(self.path)
+        if accounts.route(sys.modules[__name__], self, 'GET', route.path):
+            return
         if classroom.route(sys.modules[__name__], self, 'GET', route.path):
             return
         if lesson_plans.handle(sys.modules[__name__], self, 'GET', route.path):
@@ -2521,12 +2429,14 @@ class Handler(SimpleHTTPRequestHandler):
             if session:
                 with database() as db:
                     rows = db.execute("SELECT id,name,created_at,created_by FROM projects ORDER BY created_at DESC,rowid DESC").fetchall()
-                rows = [row for row in rows if (session["role"] == "teacher" and (session.get("isAdmin") or row["created_by"] in (None, session.get("teacherId")))) or (session["role"] == "student" and state_get_project_public(row["id"]))]
+                rows = [row for row in rows if accounts.can_project(sys.modules[__name__], session, row['id']) and (not session.get('classId') or db_project_class(row['id']) == session['classId'])]
                 self.json_response({
                     "projects": [{**classroom.project_metadata(sys.modules[__name__], row["id"]), "id": row["id"], "name": row["name"], "createdAt": row["created_at"],
                                   "label": f"{str(row['created_at'])[:10]} - {row['name']}"} for row in rows],
                     "selectedProjectId": session.get("projectId"),
-                    "canCreate": session["role"] == "teacher",
+                    "classes": [{"id":c["id"],"name":c["name"]} for c in accounts.classes_for(sys.modules[__name__], session)] if session["role"]=="teacher" else [],
+                    "classId": session.get("classId"), "className": session.get("className"),
+                    "canCreate": session["role"] == "teacher" and bool(session.get("classId")),
                     "canDelete": bool(session.get("isAdmin")),
                 })
             return
@@ -2548,6 +2458,7 @@ class Handler(SimpleHTTPRequestHandler):
                     table: db.execute(f"SELECT COUNT(*) FROM {table}" + (" WHERE project_id=current_project()" if table in ("events", "files", "ai_calls") else "")).fetchone()[0]
                     for table in ("groups", "states", "events", "files", "ai_calls", "sessions")
                 }
+                counts["groups"] = group_count()
                 failed_calls = db.execute("SELECT COUNT(*) FROM ai_calls WHERE project_id=current_project() AND status<>'returned'").fetchone()[0]
                 event_range = db.execute("SELECT MIN(ts),MAX(ts),COUNT(DISTINCT group_no) FROM events WHERE project_id=current_project()").fetchone()
                 recent = db.execute(
@@ -2577,22 +2488,6 @@ class Handler(SimpleHTTPRequestHandler):
                     "lastEventAt": event_range[1],
                 },
                 "recentEvents": [dict(row) for row in recent],
-            })
-            return
-        if route.path == "/api/admin/access":
-            session = self.require_session("teacher")
-            if not session:
-                return
-            if not session.get("isAdmin"):
-                self.json_response({"error": "只有管理员教师可以管理账号"}, HTTPStatus.FORBIDDEN)
-                return
-            with database() as db:
-                teacher = db.execute("SELECT username FROM teachers WHERE id=?", (session.get("teacherId") or 1,)).fetchone()
-                recovery = db.execute("SELECT 1 FROM settings WHERE key='admin_recovery_hash'").fetchone()
-            self.json_response({
-                "username": teacher["username"],
-                "groupCount": group_count(),
-                "recoveryConfigured": bool(recovery),
             })
             return
         if route.path == "/api/state":
@@ -2713,38 +2608,23 @@ class Handler(SimpleHTTPRequestHandler):
     @classroom.serialized
     def do_POST(self) -> None:
         PROJECT_CONTEXT.set("")
+        accounts.CLASS_CONTEXT.set("")
         if not self.check_origin():
             return
         route = urlparse(self.path).path
+        if accounts.route(sys.modules[__name__], self, 'POST', route):
+            return
         if classroom.route(sys.modules[__name__], self, 'POST', route):
             return
         if lesson_plans.handle(sys.modules[__name__], self, 'POST', route):
             return
         try:
-            if route == "/api/setup":
-                self.initialize_from_request(self.read_json())
-            elif route == "/api/teacher/register":
-                self.register_teacher(self.read_json())
-            elif route == "/api/login":
+            if route == "/api/login":
                 self.login(self.read_json())
             elif route == "/api/projects":
                 session = self.require_session()
                 if session:
                     self.choose_project(session, self.read_json())
-            elif route == "/api/admin/recover":
-                self.recover_teacher(self.read_json())
-            elif route == "/api/admin/factory-reset":
-                session = self.require_session("teacher")
-                if session and session.get("isAdmin"):
-                    self.factory_reset(self.read_json(), session)
-                elif session:
-                    self.json_response({"error": "只有管理员教师可以恢复出厂数据"}, HTTPStatus.FORBIDDEN)
-            elif route == "/api/admin/access":
-                session = self.require_session("teacher")
-                if session and session.get("isAdmin"):
-                    self.update_access(self.read_json(), session)
-                elif session:
-                    self.json_response({"error": "只有管理员教师可以管理账号"}, HTTPStatus.FORBIDDEN)
             elif route == "/api/groups/configure":
                 session = self.require_session("teacher")
                 if session:
@@ -2866,6 +2746,7 @@ class Handler(SimpleHTTPRequestHandler):
 
     def do_DELETE(self) -> None:
         PROJECT_CONTEXT.set("")
+        accounts.CLASS_CONTEXT.set("")
         if not self.check_origin():
             return
         route = urlparse(self.path).path
@@ -2940,6 +2821,7 @@ class Handler(SimpleHTTPRequestHandler):
     @classroom.serialized
     def do_PUT(self) -> None:
         PROJECT_CONTEXT.set("")
+        accounts.CLASS_CONTEXT.set("")
         if not self.check_origin():
             return
         if urlparse(self.path).path != "/api/state":
@@ -3135,28 +3017,6 @@ class Handler(SimpleHTTPRequestHandler):
         record_event(session["role"], group, "state_save", incoming.get("currentStage"), "workspace")
         self.json_response({"ok": True, "updatedAt": utc_now(), "state": merged_state(group, monitoring=session["role"] == "teacher")})
 
-    def initialize_from_request(self, body: dict) -> None:
-        if is_initialized():
-            self.json_response({"error": "平台已经完成初始化"}, HTTPStatus.CONFLICT)
-            return
-        supplied_token = clean_code(str(body.get("setupToken", "")))
-        with database() as db:
-            row = db.execute("SELECT value FROM settings WHERE key='setup_token_hash'").fetchone()
-        if not row or not password_ok(supplied_token, row["value"]):
-            time.sleep(0.35)
-            self.json_response({"error": "教师注册码无效"}, HTTPStatus.FORBIDDEN)
-            return
-        try:
-            count = int(body.get("groupCount"))
-        except (TypeError, ValueError) as exc:
-            raise ValueError("请填写有效的小组数量") from exc
-        initialize_platform(
-            str(body.get("username", "")), str(body.get("password", "")), str(body.get("recoveryCode", "")),
-            str(body.get("classCode", "")), str(body.get("groupCodePrefix", "")), count,
-        )
-        record_event("system", None, "platform_initialized", None, f"groups={count}")
-        self.json_response({"ok": True, "groupCount": count}, HTTPStatus.CREATED)
-
     def choose_project(self, session: dict, body: dict) -> None:
         action = str(body.get("action", "select"))
         session_hash = self.session_token_hash()
@@ -3185,6 +3045,8 @@ class Handler(SimpleHTTPRequestHandler):
                 )
                 deleted_project = project_id
             elif action == "create":
+                if not session.get("classId"):
+                    raise ValueError("请先选择任教班级")
                 if session["role"] != "teacher":
                     self.json_response({"error": "新项目由教师创建，学生请选择教师已经建立的项目"}, HTTPStatus.FORBIDDEN)
                     return
@@ -3202,7 +3064,7 @@ class Handler(SimpleHTTPRequestHandler):
                      "teacher": False, "latest": "尚未保存", "issue": "", "progress": 0}
                     for number in range(1, group_count() + 1)
                 ]
-                initial = {"project": name, "groupCount": group_count(), "groups": summaries,
+                initial = {"project": name, "className": session.get("className", ""), "groupCount": group_count(), "groups": summaries,
                            "currentStage": 1, "aiOpen": True, "freeAiEnabled": True, "published": False, "hintStageLimit": 2}
                 db.execute(
                     "INSERT INTO states(scope,data,updated_at) VALUES(?,?,?)",
@@ -3217,7 +3079,7 @@ class Handler(SimpleHTTPRequestHandler):
                 project = db.execute("SELECT id,created_by FROM projects WHERE id=?", (project_id,)).fetchone()
                 if not project:
                     raise ValueError("项目不存在，请刷新项目列表后重试")
-                if not session.get("isAdmin") and project["created_by"] not in (None, session.get("teacherId")):
+                if not accounts.can_project(sys.modules[__name__], session, project_id):
                     self.json_response({"error": "无权修改这个项目。"}, HTTPStatus.FORBIDDEN)
                     return
                 name = re.sub(r"\s+", " ", str(body.get("name", "")).strip())
@@ -3254,13 +3116,14 @@ class Handler(SimpleHTTPRequestHandler):
                 row = db.execute("SELECT id,created_by FROM projects WHERE id=?", (project_id,)).fetchone()
                 if not row:
                     raise ValueError("项目不存在，请刷新项目列表后重试")
-                if (session["role"] == "teacher" and not session.get("isAdmin") and row["created_by"] not in (None, session.get("teacherId"))) or (session["role"] == "student" and not state_get_project_public(project_id)):
+                if not accounts.can_project(sys.modules[__name__], session, project_id):
                     self.json_response({"error": "无权进入这个项目。"}, HTTPStatus.FORBIDDEN)
                     return
             else:
                 raise ValueError("项目操作无效")
             if deleted_project is None:
-                db.execute("UPDATE sessions SET project_id=? WHERE token_hash=?", (project_id, session_hash))
+                assigned_class = db.execute("SELECT class_id FROM project_classes WHERE project_id=?",(project_id,)).fetchone()
+                db.execute("UPDATE sessions SET project_id=?,class_id=? WHERE token_hash=?", (project_id, assigned_class[0] if assigned_class else None, session_hash))
                 project = db.execute("SELECT id,name,created_at FROM projects WHERE id=?", (project_id,)).fetchone()
         if deleted_project is not None:
             self.json_response({"ok": True, "deleted": True, "projectId": deleted_project})
@@ -3273,253 +3136,28 @@ class Handler(SimpleHTTPRequestHandler):
         }, HTTPStatus.CREATED if created else HTTPStatus.OK)
 
     def login(self, body: dict) -> None:
-        if not is_initialized():
-            self.json_response({"error": "平台尚未初始化"}, HTTPStatus.CONFLICT)
-            return
-        client = self.client_address[0]
-        with LOGIN_LOCK:
-            recent = [stamp for stamp in LOGIN_FAILURES.get(client, []) if time.time() - stamp < 600]
-            LOGIN_FAILURES[client] = recent
-        if len(recent) >= 5:
-            self.json_response({"error": "登录失败次数过多，请10分钟后重试"}, HTTPStatus.TOO_MANY_REQUESTS)
-            return
-        role = body.get("role")
-        group_no = None
-        teacher_id = None
-        login_grade = None
-        with database() as db:
-            if role == "teacher":
-                row = db.execute("SELECT id,username,password_hash FROM teachers WHERE username=?", (str(body.get("username", "")).strip(),)).fetchone()
-                valid = row and hmac.compare_digest(str(body.get("username", "")), row["username"]) and password_ok(str(body.get("password", "")), row["password_hash"])
-                teacher_id = row["id"] if valid else None
-            elif role == "student":
-                try:
-                    group_no = int(body.get("groupId"))
-                except (TypeError, ValueError):
-                    group_no = 0
-                class_hash = db.execute("SELECT value FROM settings WHERE key='class_code_hash'").fetchone()
-                group_row = db.execute("SELECT access_hash FROM groups WHERE group_no=?", (group_no,)).fetchone()
-                supplied_class_code = clean_code(str(body.get("classCode", "")))
-                valid = bool(class_hash and group_row and password_ok(supplied_class_code, class_hash["value"]) and password_ok(clean_code(str(body.get("groupCode", ""))), group_row["access_hash"]))
-                login_grade = grade_from_text(supplied_class_code) if valid else None
-            else:
-                valid = False
-            if not valid:
-                with LOGIN_LOCK:
-                    LOGIN_FAILURES.setdefault(client, []).append(time.time())
-                time.sleep(0.35)
-                self.json_response({"error": "登录信息不正确"}, HTTPStatus.UNAUTHORIZED)
-                return
-            token = secrets.token_urlsafe(32)
-            expires = int(time.time()) + SESSION_SECONDS
-            projects = db.execute("SELECT id FROM projects ORDER BY created_at DESC,rowid DESC LIMIT 2").fetchall()
-            selected_project = projects[0]["id"] if len(projects) == 1 else None
-            db.execute("INSERT INTO sessions(token_hash,role,teacher_id,group_no,expires_at,created_at,project_id) VALUES(?,?,?,?,?,?,?)",
-                       (token_hash(token), role, teacher_id, group_no, expires, utc_now(), selected_project))
-        if role == "student" and login_grade:
-            persist_class_grade(f"{login_grade}年级")
-        with LOGIN_LOCK:
-            LOGIN_FAILURES.pop(client, None)
+        accounts.login(sys.modules[__name__], self, body)
+
+    def logout(self) -> None:
+        token_hash = self.session_token_hash()
+        if token_hash:
+            with database() as db:
+                db.execute("DELETE FROM sessions WHERE token_hash=?", (token_hash,))
         secure = "; Secure" if self.secure_cookie_enabled() else ""
-        cookie = f"{COOKIE_NAME}={token}; Path=/; HttpOnly; SameSite=Strict; Max-Age={SESSION_SECONDS}{secure}"
-        record_event(role, group_no, "login", None, "")
-        self.json_response({"ok": True, "role": role, "groupId": group_no, "projectId": selected_project}, cookie=cookie)
-
-    def recover_teacher(self, body: dict) -> None:
-        if not is_initialized():
-            self.json_response({"error": "平台尚未初始化"}, HTTPStatus.CONFLICT)
-            return
-        client = self.client_address[0]
-        with LOGIN_LOCK:
-            recent = [stamp for stamp in LOGIN_FAILURES.get(client, []) if time.time() - stamp < 600]
-            LOGIN_FAILURES[client] = recent
-        if len(recent) >= 5:
-            self.json_response({"error": "恢复失败次数过多，请10分钟后重试"}, HTTPStatus.TOO_MANY_REQUESTS)
-            return
-        username = str(body.get("username", "")).strip()
-        recovery_code = str(body.get("recoveryCode", "")).strip()
-        new_password = str(body.get("newPassword", ""))
-        if len(new_password) < 12:
-            raise ValueError("新教师密码至少需要12个字符")
-        with database() as db:
-            teacher = db.execute("SELECT id,username FROM teachers WHERE username=?", (username,)).fetchone()
-            recovery = db.execute("SELECT value FROM settings WHERE key='admin_recovery_hash'").fetchone()
-            valid = bool(teacher and recovery and hmac.compare_digest(username, teacher["username"]) and password_ok(recovery_code, recovery["value"]))
-            if not valid:
-                with LOGIN_LOCK:
-                    LOGIN_FAILURES.setdefault(client, []).append(time.time())
-                time.sleep(0.35)
-                self.json_response({"error": "管理员账号或恢复码不正确"}, HTTPStatus.UNAUTHORIZED)
-                return
-            db.execute("UPDATE teachers SET password_hash=? WHERE id=?", (password_hash(new_password), teacher["id"]))
-            db.execute("DELETE FROM sessions")
-        with LOGIN_LOCK:
-            LOGIN_FAILURES.pop(client, None)
-        record_event("system", None, "teacher_password_recovered", None, username)
-        self.json_response({"ok": True}, cookie=f"{COOKIE_NAME}=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0")
-
-    def update_access(self, body: dict, session: dict) -> None:
-        action = str(body.get("action", ""))
-        current_password = str(body.get("currentPassword", ""))
-        updated_class_code = None
-        with database() as db:
-            teacher = db.execute(
-                "SELECT username,password_hash FROM teachers WHERE id=?",
-                (session.get("teacherId") or 1,),
-            ).fetchone()
-            if not teacher or not password_ok(current_password, teacher["password_hash"]):
-                time.sleep(0.35)
-                self.json_response({"error": "当前教师密码不正确"}, HTTPStatus.UNAUTHORIZED)
-                return
-            logout_role = None
-            detail = action
-            if action == "teacher":
-                username = str(body.get("username", "")).strip()
-                new_password = str(body.get("newPassword", ""))
-                if len(username) < 3 or len(username) > 40:
-                    raise ValueError("教师账号长度应为3—40个字符")
-                if new_password and len(new_password) < 12:
-                    raise ValueError("新教师密码至少需要12个字符")
-                if username == teacher["username"] and not new_password:
-                    raise ValueError("账号和密码均未修改")
-                db.execute(
-                    "UPDATE teachers SET username=?,password_hash=? WHERE id=?",
-                    (username, password_hash(new_password) if new_password else teacher["password_hash"], session.get("teacherId") or 1),
-                )
-                db.execute("DELETE FROM sessions WHERE role='teacher'")
-                logout_role = "teacher"
-                detail = username
-            elif action == "class_code":
-                code = clean_code(str(body.get("classCode", "")))
-                if len(code) < 6:
-                    raise ValueError("班级访问码至少需要6个字符")
-                db.execute("UPDATE settings SET value=? WHERE key='class_code_hash'", (password_hash(code),))
-                db.execute("DELETE FROM sessions WHERE role='student'")
-                logout_role = "student"
-                updated_class_code = code
-            elif action == "group_code":
-                try:
-                    group = int(body.get("groupNo"))
-                except (TypeError, ValueError) as exc:
-                    raise ValueError("请选择有效小组") from exc
-                code = clean_code(str(body.get("groupCode", "")))
-                if len(code) < 6:
-                    raise ValueError("小组访问码至少需要6个字符")
-                updated = db.execute("UPDATE groups SET access_hash=? WHERE group_no=?", (password_hash(code), group))
-                if updated.rowcount != 1:
-                    raise ValueError("小组不存在")
-                db.execute("DELETE FROM sessions WHERE role='student' AND group_no=?", (group,))
-                logout_role = "student"
-                detail = f"group={group}"
-            elif action == "all_group_codes":
-                prefix = clean_code(str(body.get("groupPrefix", "")))
-                if len(prefix) < 4:
-                    raise ValueError("小组访问码前缀至少需要4个字符")
-                count = group_count()
-                for group in range(1, count + 1):
-                    db.execute("UPDATE groups SET access_hash=? WHERE group_no=?", (password_hash(f"{prefix}{group:02d}"), group))
-                db.execute("DELETE FROM sessions WHERE role='student'")
-                logout_role = "student"
-                detail = f"groups={count}"
-            elif action == "recovery_code":
-                recovery_code = str(body.get("recoveryCode", "")).strip()
-                if len(recovery_code) < 16:
-                    raise ValueError("管理员恢复码至少需要16个字符")
-                db.execute(
-                    "INSERT INTO settings(key,value) VALUES('admin_recovery_hash',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-                    (password_hash(recovery_code),),
-                )
-            elif action == "teacher_invite":
-                invite_code = secrets.token_urlsafe(12).upper()
-                db.execute(
-                    "INSERT INTO settings(key,value) VALUES('teacher_invite_hash',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-                    (password_hash(invite_code),),
-                )
-                detail = "teacher_invite"
-            else:
-                raise ValueError("不支持的管理员操作")
-        if updated_class_code is not None:
-            persist_class_grade(updated_class_code)
-        record_event("teacher", None, f"admin_{action}", None, detail)
-        self.json_response({"ok": True, "logoutRole": logout_role, **({"inviteCode": invite_code} if action == "teacher_invite" else {})})
-
-    def factory_reset(self, body: dict, session: dict) -> None:
-        if str(body.get("confirmation", "")).strip().upper() != "RESET":
-            raise ValueError("请输入 RESET 确认恢复出厂数据")
-        recovery_code = str(body.get("recoveryCode", "")).strip()
-        with database() as db:
-            recovery = db.execute("SELECT value FROM settings WHERE key='admin_recovery_hash'").fetchone()
-            if not recovery or not password_ok(recovery_code, recovery["value"]):
-                time.sleep(0.35)
-                self.json_response({"error": "管理员恢复码不正确"}, HTTPStatus.UNAUTHORIZED)
-                return
-            db.execute("DELETE FROM states")
-            db.execute("DELETE FROM events WHERE project_id=current_project()")
-            db.execute("DELETE FROM ai_calls")
-            db.execute("DELETE FROM files")
-            db.execute("DELETE FROM lesson_jobs")
-            db.execute("DELETE FROM course_material")
-            db.execute("DELETE FROM course_resources")
-            db.execute("DELETE FROM teachers WHERE is_admin=0")
-            db.execute("DELETE FROM sessions")
-            db.execute("DELETE FROM settings WHERE key='teacher_invite_hash'")
-            db.execute("DELETE FROM projects")
-        for path in UPLOAD_DIR.iterdir():
-            if path.is_file():
-                try:
-                    path.unlink()
-                except OSError:
-                    pass
-        record_event("system", None, "factory_reset", None, "课堂数据已清空，管理员账号与访问规则保留")
-        self.json_response({"ok": True, "preserved": ["admin", "recovery_code", "class_and_group_access"]})
+        self.json_response(
+            {"ok": True},
+            cookie=f"{COOKIE_NAME}=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0{secure}",
+        )
 
     def configure_groups(self, body: dict, session: dict) -> None:
-        try:
-            count = int(body.get("groupCount"))
-        except (TypeError, ValueError) as exc:
-            raise ValueError("请填写有效的小组数量") from exc
-        if not 1 <= count <= 20:
-            raise ValueError("小组数量应为1—20组")
-        old_count = group_count()
-        if count == old_count:
-            self.json_response({"ok": True, "groupCount": count, "addedCodes": []})
+        if not session.get('isAdmin'):
+            self.json_response({'error':'请联系管理员调整班级小组'},403)
             return
-        prefix = group_code_prefix() if count > old_count else ""
-        if count > old_count and len(prefix) < 4:
-            raise ValueError("当前班级缺少已保存的小组访问码前缀，无法安全扩容；请先配置 MPT_GROUP_CODE_PREFIX 后重启服务")
-        added_codes = []
-        with database() as db:
-            if count > old_count:
-                for number in range(old_count + 1, count + 1):
-                    code = f"{prefix}{number:02d}"
-                    db.execute("INSERT INTO groups(group_no,access_hash) VALUES(?,?)", (number, password_hash(code)))
-                    added_codes.append({"groupNo": number, "code": code})
-            else:
-                db.execute("DELETE FROM sessions WHERE role='student' AND group_no>?", (count,))
-                db.execute("DELETE FROM groups WHERE group_no>?", (count,))
-                stale_group_scopes = []
-                for row in db.execute(
-                    "SELECT scope FROM states WHERE scope LIKE 'group:%' OR scope LIKE 'project:%:group:%'"
-                ).fetchall():
-                    try:
-                        group_number = int(str(row["scope"]).rsplit(":group:", 1)[-1].removeprefix("group:"))
-                    except (TypeError, ValueError):
-                        continue
-                    if group_number > count:
-                        stale_group_scopes.append((row["scope"],))
-                db.executemany("DELETE FROM states WHERE scope=?", stale_group_scopes)
-                db.execute("DELETE FROM events WHERE group_no>?", (count,))
-                db.execute("DELETE FROM ai_calls WHERE group_no>?", (count,))
-            db.execute("UPDATE settings SET value=? WHERE key='group_count'", (str(count),))
-        class_state = state_get("class")
-        class_state["groupCount"] = count
-        class_state["groups"] = dynamic_group_summaries(class_state)
-        evaluations = class_state.get("evaluations", {})
-        if isinstance(evaluations, dict):
-            class_state["evaluations"] = {key: value for key, value in evaluations.items() if str(key).isdigit() and int(key) <= count}
-        state_put("class", class_state)
-        record_event("teacher", None, "group_count_changed", None, f"{old_count}->{count};teacher={session.get('username', '')}")
-        self.json_response({"ok": True, "groupCount": count, "addedCodes": added_codes})
+        current = accounts.active_class(sys.modules[__name__])
+        if not current:
+            raise ValueError('请先选择班级')
+        added = accounts.resize(sys.modules[__name__], current['id'], body.get('groupCount'))
+        self.json_response({'ok':True,'groupCount':group_count(),'addedCodes':added})
 
     def rotate_roles(self, body: dict, session: dict) -> None:
         expected = body.get("rounds")
@@ -3528,7 +3166,7 @@ class Handler(SimpleHTTPRequestHandler):
         results = []
         with database() as db:
             db.execute("BEGIN IMMEDIATE")
-            groups = [row[0] for row in db.execute("SELECT group_no FROM groups")]
+            groups = list(range(1,group_count()+1))
             for group in groups:
                 row = db.execute("SELECT data FROM states WHERE scope=?", (state_scope(f"group:{group}"),)).fetchone()
                 state = json.loads(row[0]) if row else {}
@@ -3626,41 +3264,6 @@ class Handler(SimpleHTTPRequestHandler):
             event_type = "members_submitted" if session["role"] == "student" else "members_teacher_updated"
         record_event(session["role"], group, event_type, 1, f"count={len(members)}")
         self.json_response({"ok": True, "members": members, "roles": group_state["roles"], "membersLocked": group_state["membersLocked"], "state": merged_state(group, monitoring=session["role"] == "teacher")})
-
-    def register_teacher(self, body: dict) -> None:
-        if not is_initialized():
-            self.json_response({"error": "平台尚未初始化"}, HTTPStatus.CONFLICT)
-            return
-        username = str(body.get("username", "")).strip()
-        password = str(body.get("password", ""))
-        invite_code = str(body.get("inviteCode", "")).strip()
-        if len(username) < 3 or len(username) > 40:
-            raise ValueError("教师账号长度应为3—40个字符")
-        if len(password) < 12:
-            raise ValueError("教师密码至少需要12个字符")
-        if not invite_code:
-            raise ValueError("请输入教师注册码")
-        with database() as db:
-            invite = db.execute("SELECT value FROM settings WHERE key='teacher_invite_hash'").fetchone()
-            if not invite or not password_ok(invite_code, invite["value"]):
-                time.sleep(0.35)
-                self.json_response({"error": "教师注册码无效或已使用"}, HTTPStatus.FORBIDDEN)
-                return
-            try:
-                db.execute("INSERT INTO teachers(username,password_hash,created_at,is_admin) VALUES(?,?,?,0)", (username, password_hash(password), utc_now()))
-            except sqlite3.IntegrityError as exc:
-                raise ValueError("教师账号已存在") from exc
-            db.execute("DELETE FROM settings WHERE key='teacher_invite_hash'")
-        record_event("system", None, "teacher_registered", None, username)
-        self.json_response({"ok": True, "username": username}, HTTPStatus.CREATED)
-
-    def logout(self) -> None:
-        cookie = SimpleCookie()
-        cookie.load(self.headers.get("Cookie", ""))
-        if COOKIE_NAME in cookie:
-            with database() as db:
-                db.execute("DELETE FROM sessions WHERE token_hash=?", (token_hash(cookie[COOKIE_NAME].value),))
-        self.json_response({"ok": True}, cookie=f"{COOKIE_NAME}=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0")
 
     def recognize_images(self, session: dict, body: dict) -> None:
         group = int(session['groupId'])
@@ -4353,9 +3956,7 @@ def main() -> None:
         )
     print(f"运行模式：{env}；DeepSeek：{'已配置' if os.environ.get('DEEPSEEK_API_KEY') else '未配置，将使用教师静态支架'}")
     if not is_initialized():
-        print("平台尚未初始化，请在登录页完成首位教师注册。")
-        if SETUP_TOKEN_DISPLAY:
-            print(f"本机一次性教师注册码：{SETUP_TOKEN_DISPLAY}")
+        print("本地首次启动请设置管理员账号；生产部署请配置 MPT_TEACHER_USERNAME 和 MPT_TEACHER_PASSWORD。")
     ThreadingHTTPServer((HOST, PORT), Handler).serve_forever()
 
 

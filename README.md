@@ -15,9 +15,9 @@ python -m pip install -r requirements.txt
 python start_server.py
 ```
 
-访问 `http://127.0.0.1:8000/`。平台不包含默认教师、学生、项目或课堂数据。首次启动时，终端会显示随机的一次性教师注册码；负责人在入口页完成平台注册，并设置管理员恢复码、班级码与小组访问规则。恢复码用于忘记教师密码时重置账号，只保存哈希，请离线保管。管理员登录后可在“账号与访问管理”中重置账号或访问码，并生成一次性教师注册码；其他教师在登录入口点击“教师注册”创建自己的账号。若旧入口仍停留在已经打开的标签页，关闭该标签页或普通刷新一次即可，无需手动清理浏览器缓存；`/index.html` 会由服务器强制转到当前登录入口。
+访问 `http://127.0.0.1:8000/`。本地首次启动可在入口创建管理员；生产环境通过 `MPT_TEACHER_USERNAME` 和 `MPT_TEACHER_PASSWORD` 完成一次性初始化。管理员在“账号与访问管理”中创建教师账号、分配班级，并查看或修改每班的小组数量和小组码。学生从对应班级入口进入，只需选择小组并输入 `01`、`02`、`03` 等小组码。教师注册码、班级码、恢复码和扫码令牌入口已移除。
 学生端页面按当前 URL 加载，课堂阶段以教师端的统一状态为准；页面中的未提交输入会按账号、小组和页面暂存到浏览器，误刷新后自动恢复，点击保存成功后清除对应草稿。
-管理员还可在“账号与访问管理”中使用恢复码执行“恢复出厂数据”：清空课堂项目、阶段产出、过程记录、上传文件及其他教师账号，同时保留管理员身份、恢复码和班级/小组访问规则。该操作不可撤销。
+生产数据清理由部署变量 `MPT_RESET_DATA_ONCE` 执行：每个新标记只运行一次，先备份数据库与上传文件，再清空课堂项目、阶段产出、过程记录和其他教师账号，同时保留管理员身份。操作方法见部署文档。
 
 ## 教案智能解析与多课时备课
 
@@ -75,7 +75,7 @@ DESMOS_API_KEY=你的Desmos API Key
 
 ## 生产部署
 
-复制 `.env.example`，至少设置 `MPT_SETUP_TOKEN` 和 `DEEPSEEK_API_KEY`，然后在 HTTPS 反向代理之后运行：
+复制 `.env.example`，首次生产部署至少设置 `MPT_TEACHER_USERNAME` 和 `MPT_TEACHER_PASSWORD`，然后在 HTTPS 反向代理之后运行：
 
 ```bash
 docker build -t math-project-agent .
@@ -84,10 +84,9 @@ docker run --env-file .env -p 8000:8000 -v math-project-data:/app/data math-proj
 
 生产环境要求：
 
-- 设置 `MPT_ENV=production` 和至少12位的一次性教师注册码，首位教师在入口页注册后该注册码立即失效；
-- 如需无人值守初始化，也可同时设置教师账号、强密码、`MPT_ADMIN_RECOVERY_CODE`、班级码、小组码前缀和小组数量；
-- 小组访问码前缀在初始化时写入班级配置；教师扩容时只需修改小组数量，系统会沿用此前缀自动生成连续编号（例如 `TEAM04`）。
-- 旧数据库若尚未保存前缀，升级后会优先从 `MPT_GROUP_CODE_PREFIX` 自动迁移；若部署环境也没有该变量，系统会拒绝猜测并提示配置一次，以避免生成错误访问码。
+- 设置 `MPT_ENV=production`、管理员教师账号和至少8位强密码；初始化完成后可从部署环境移除明文初始化密码；
+- 每个班级由管理员指定任课教师、小组数量及独立小组码；默认连续生成 `01`、`02`、`03`，也可逐组修改；
+- 教师密码使用慢哈希完成登录验证；为满足管理员显式查看需求，另用 `/app/data/account-encryption.key` 加密保存可查看副本。必须同时备份数据目录和该密钥；
 - 设置 `MPT_COOKIE_SECURE=1`，仅通过 HTTPS 提供服务；本地 `127.0.0.1` 预览会自动使用非 Secure 会话 Cookie；
 - 持久化并定期备份 `/app/data`；
 - 不把 `.env`、数据库、上传文件或 DeepSeek 密钥提交到代码仓库；
@@ -95,7 +94,11 @@ docker run --env-file .env -p 8000:8000 -v math-project-data:/app/data math-proj
 
 ### Railway
 
-Railway 会自动注入 `PORT`，应用会优先使用该端口；部署时选择仓库根目录的 `Dockerfile`，设置 `MPT_ENV=production`、`MPT_COOKIE_SECURE=1`、`MPT_SETUP_TOKEN` 和 `DEEPSEEK_API_KEY`，并在服务设置中将 Healthcheck Path 设为 `/api/health`。首次部署后在 Railway 服务中添加持久化 Volume，并将挂载目录设为 `/app/data`，同时设置 `RAILWAY_RUN_UID=0` 以保证非 root 镜像可以写入 Railway Volume，否则 SQLite 数据和上传文件会在重新部署后丢失或无法写入。平台使用 SQLite 时保持单实例运行；如需多实例并发，应先迁移到 PostgreSQL 等服务端数据库。学生端和教师端使用同一域名的相对 API 路径与同一 `/app/data`，因此会连接到同一数据库。
+Railway 会自动注入 `PORT`，应用会优先使用该端口；部署时选择仓库根目录的 `Dockerfile`，设置 `MPT_ENV=production`、`MPT_COOKIE_SECURE=1`、`MPT_TEACHER_USERNAME`、`MPT_TEACHER_PASSWORD` 和模型密钥，并将 Healthcheck Path 设为 `/api/health`。添加持久化 Volume 并挂载到 `/app/data`；若 Volume 写入权限受限，按 Railway 当前文档设置运行 UID。平台使用 SQLite 时保持单实例运行。清空数据时给 `MPT_RESET_DATA_ONCE` 设置一个全新标记，部署成功并核对备份后再将其留空；不要删除 Volume。
+
+### 腾讯云
+
+广州轻量应用服务器 4核4GB 可承载约14台课堂设备。仓库提供 Docker Compose、HTTPS 反向代理、一键部署、更新和 COS 备份脚本，完整步骤见 [腾讯云部署指南](docs/腾讯云部署.md)。
 
 ## 验证
 
@@ -117,4 +120,4 @@ python tests/evaluate_deepseek_hints.py
 
 编辑草稿按账号、项目、小组和页面暂存；只有接口确认成功才显示服务器保存。另一窗口更新同一记录时要求比较版本后保存，模型请求等待期间的工作区保存不会被旧请求覆盖。新增文件、事件、模型调用都绑定项目，旧版客户端需刷新以获取版本协议。
 
-可选扫码入口位于教师项目配置，只生成5分钟内可用的一次性小组令牌，可撤销；二维码不包含长期访问码。详细实现与逐项验收见 `docs/classroom-changes.md`。
+详细实现与逐项验收见 `docs/classroom-changes.md`。

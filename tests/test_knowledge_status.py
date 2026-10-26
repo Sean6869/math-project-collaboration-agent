@@ -20,7 +20,7 @@ class KnowledgeStatusTest(unittest.TestCase):
             patch = mock.patch.object(app, name, value)
             patch.start()
             self.addCleanup(patch.stop)
-        patch = mock.patch.dict(os.environ, {"ARK_API_KEY": "test-key"})
+        patch = mock.patch.dict(os.environ, {"ARK_API_KEY": "test-key", "MPT_ENV":"development"})
         patch.start()
         self.addCleanup(patch.stop)
         app.init_database()

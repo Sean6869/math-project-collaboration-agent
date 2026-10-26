@@ -276,32 +276,6 @@ def project_metadata(app, project_id):
 def route(app, handler, method, path):
     if not path.startswith('/api/classroom/'):
         return False
-    if path in ('/api/classroom/join', '/api/classroom/join-info'):
-        if method != 'POST':
-            handler.json_response({'error': '操作无效。'}, 405)
-            return True
-        try:
-            body = handler.read_json()
-        except ValueError:
-            handler.json_response({'error': '入口无效，请重新扫码。'}, 400)
-            return True
-        with WRITE_LOCK, app.database() as db:
-            db.execute('BEGIN IMMEDIATE')
-            token_hash = app.token_hash(str(body.get('token', '')))
-            row = db.execute('SELECT * FROM join_tokens WHERE token_hash=? AND used=0 AND expires_at>?', (token_hash, int(time.time()))).fetchone()
-            if not row or not app.state_get_project_public(row['project_id']):
-                handler.json_response({'error': '入口已失效，请老师重新生成。'}, 403)
-                return True
-            if path.endswith('join-info'):
-                handler.json_response({'group': row['group_no'], 'expiresAt': row['expires_at']})
-                return True
-            token = secrets.token_urlsafe(32)
-            db.execute('UPDATE join_tokens SET used=1 WHERE token_hash=?', (token_hash,))
-            db.execute('INSERT INTO sessions(token_hash,role,teacher_id,group_no,expires_at,created_at,project_id) VALUES(?,?,?,?,?,?,?)',
-                       (app.token_hash(token), 'student', None, row['group_no'], int(time.time()) + app.SESSION_SECONDS, app.utc_now(), row['project_id']))
-        secure = '; Secure' if handler.secure_cookie_enabled() else ''
-        handler.json_response({'ok': True, 'group': row['group_no']}, cookie=f'{app.COOKIE_NAME}={token}; Path=/; HttpOnly; SameSite=Strict; Max-Age={app.SESSION_SECONDS}{secure}')
-        return True
     session = handler.require_session()
     if not session:
         return True
@@ -316,30 +290,7 @@ def route(app, handler, method, path):
             data = app.state_get(f'group:{group}')
             action = path.rsplit('/', 1)[-1]
             result = {}
-            if action == 'join-token' and teacher and method == 'POST':
-                if not session.get('projectId') or state.get('published') is False:
-                    raise ValueError('请先发布项目。')
-                import qrcode
-                import qrcode.image.svg
-                host = handler.headers.get('Host', '')
-                if not re.fullmatch(r'[\w.\-:\[\]]+', host):
-                    raise ValueError('平台地址无效。')
-                token = secrets.token_urlsafe(32)
-                expires = int(time.time()) + 300
-                protocol = 'https' if handler.secure_cookie_enabled() else 'http'
-                url = f'{protocol}://{host}/?join#{token}'
-                image = qrcode.make(url, image_factory=qrcode.image.svg.SvgPathImage)
-                with app.database() as db:
-                    db.execute('DELETE FROM join_tokens WHERE expires_at<? OR (project_id=? AND group_no=?)', (int(time.time()), session['projectId'], group))
-                    db.execute('INSERT INTO join_tokens(token_hash,project_id,group_no,expires_at) VALUES(?,?,?,?)', (app.token_hash(token), session['projectId'], group, expires))
-                handler.json_response({'ok': True, 'url': url, 'svg': image.to_string().decode(), 'expiresAt': expires})
-                app.record_event('teacher', group, 'join_token_issued', None, '300s')
-                return True
-            elif action == 'join-revoke' and teacher and method == 'POST':
-                with app.database() as db:
-                    db.execute('DELETE FROM join_tokens WHERE project_id=? AND group_no=?', (session['projectId'], group))
-                app.record_event('teacher', group, 'join_token_revoked', None, '')
-            elif action == 'config' and teacher and method == 'POST':
+            if action == 'config' and teacher and method == 'POST':
                 check_revision(state, body.get('revision'))
                 config = state.setdefault('teacherConfig', {})
                 for key in ('learnedKnowledge', 'toolSuggestions', 'offlineMaterials', 'stageMinutes', 'idleMinutes'):

@@ -7,7 +7,7 @@ const {chromium}=require('playwright');
  try{
   browser=await chromium.launch({headless:true,args:['--use-fake-ui-for-media-stream','--use-fake-device-for-media-stream'],...(fs.existsSync(chromium.executablePath())?{}:{channel:'msedge'})});
   const context=await browser.newContext({viewport:{width:390,height:844},isMobile:true,hasTouch:true});
-  assert((await context.request.post(base+'/api/login',{data:{role:'student',classCode:'CLASSROOM',groupId:1,groupCode:'TEAM01'}})).ok());
+  assert((await context.request.post(base+'/api/login',{data:{role:'student',classCode:'CLASSROOM',groupId:1,groupCode:'01'}})).ok());
   await context.addInitScript(()=>{
    window.cameraRequests=[];window.cameraStreams=[];
    window.cameraCanvases=[];

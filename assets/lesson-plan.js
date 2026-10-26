@@ -116,7 +116,7 @@ async function mount({s,api,esc,toast,refreshState,teacherId,prepareImage=async 
    const brief=classroom.state?.taskBrief;
    const briefReviewed=!brief||!['situation','problem','conditions','output'].some(key=>brief[key])||confirm('确认数字、单位和限制条件与简明任务一致？');
    if(!briefReviewed)return;
-   if(count!==s.groupCount){const result=await api('/api/groups/configure',{method:'POST',body:JSON.stringify({groupCount:count})});groupChanged=true;s.groupCount=count;if(result.addedCodes?.length)alert('请保存新增访问码：\n'+result.addedCodes.map(x=>x.groupNo+'组：'+x.code).join('\n'))}
+   if(count!==s.groupCount){const result=await api('/api/groups/configure',{method:'POST',body:JSON.stringify({groupCount:count})});groupChanged=true;s.groupCount=count;}
    const previousRevision=revision,publishBody={plan,selectedLesson:selected,revision,className:$('pcClass').value.trim(),reviewed:true,briefReviewed,sourceJobId,shareSource,resourceIds};
    let saved;
    try{saved=await api('/api/lesson-plan/publish',{method:'POST',body:JSON.stringify(publishBody)})}
