@@ -42,7 +42,9 @@ if [[ ! -f "${ENV_FILE}" ]]; then
   fi
   umask 077
   COOKIE_SECURE=1
-  if [[ "${MAPLE_DOMAIN_INPUT}" == :* || "${MAPLE_DOMAIN_INPUT}" == http://* ]]; then
+  # 公网 IP 通常通过 HTTP 访问；Secure Cookie 在 HTTP 下不会回传，
+  # 会表现为登录成功后又回到登录页。没有域名证书时关闭 Secure。
+  if [[ "${MAPLE_DOMAIN_INPUT}" == :* || "${MAPLE_DOMAIN_INPUT}" == http://* || "${MAPLE_DOMAIN_INPUT}" =~ ^https?://[0-9]+(\.[0-9]+){3}(:[0-9]+)?$ || "${MAPLE_DOMAIN_INPUT}" =~ ^[0-9]+(\.[0-9]+){3}(:[0-9]+)?$ ]]; then
     COOKIE_SECURE=0
   fi
   {
