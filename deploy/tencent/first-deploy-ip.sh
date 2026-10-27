@@ -64,7 +64,7 @@ else
   echo
   umask 077
   cat > "${ENV_FILE}" <<EOF
-MAPLE_DOMAIN=${PUBLIC_IP}
+MAPLE_DOMAIN=http://${PUBLIC_IP}
 MPT_ENV=production
 MPT_HOST=0.0.0.0
 MPT_PORT=8000

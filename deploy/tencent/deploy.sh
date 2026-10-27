@@ -42,13 +42,19 @@ if [[ ! -f "${ENV_FILE}" ]]; then
   fi
   umask 077
   COOKIE_SECURE=1
+  MAPLE_SITE_ADDRESS="${MAPLE_DOMAIN_INPUT}"
   # 公网 IP 通常通过 HTTP 访问；Secure Cookie 在 HTTP 下不会回传，
   # 会表现为登录成功后又回到登录页。没有域名证书时关闭 Secure。
   if [[ "${MAPLE_DOMAIN_INPUT}" == :* || "${MAPLE_DOMAIN_INPUT}" == http://* || "${MAPLE_DOMAIN_INPUT}" =~ ^https?://[0-9]+(\.[0-9]+){3}(:[0-9]+)?$ || "${MAPLE_DOMAIN_INPUT}" =~ ^[0-9]+(\.[0-9]+){3}(:[0-9]+)?$ ]]; then
     COOKIE_SECURE=0
   fi
+  # Caddy 会尝试为裸 IP 启用本地 HTTPS，并把 HTTP 重定向到浏览器不信任的
+  # 内部证书。裸 IP 部署必须显式使用 http://，域名部署仍保持自动 HTTPS。
+  if [[ "${MAPLE_DOMAIN_INPUT}" =~ ^[0-9]+(\.[0-9]+){3}(:[0-9]+)?$ ]]; then
+    MAPLE_SITE_ADDRESS="http://${MAPLE_DOMAIN_INPUT}"
+  fi
   {
-    printf 'MAPLE_DOMAIN=%s\n' "${MAPLE_DOMAIN_INPUT}"
+    printf 'MAPLE_DOMAIN=%s\n' "${MAPLE_SITE_ADDRESS}"
     printf 'MPT_TEACHER_USERNAME=%s\n' "${MPT_TEACHER_USERNAME_INPUT}"
     printf 'MPT_TEACHER_PASSWORD=%s\n' "${MPT_TEACHER_PASSWORD_INPUT}"
     printf 'MPT_CLASS_NAME=默认班级\nMPT_GROUP_COUNT=3\n'
