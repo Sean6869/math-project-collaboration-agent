@@ -19,6 +19,23 @@ apt-get update
 apt-get install -y ca-certificates curl git docker.io docker-compose-v2
 systemctl enable --now docker
 
+# 腾讯云服务器直连 Docker Hub（尤其解析到 IPv6 时）可能超时。
+# 首次部署先启用腾讯云镜像加速，避免拉取 Caddy/Python 镜像失败。
+mkdir -p /etc/docker
+if [[ ! -s /etc/docker/daemon.json ]]; then
+  cat > /etc/docker/daemon.json <<'EOF'
+{
+  "registry-mirrors": ["https://mirror.ccs.tencentyun.com"]
+}
+EOF
+elif ! grep -q 'mirror.ccs.tencentyun.com' /etc/docker/daemon.json; then
+  cp /etc/docker/daemon.json "/etc/docker/daemon.json.bak.$(date +%Y%m%d%H%M%S)"
+  echo "检测到已有 /etc/docker/daemon.json，未自动覆盖。" >&2
+  echo "请确保其中配置 registry-mirrors：https://mirror.ccs.tencentyun.com" >&2
+fi
+systemctl daemon-reload
+systemctl restart docker
+
 mkdir -p "$(dirname "${APP_DIR}")"
 if [[ -d "${APP_DIR}/.git" ]]; then
   git -C "${APP_DIR}" fetch origin "${BRANCH}"
