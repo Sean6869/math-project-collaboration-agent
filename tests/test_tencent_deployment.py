@@ -28,6 +28,8 @@ class TencentDeploymentTests(unittest.TestCase):
         self.assertIn('upsert_env "MPT_COOKIE_SECURE" "0"', script)
         self.assertIn('http://127.0.0.1:8000/api/health', script)
         self.assertIn("openssl rand -base64 32", script)
+        self.assertIn('DESMOS_API_KEY=%s', script)
+        self.assertIn('缺少 DESMOS_API_KEY', script)
 
     def test_first_deploy_and_update_share_the_same_entrypoint(self):
         first = self.read("deploy/tencent/first-deploy-ip.sh")

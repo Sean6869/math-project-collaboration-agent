@@ -88,8 +88,9 @@ if [[ ! -f "${ENV_FILE}" ]]; then
   echo
   read -r -s -p "火山方舟 API Key（可暂时留空）：" ARK_API_KEY_INPUT
   echo
-  if [[ -z "${MPT_TEACHER_USERNAME_INPUT}" || ${#MPT_TEACHER_PASSWORD_INPUT} -lt 8 ]]; then
-    echo "教师账号和至少 8 位密码不能为空。" >&2
+  read -r -p "Desmos API Key（数学工具必需）：" DESMOS_API_KEY_INPUT
+  if [[ -z "${MPT_TEACHER_USERNAME_INPUT}" || ${#MPT_TEACHER_PASSWORD_INPUT} -lt 8 || -z "${DESMOS_API_KEY_INPUT}" ]]; then
+    echo "教师账号、至少 8 位密码和 Desmos API Key 不能为空。" >&2
     exit 1
   fi
   umask 077
@@ -103,6 +104,7 @@ if [[ ! -f "${ENV_FILE}" ]]; then
     printf 'MPT_COOKIE_SECURE=0\n'
     printf 'MPT_ACCOUNT_ENCRYPTION_KEY=%s\n' "${ACCOUNT_KEY}"
     printf 'ARK_API_KEY=%s\n' "${ARK_API_KEY_INPUT}"
+    printf 'DESMOS_API_KEY=%s\n' "${DESMOS_API_KEY_INPUT}"
     printf 'ARK_TEXT_MODEL=doubao-seed-2-1-turbo-260628\n'
     printf 'ARK_VISION_MODEL=doubao-seed-2-1-turbo-260628\n'
     printf 'ARK_PLAN_MODEL=doubao-seed-2-1-turbo-260628\n'
@@ -116,6 +118,11 @@ else
   CURRENT_SITE="$(normalize_site "${CURRENT_SITE}")"
   upsert_env "MAPLE_DOMAIN" "${CURRENT_SITE}"
   upsert_env "MPT_COOKIE_SECURE" "0"
+fi
+
+if ! awk -F= '$1 == "DESMOS_API_KEY" && $2 != "" { found = 1 } END { exit !found }' "${ENV_FILE}"; then
+  echo "缺少 DESMOS_API_KEY，请编辑 ${ENV_FILE} 并填写后重新运行部署脚本。" >&2
+  exit 1
 fi
 
 cd "${DEPLOY_DIR}"
