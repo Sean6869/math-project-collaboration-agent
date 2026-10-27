@@ -103,7 +103,7 @@ Railway 会自动注入 `PORT`，应用会优先使用该端口；部署时选�
 ```bash
 curl -fsSL --retry 5 \
   https://raw.githubusercontent.com/Sean6869/math-project-collaboration-agent/main/deploy/tencent/first-deploy-ip.sh \
-  | sudo bash -s -- 你的公网IP
+  | sudo bash
 ```
 
 后续更新运行 `sudo bash /opt/maple/app/deploy/tencent/update.sh`。服务器防火墙放行 IPv4 TCP 22、8000。完整步骤见 [腾讯云部署指南](docs/腾讯云部署.md)。

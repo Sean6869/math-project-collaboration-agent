@@ -2,7 +2,7 @@
 set -Eeuo pipefail
 
 # 腾讯云 Ubuntu 首次部署，使用 HTTP 提供服务。
-# 用法：curl -fsSL <本脚本 raw URL> | sudo bash -s -- 175.178.183.31
+# 不传地址时会提示填写服务器公网 IP。
 
 APP_DIR="${MAPLE_APP_DIR:-/opt/maple/app}"
 REPO_URL="${MAPLE_REPO_URL:-https://github.com/Sean6869/math-project-collaboration-agent.git}"
@@ -24,6 +24,13 @@ retry() {
 
 if [[ "${EUID}" -ne 0 ]]; then
   echo "请使用 sudo 运行：sudo bash deploy/tencent/first-deploy-ip.sh" >&2
+  exit 1
+fi
+if [[ -z "${PUBLIC_IP}" && -r /dev/tty ]]; then
+  read -r -p "请输入服务器公网 IPv4：" PUBLIC_IP </dev/tty
+fi
+if [[ ! "${PUBLIC_IP}" =~ ^[0-9]+(\.[0-9]+){3}$ ]]; then
+  echo "公网 IPv4 格式错误；请重新运行并填写服务器公网 IP。" >&2
   exit 1
 fi
 
@@ -59,14 +66,6 @@ if [[ -d "${APP_DIR}/.git" ]]; then
   retry git -C "${APP_DIR}" pull --ff-only origin "${BRANCH}"
 else
   retry git clone --branch "${BRANCH}" --single-branch "${REPO_URL}" "${APP_DIR}"
-fi
-
-if [[ -z "${PUBLIC_IP}" ]]; then
-  PUBLIC_IP="$(curl -4 -fsS --max-time 10 https://api.ipify.org 2>/dev/null || true)"
-fi
-if [[ ! "${PUBLIC_IP}" =~ ^[0-9]+(\.[0-9]+){3}$ ]]; then
-  echo "无法确定公网 IPv4。请在命令末尾传入，例如：sudo bash $0 175.178.183.31" >&2
-  exit 1
 fi
 
 export MAPLE_SITE_ADDRESS="${PUBLIC_IP}"
