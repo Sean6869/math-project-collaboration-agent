@@ -1,13 +1,27 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-# 首次部署（腾讯云公网 IP / HTTP）。
-# 用法：sudo bash deploy/tencent/first-deploy-ip.sh
+# 腾讯云 Ubuntu 首次部署。脚本会克隆仓库，并为公网 IP 配置由
+# Let's Encrypt 签发、浏览器直接信任且自动续期的 HTTPS 证书。
+# 用法：curl -fsSL <本脚本 raw URL> | sudo bash -s -- 175.178.183.31
 
 APP_DIR="${MAPLE_APP_DIR:-/opt/maple/app}"
 REPO_URL="${MAPLE_REPO_URL:-https://github.com/Sean6869/math-project-collaboration-agent.git}"
 BRANCH="${MAPLE_BRANCH:-main}"
-PUBLIC_IP="${MAPLE_PUBLIC_IP:-175.178.183.31}"
+PUBLIC_IP="${1:-${MAPLE_PUBLIC_IP:-}}"
+
+retry() {
+  local attempt=1 max_attempts=5
+  until "$@"; do
+    if (( attempt >= max_attempts )); then
+      echo "命令连续失败 ${max_attempts} 次：$*" >&2
+      return 1
+    fi
+    echo "网络请求失败，5 秒后重试（${attempt}/${max_attempts}）：$*" >&2
+    attempt=$((attempt + 1))
+    sleep 5
+  done
+}
 
 if [[ "${EUID}" -ne 0 ]]; then
   echo "请使用 sudo 运行：sudo bash deploy/tencent/first-deploy-ip.sh" >&2
@@ -16,7 +30,10 @@ fi
 
 export DEBIAN_FRONTEND=noninteractive
 apt-get update
-apt-get install -y ca-certificates curl git docker.io docker-compose-v2
+apt-get install -y ca-certificates curl git docker.io
+if ! docker compose version >/dev/null 2>&1; then
+  apt-get install -y docker-compose-v2 || apt-get install -y docker-compose-plugin
+fi
 systemctl enable --now docker
 
 # 腾讯云服务器直连 Docker Hub（尤其解析到 IPv6 时）可能超时。
@@ -38,58 +55,31 @@ systemctl restart docker
 
 mkdir -p "$(dirname "${APP_DIR}")"
 if [[ -d "${APP_DIR}/.git" ]]; then
-  git -C "${APP_DIR}" fetch origin "${BRANCH}"
+  retry git -C "${APP_DIR}" fetch origin "${BRANCH}"
   git -C "${APP_DIR}" checkout "${BRANCH}"
-  git -C "${APP_DIR}" pull --ff-only origin "${BRANCH}"
+  retry git -C "${APP_DIR}" pull --ff-only origin "${BRANCH}"
 else
-  git clone --branch "${BRANCH}" --single-branch "${REPO_URL}" "${APP_DIR}"
+  retry git clone --branch "${BRANCH}" --single-branch "${REPO_URL}" "${APP_DIR}"
 fi
 
-DEPLOY_DIR="${APP_DIR}/deploy/tencent"
-ENV_FILE="${DEPLOY_DIR}/.env"
-mkdir -p "${DEPLOY_DIR}"
-
-if [[ -f "${ENV_FILE}" ]]; then
-  echo "已存在 ${ENV_FILE}，保留现有配置。"
-else
-  read -r -p "管理员教师账号 [maple_admin]：" username
-  username="${username:-maple_admin}"
-  read -r -s -p "管理员教师密码（至少 8 位）：" password
-  echo
-  if [[ -z "${password}" || ${#password} -lt 8 ]]; then
-    echo "密码至少需要 8 位。" >&2
-    exit 1
-  fi
-  read -r -s -p "火山方舟 API Key（可留空）：" ark_key
-  echo
-  umask 077
-  cat > "${ENV_FILE}" <<EOF
-MAPLE_DOMAIN=http://${PUBLIC_IP}
-MPT_ENV=production
-MPT_HOST=0.0.0.0
-MPT_PORT=8000
-MPT_COOKIE_SECURE=0
-MPT_TEACHER_USERNAME=${username}
-MPT_TEACHER_PASSWORD=${password}
-MPT_CLASS_NAME=默认班级
-MPT_GROUP_COUNT=3
-MPT_ACCOUNT_ENCRYPTION_KEY=
-MPT_RESET_DATA_ONCE=
-ARK_API_KEY=${ark_key}
-ARK_TEXT_MODEL=doubao-seed-2-1-turbo-260628
-ARK_VISION_MODEL=doubao-seed-2-1-turbo-260628
-ARK_PLAN_MODEL=doubao-seed-2-1-turbo-260628
-ARK_IMAGE_MODEL=doubao-seedream-5-0-260128
-EOF
-  chmod 600 "${ENV_FILE}"
+if [[ -z "${PUBLIC_IP}" ]]; then
+  PUBLIC_IP="$(curl -4 -fsS --max-time 10 https://api.ipify.org 2>/dev/null || true)"
+fi
+if [[ ! "${PUBLIC_IP}" =~ ^[0-9]+(\.[0-9]+){3}$ ]]; then
+  echo "无法确定公网 IPv4。请在命令末尾传入，例如：sudo bash $0 175.178.183.31" >&2
+  exit 1
 fi
 
-cd "${DEPLOY_DIR}"
-docker compose config --quiet
-docker compose up -d --build --remove-orphans
-docker compose ps
+export MAPLE_SITE_ADDRESS="${PUBLIC_IP}"
+export MAPLE_SKIP_SYSTEM_SETUP=1
+export MAPLE_SKIP_GIT_SYNC=1
 
-echo
-echo "部署完成： http://${PUBLIC_IP}/"
-echo "健康检查： curl -fsS http://${PUBLIC_IP}/api/health"
-echo "注意：Caddy 对外使用 80 端口，8000 仅用于容器内部通信。"
+# 本脚本通常通过 curl | sudo bash 执行，此时标准输入属于下载管道且已到 EOF。
+# 把后续账号、密码和 API Key 的交互输入重新连接到控制终端。
+if [[ -r /dev/tty ]]; then
+  exec bash "${APP_DIR}/deploy/tencent/deploy.sh" </dev/tty
+fi
+
+echo "当前会话没有可用终端，无法安全读取首次部署参数。" >&2
+echo "请改为登录服务器后执行：sudo bash ${APP_DIR}/deploy/tencent/deploy.sh" >&2
+exit 1

@@ -5,60 +5,103 @@ APP_DIR="${MAPLE_APP_DIR:-/opt/maple/app}"
 REPO_URL="${MAPLE_REPO_URL:-https://github.com/Sean6869/math-project-collaboration-agent.git}"
 BRANCH="${MAPLE_BRANCH:-main}"
 
+retry() {
+  local attempt=1 max_attempts=5
+  until "$@"; do
+    if (( attempt >= max_attempts )); then
+      echo "命令连续失败 ${max_attempts} 次：$*" >&2
+      return 1
+    fi
+    echo "网络请求失败，5 秒后重试（${attempt}/${max_attempts}）：$*" >&2
+    attempt=$((attempt + 1))
+    sleep 5
+  done
+}
+
+normalize_site() {
+  local value="$1"
+  value="${value#http://}"
+  value="${value#https://}"
+  value="${value%/}"
+  if [[ -z "${value}" || "${value}" == */* || "${value}" == *\?* || "${value}" == *\#* || "${value}" == *:* ]]; then
+    echo "平台地址必须是纯域名或公网 IPv4，不能包含协议、端口或路径：${value}" >&2
+    return 1
+  fi
+  printf '%s' "${value}"
+}
+
+upsert_env() {
+  local key="$1" value="$2" temp_file
+  temp_file="$(mktemp)"
+  awk -v key="${key}" -v value="${value}" '
+    BEGIN { found = 0 }
+    index($0, key "=") == 1 {
+      if (!found) print key "=" value
+      found = 1
+      next
+    }
+    { print }
+    END { if (!found) print key "=" value }
+  ' "${ENV_FILE}" > "${temp_file}"
+  install -m 600 "${temp_file}" "${ENV_FILE}"
+  rm -f "${temp_file}"
+}
+
 if [[ "${EUID}" -ne 0 ]]; then
   echo "请使用 sudo 运行：sudo bash deploy/tencent/deploy.sh" >&2
   exit 1
 fi
 
-apt-get update
-DEBIAN_FRONTEND=noninteractive apt-get install -y ca-certificates curl git docker.io
-if ! docker compose version >/dev/null 2>&1; then
-  DEBIAN_FRONTEND=noninteractive apt-get install -y docker-compose-v2 || \
-    DEBIAN_FRONTEND=noninteractive apt-get install -y docker-compose-plugin
+if [[ "${MAPLE_SKIP_SYSTEM_SETUP:-0}" != "1" ]]; then
+  apt-get update
+  DEBIAN_FRONTEND=noninteractive apt-get install -y ca-certificates curl git openssl docker.io
+  if ! docker compose version >/dev/null 2>&1; then
+    DEBIAN_FRONTEND=noninteractive apt-get install -y docker-compose-v2 || \
+      DEBIAN_FRONTEND=noninteractive apt-get install -y docker-compose-plugin
+  fi
+  systemctl enable --now docker
 fi
-systemctl enable --now docker
 
-mkdir -p "$(dirname "${APP_DIR}")"
-if [[ -d "${APP_DIR}/.git" ]]; then
-  git -C "${APP_DIR}" fetch origin "${BRANCH}"
-  git -C "${APP_DIR}" checkout "${BRANCH}"
-  git -C "${APP_DIR}" pull --ff-only origin "${BRANCH}"
-else
-  git clone --branch "${BRANCH}" --single-branch "${REPO_URL}" "${APP_DIR}"
+if [[ "${MAPLE_SKIP_GIT_SYNC:-0}" != "1" ]]; then
+  mkdir -p "$(dirname "${APP_DIR}")"
+  if [[ -d "${APP_DIR}/.git" ]]; then
+    retry git -C "${APP_DIR}" fetch origin "${BRANCH}"
+    git -C "${APP_DIR}" checkout "${BRANCH}"
+    retry git -C "${APP_DIR}" pull --ff-only origin "${BRANCH}"
+  else
+    retry git clone --branch "${BRANCH}" --single-branch "${REPO_URL}" "${APP_DIR}"
+  fi
 fi
 
 DEPLOY_DIR="${APP_DIR}/deploy/tencent"
 ENV_FILE="${DEPLOY_DIR}/.env"
 if [[ ! -f "${ENV_FILE}" ]]; then
-  read -r -p "平台域名（已解析到本机公网 IP，例如 maple.example.com）：" MAPLE_DOMAIN_INPUT
+  MAPLE_DOMAIN_INPUT="${MAPLE_SITE_ADDRESS:-}"
+  if [[ -z "${MAPLE_DOMAIN_INPUT}" ]]; then
+    DETECTED_IP="$(curl -4 -fsS --max-time 10 https://api.ipify.org 2>/dev/null || true)"
+    read -r -p "平台公网 IP 或域名 [${DETECTED_IP}]：" MAPLE_DOMAIN_INPUT
+    MAPLE_DOMAIN_INPUT="${MAPLE_DOMAIN_INPUT:-${DETECTED_IP}}"
+  fi
+  MAPLE_DOMAIN_INPUT="$(normalize_site "${MAPLE_DOMAIN_INPUT}")"
   read -r -p "管理员教师账号：" MPT_TEACHER_USERNAME_INPUT
   read -r -s -p "管理员教师密码（至少 8 位）：" MPT_TEACHER_PASSWORD_INPUT
   echo
   read -r -s -p "火山方舟 API Key（可暂时留空）：" ARK_API_KEY_INPUT
   echo
-  if [[ -z "${MAPLE_DOMAIN_INPUT}" || -z "${MPT_TEACHER_USERNAME_INPUT}" || ${#MPT_TEACHER_PASSWORD_INPUT} -lt 8 ]]; then
-    echo "域名、教师账号和至少 8 位密码不能为空。" >&2
+  if [[ -z "${MPT_TEACHER_USERNAME_INPUT}" || ${#MPT_TEACHER_PASSWORD_INPUT} -lt 8 ]]; then
+    echo "教师账号和至少 8 位密码不能为空。" >&2
     exit 1
   fi
   umask 077
-  COOKIE_SECURE=1
-  MAPLE_SITE_ADDRESS="${MAPLE_DOMAIN_INPUT}"
-  # 公网 IP 通常通过 HTTP 访问；Secure Cookie 在 HTTP 下不会回传，
-  # 会表现为登录成功后又回到登录页。没有域名证书时关闭 Secure。
-  if [[ "${MAPLE_DOMAIN_INPUT}" == :* || "${MAPLE_DOMAIN_INPUT}" == http://* || "${MAPLE_DOMAIN_INPUT}" =~ ^https?://[0-9]+(\.[0-9]+){3}(:[0-9]+)?$ || "${MAPLE_DOMAIN_INPUT}" =~ ^[0-9]+(\.[0-9]+){3}(:[0-9]+)?$ ]]; then
-    COOKIE_SECURE=0
-  fi
-  # Caddy 会尝试为裸 IP 启用本地 HTTPS，并把 HTTP 重定向到浏览器不信任的
-  # 内部证书。裸 IP 部署必须显式使用 http://，域名部署仍保持自动 HTTPS。
-  if [[ "${MAPLE_DOMAIN_INPUT}" =~ ^[0-9]+(\.[0-9]+){3}(:[0-9]+)?$ ]]; then
-    MAPLE_SITE_ADDRESS="http://${MAPLE_DOMAIN_INPUT}"
-  fi
+  ACCOUNT_KEY="$(openssl rand -hex 32)"
   {
-    printf 'MAPLE_DOMAIN=%s\n' "${MAPLE_SITE_ADDRESS}"
+    printf 'MAPLE_DOMAIN=%s\n' "${MAPLE_DOMAIN_INPUT}"
+    printf 'MPT_ENV=production\nMPT_HOST=0.0.0.0\nMPT_PORT=8000\n'
     printf 'MPT_TEACHER_USERNAME=%s\n' "${MPT_TEACHER_USERNAME_INPUT}"
     printf 'MPT_TEACHER_PASSWORD=%s\n' "${MPT_TEACHER_PASSWORD_INPUT}"
     printf 'MPT_CLASS_NAME=默认班级\nMPT_GROUP_COUNT=3\n'
-    printf 'MPT_COOKIE_SECURE=%s\n' "${COOKIE_SECURE}"
+    printf 'MPT_COOKIE_SECURE=1\n'
+    printf 'MPT_ACCOUNT_ENCRYPTION_KEY=%s\n' "${ACCOUNT_KEY}"
     printf 'ARK_API_KEY=%s\n' "${ARK_API_KEY_INPUT}"
     printf 'ARK_TEXT_MODEL=doubao-seed-2-1-turbo-260628\n'
     printf 'ARK_VISION_MODEL=doubao-seed-2-1-turbo-260628\n'
@@ -67,10 +110,29 @@ if [[ ! -f "${ENV_FILE}" ]]; then
     printf 'MPT_RESET_DATA_ONCE=\n'
   } > "${ENV_FILE}"
   chmod 600 "${ENV_FILE}"
+else
+  # Migrate older deployments that stored http://IP and disabled Secure
+  # cookies. Those values caused redirects/session loss on different devices.
+  CURRENT_SITE="$(awk -F= '$1 == "MAPLE_DOMAIN" { sub(/^[^=]*=/, ""); print; exit }' "${ENV_FILE}")"
+  CURRENT_SITE="${MAPLE_SITE_ADDRESS:-${CURRENT_SITE}}"
+  CURRENT_SITE="$(normalize_site "${CURRENT_SITE}")"
+  upsert_env "MAPLE_DOMAIN" "${CURRENT_SITE}"
+  upsert_env "MPT_COOKIE_SECURE" "1"
 fi
 
 cd "${DEPLOY_DIR}"
 docker compose config --quiet
-docker compose up -d --build
+retry docker compose pull caddy
+docker compose up -d --build --remove-orphans
 docker compose ps
-echo "部署已启动。HTTPS 证书签发通常需要域名解析生效并开放 80/443 端口。"
+
+MAPLE_DOMAIN="$(awk -F= '$1 == "MAPLE_DOMAIN" { sub(/^[^=]*=/, ""); print; exit }' "${ENV_FILE}")"
+echo "等待公开可信的 HTTPS 证书签发……"
+if curl --resolve "${MAPLE_DOMAIN}:443:127.0.0.1" --retry 18 --retry-all-errors --retry-delay 5 \
+  -fsS "https://${MAPLE_DOMAIN}/api/health" >/dev/null; then
+  echo "部署完成：https://${MAPLE_DOMAIN}/"
+else
+  echo "服务已启动，但 HTTPS 证书尚未签发。请确认腾讯云防火墙已开放 IPv4 TCP 80、443。" >&2
+  echo "诊断命令：cd ${DEPLOY_DIR} && docker compose logs --tail=120 caddy" >&2
+  exit 1
+fi

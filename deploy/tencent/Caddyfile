@@ -1,4 +1,19 @@
+{
+    # Some clients omit SNI when the host is an IP address. Supplying a
+    # default keeps the public-IP certificate usable across browsers/devices.
+    default_sni {$MAPLE_DOMAIN}
+}
+
 {$MAPLE_DOMAIN} {
+    # Let's Encrypt issues publicly trusted IP certificates through its
+    # short-lived ACME profile. Caddy renews them automatically.
+    tls {
+        issuer acme {
+            dir https://acme-v02.api.letsencrypt.org/directory
+            profile shortlived
+        }
+    }
+
     encode zstd gzip
     reverse_proxy app:8000
 

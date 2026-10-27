@@ -98,7 +98,15 @@ Railway 会自动注入 `PORT`，应用会优先使用该端口；部署时选�
 
 ### 腾讯云
 
-广州轻量应用服务器 4核4GB 可承载约14台课堂设备。仓库提供 Docker Compose、HTTPS 反向代理、一键部署、更新和 COS 备份脚本，完整步骤见 [腾讯云部署指南](docs/腾讯云部署.md)。
+广州轻量应用服务器 4核4GB 可承载约14台课堂设备。没有域名时，首次部署脚本会自动克隆仓库，并为公网 IPv4 申请和续期浏览器可信的 HTTPS 证书；电脑、平板和手机可直接访问 `https://公网IP/`，无需修改浏览器设置。
+
+```bash
+curl -fsSL --retry 5 \
+  https://raw.githubusercontent.com/Sean6869/math-project-collaboration-agent/main/deploy/tencent/first-deploy-ip.sh \
+  | sudo bash -s -- 你的公网IP
+```
+
+后续更新运行 `sudo bash /opt/maple/app/deploy/tencent/update.sh`。服务器防火墙只需放行 IPv4 TCP 22、80、443，不要开放应用内部的 8000 端口。完整步骤见 [腾讯云部署指南](docs/腾讯云部署.md)。
 
 ## 验证
 
