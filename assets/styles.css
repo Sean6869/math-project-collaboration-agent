@@ -598,3 +598,83 @@ input[data-camera-ready][hidden]{display:none!important}
 .project-picker .project-create-fields{grid-template-columns:repeat(4,minmax(0,1fr))}.project-picker .project-name-field{grid-column:1/-1}.project-picker .project-choice-copy small{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 @media(max-width:1050px) and (min-width:801px){.project-picker .project-create-fields{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media(max-width:800px){.project-picker .project-create-fields{grid-template-columns:1fr}.project-picker .project-name-field{grid-column:auto}}
+
+/* Responsive portal sizing: keep the picker usable on short-height tablets and phones.
+   The shell may scroll only as a final safety net; the project list remains the primary
+   scroll region so a long list never pushes the create form out of view. */
+.auth-shell.auth-centered{min-height:100dvh;overflow:auto}
+.auth-centered .auth-main{display:flex;align-items:flex-start;justify-content:center;box-sizing:border-box;min-height:100dvh;padding:clamp(104px,11vh,144px) clamp(12px,3vw,48px) 28px}
+.auth-card.project-picker-card:has(.project-picker){box-sizing:border-box;width:min(760px,100%);max-width:100%;}
+.project-picker{min-width:0}
+.project-picker .project-choice-list{box-sizing:border-box;width:100%;max-height:min(184px,26dvh);overflow-y:auto;overflow-x:hidden;overscroll-behavior:contain;scrollbar-gutter:stable}
+.project-picker .project-choice-row{min-width:0}
+.project-picker .project-choice{min-width:0}
+.project-picker .project-choice-copy{min-width:0}
+.project-picker .project-create-fields{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}
+.project-picker .project-create-fields .field{min-width:0}
+.project-picker .project-create input{width:100%;box-sizing:border-box}
+
+@media (max-width:1100px){
+  .auth-centered-brand{left:16px;top:16px;max-width:calc(100vw - 32px);padding-inline:12px;gap:10px}
+  .auth-centered-brand img{width:112px}
+  .auth-brand-copy{min-width:0}
+  .auth-brand-copy strong{font-size:17px;letter-spacing:.04em}
+  .auth-brand-copy small{font-size:8px;letter-spacing:.03em;overflow:hidden;text-overflow:ellipsis}
+  .auth-card.project-picker-card:has(.project-picker){width:min(760px,calc(100% - 16px));padding:20px}
+  .project-picker-head{gap:12px}
+  .project-picker-head h2{font-size:clamp(25px,3.2vw,32px)}
+  .project-picker .project-create-fields{grid-template-columns:repeat(2,minmax(0,1fr))}
+}
+
+@media (max-height:900px) and (min-width:801px){
+  .auth-centered .auth-main{padding-top:96px;padding-bottom:16px}
+  .auth-card.project-picker-card:has(.project-picker){max-height:calc(100dvh - 112px);overflow-y:auto;scrollbar-gutter:stable}
+  .project-picker .project-choice-list{max-height:min(168px,24dvh);margin-block:12px}
+  .project-picker .project-choice{min-height:68px;padding-block:6px}
+  .project-picker .project-create{padding-top:12px}
+  .project-picker .project-actions{margin-top:12px}
+  .project-picker .project-picker-footer{padding-top:12px}
+}
+
+@media (max-width:800px){
+  .auth-shell.auth-centered{overflow:auto}
+  .auth-centered .auth-main{min-height:100svh;padding:96px 12px 18px}
+  .auth-centered-brand{top:10px;left:50%;width:calc(100% - 24px);max-width:none;min-height:58px;padding:7px 10px;gap:8px;transform:translateX(-50%)}
+  .auth-centered-brand:hover{transform:translateX(-50%) translateY(-3px)}
+  .auth-centered-brand:active{transform:translateX(-50%) scaleX(1.03) scaleY(.94)}
+  .auth-centered-brand img{width:88px;flex:0 0 auto}
+  .auth-brand-copy{gap:3px;overflow:hidden}
+  .auth-brand-copy strong{font-size:clamp(14px,4vw,17px);white-space:nowrap}
+  .auth-brand-copy small{font-size:7px;white-space:nowrap}
+  .auth-card.project-picker-card:has(.project-picker){width:100%;padding:18px;border-radius:26px}
+  .project-picker-head{align-items:flex-start;gap:10px}
+  .project-picker-symbol{flex-basis:46px;width:46px;height:46px;border-radius:16px;font-size:20px}
+  .project-picker-head h2{font-size:24px}
+  .project-picker-head p{font-size:13px;line-height:1.4}
+  .project-picker .project-choice-list{max-height:184px;margin-block:12px;padding-right:5px}
+  .project-picker .project-choice{grid-template-columns:40px minmax(0,1fr);gap:8px;padding:8px 10px}
+  .project-picker .project-choice-action{grid-column:2;justify-self:start}
+  .project-picker .project-create{display:block;padding-top:12px}
+  .project-picker .project-create-fields{grid-template-columns:1fr;gap:9px}
+  .project-picker .project-name-field{grid-column:auto}
+  .project-picker .project-actions{display:flex;flex-wrap:wrap;justify-content:stretch;gap:8px;margin-top:12px}
+  .project-picker .project-actions .btn{flex:1 1 140px}
+  .project-picker-footer{align-items:stretch;flex-direction:column;gap:10px}
+  .project-picker-footer .btn{width:100%}
+}
+
+@media (max-width:480px), (max-height:680px){
+  .auth-centered .auth-main{padding:82px 8px 12px}
+  .auth-centered-brand{top:7px;width:calc(100% - 16px);min-height:52px;border-radius:22px}
+  .auth-centered-brand img{width:74px}
+  .auth-brand-divider{margin-block:2px}
+  .auth-brand-copy strong{font-size:14px}
+  .auth-brand-copy small{font-size:6px}
+  .auth-card.project-picker-card:has(.project-picker){padding:14px;border-radius:22px}
+  .project-picker .project-choice-list{max-height:170px}
+  .project-picker .project-choice{min-height:62px;border-radius:18px}
+  .project-picker .project-choice-copy small{font-size:12px}
+  .project-picker .project-choice-copy strong{font-size:14px}
+  .project-picker .project-create input{min-height:44px}
+  .project-picker .project-actions .btn,.project-picker-footer .btn{min-height:44px}
+}
