@@ -29,7 +29,7 @@ class TencentDeploymentTests(unittest.TestCase):
         self.assertIn('http://127.0.0.1:8000/api/health', script)
         self.assertIn("openssl rand -base64 32", script)
         self.assertIn('DESMOS_API_KEY=%s', script)
-        self.assertIn('缺少 DESMOS_API_KEY', script)
+        self.assertIn('for required_key in ARK_API_KEY DESMOS_API_KEY', script)
 
     def test_first_deploy_and_update_share_the_same_entrypoint(self):
         first = self.read("deploy/tencent/first-deploy-ip.sh")

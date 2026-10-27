@@ -86,11 +86,11 @@ if [[ ! -f "${ENV_FILE}" ]]; then
   read -r -p "管理员教师账号：" MPT_TEACHER_USERNAME_INPUT
   read -r -s -p "管理员教师密码（至少 8 位）：" MPT_TEACHER_PASSWORD_INPUT
   echo
-  read -r -s -p "火山方舟 API Key（可暂时留空）：" ARK_API_KEY_INPUT
+  read -r -s -p "火山方舟 API Key：" ARK_API_KEY_INPUT
   echo
   read -r -p "Desmos API Key（数学工具必需）：" DESMOS_API_KEY_INPUT
-  if [[ -z "${MPT_TEACHER_USERNAME_INPUT}" || ${#MPT_TEACHER_PASSWORD_INPUT} -lt 8 || -z "${DESMOS_API_KEY_INPUT}" ]]; then
-    echo "教师账号、至少 8 位密码和 Desmos API Key 不能为空。" >&2
+  if [[ -z "${MPT_TEACHER_USERNAME_INPUT}" || ${#MPT_TEACHER_PASSWORD_INPUT} -lt 8 || -z "${ARK_API_KEY_INPUT}" || -z "${DESMOS_API_KEY_INPUT}" ]]; then
+    echo "教师账号、至少 8 位密码、火山方舟 API Key 和 Desmos API Key 均不能为空。" >&2
     exit 1
   fi
   umask 077
@@ -109,7 +109,6 @@ if [[ ! -f "${ENV_FILE}" ]]; then
     printf 'ARK_VISION_MODEL=doubao-seed-2-1-turbo-260628\n'
     printf 'ARK_PLAN_MODEL=doubao-seed-2-1-turbo-260628\n'
     printf 'ARK_IMAGE_MODEL=doubao-seedream-5-0-260128\n'
-    printf 'MPT_RESET_DATA_ONCE=\n'
   } > "${ENV_FILE}"
   chmod 600 "${ENV_FILE}"
 else
@@ -120,10 +119,12 @@ else
   upsert_env "MPT_COOKIE_SECURE" "0"
 fi
 
-if ! awk -F= '$1 == "DESMOS_API_KEY" && $2 != "" { found = 1 } END { exit !found }' "${ENV_FILE}"; then
-  echo "缺少 DESMOS_API_KEY，请编辑 ${ENV_FILE} 并填写后重新运行部署脚本。" >&2
-  exit 1
-fi
+for required_key in ARK_API_KEY DESMOS_API_KEY; do
+  if ! awk -F= -v key="${required_key}" '$1 == key && $2 != "" { found = 1 } END { exit !found }' "${ENV_FILE}"; then
+    echo "缺少 ${required_key}，请编辑 ${ENV_FILE} 并填写后重新运行部署脚本。" >&2
+    exit 1
+  fi
+done
 
 cd "${DEPLOY_DIR}"
 docker compose config --quiet
