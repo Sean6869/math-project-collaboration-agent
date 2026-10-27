@@ -626,6 +626,15 @@ input[data-camera-ready][hidden]{display:none!important}
   .project-picker .project-create-fields{grid-template-columns:repeat(2,minmax(0,1fr))}
 }
 
+/* 2200×1440 class tablets commonly expose a ~1100–1280 CSS-pixel viewport. */
+@media (max-width:1280px) and (min-width:1101px){
+  .auth-centered-brand{left:16px;top:16px;width:min(460px,calc(100vw - 32px));max-width:none;padding-inline:12px;gap:10px}
+  .auth-centered-brand img{width:108px}
+  .auth-brand-copy{min-width:0}
+  .auth-brand-copy strong{font-size:17px;letter-spacing:.04em}
+  .auth-brand-copy small{font-size:8px;letter-spacing:.03em;overflow:hidden;text-overflow:ellipsis}
+}
+
 @media (max-height:900px) and (min-width:801px){
   .auth-centered .auth-main{padding-top:96px;padding-bottom:16px}
   .auth-card.project-picker-card:has(.project-picker){max-height:calc(100dvh - 112px);overflow-y:auto;scrollbar-gutter:stable}
