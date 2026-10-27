@@ -692,3 +692,4 @@ input[data-camera-ready][hidden]{display:none!important}
 
 @media (min-width:801px){.auth-centered .auth-main:has(.project-picker-card){padding-top:max(128px,11vh)}.auth-centered-brand{max-width:min(420px,calc(100vw - 32px))}.auth-centered-brand .auth-brand-copy{min-width:0;overflow:hidden}.auth-centered-brand .auth-brand-copy small{overflow:hidden;text-overflow:ellipsis}}
 @media (max-width:800px){.auth-centered .auth-main:has(.auth-login-card){padding:96px 12px 18px}.auth-login-card{min-height:0}}
+.student-group-highlight{color:#5b49a4;font-weight:800;font-size:1.08em}

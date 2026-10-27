@@ -115,6 +115,25 @@ class ClassroomTest(unittest.TestCase):
         self.assertEqual(self.command('control', {'group': 1, 'action': 'hold'}, base=old)[0], 200)
         self.assertEqual(self.command('control', {'group': 1, 'action': 'next'}, base=old)[0], 409)
 
+    def test_group_rollback_without_reason_keeps_submitted_history(self):
+        app.state_put('class', {'currentStage': 2, 'groupCount': 3, 'groupControls': {'1': {'stage': 2}}})
+        app.state_put('group:1', {'stageSubmitted': {'2': True}, 'workspace': {'model': '原方案'}})
+        status, _ = self.command('control', {'group': 1, 'action': 'back'})
+        self.assertEqual(status, 200)
+        saved = app.state_get('group:1')
+        self.assertEqual(saved['submissionHistory'][0]['reason'], '')
+        self.assertEqual(saved['submissionHistory'][0]['workspace']['model'], '原方案')
+
+    def test_class_rewind_preserves_individual_group_progress(self):
+        app.state_put('class', {'currentStage': 3, 'groupCount': 3, 'groupControls': {'2': {'stage': 2, 'hold': True}, '3': {'stage': 4}}})
+        app.state_put('group:1', {'workspace': {'model': '原方案'}})
+        self.assertEqual(self.command('rewind', {})[0], 200)
+        self.assertEqual(self.state(self.teacher)['classTargetStage'], 2)
+        self.assertEqual(self.state(self.login(1))['currentStage'], 2)
+        self.assertEqual(self.state(self.login(2))['currentStage'], 2)
+        self.assertEqual(self.state(self.login(3))['currentStage'], 4)
+        self.assertEqual(app.state_get('group:1')['workspace']['model'], '原方案')
+
     def test_ai_input_and_output_filter_including_stream_and_group_switch(self):
         with mock.patch.object(app, 'ark_free_chat') as upstream:
             for _ in range(3):

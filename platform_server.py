@@ -1638,12 +1638,12 @@ def ark_free_messages(state: dict, group: int, prompt: str, history: list[dict])
         "你可以回答项目是什么、接下来做什么，解释概念、检查思路和书写数学表达，但不要替学生完成未经讨论的整个项目，"
         "不要伪造数据；缺少信息时明确列出需要补充的内容。"
         "回答项目知识与数学内容时优先使用下方知识库摘录；使用后在相关段落末尾以[文件名]标注来源。"
-        "知识库没有支持某项结论时明确说明依据不足，不得凭空补写教材或课标内容。"
+        "知识库没有支持某项结论时，不得凭空补写教材或课标内容；通用数学知识可据实解释。"
         f"教师当前只开放到阶段{current_stage}。若学生询问平台操作，只能引用当前阶段路径：{'；'.join(STAGE_HINT_ROUTES[current_stage])}。"
         f"不得建议进入{stage_boundary}的页面，也不得使用尚未开放页面的名称。"
         + MATH_FORMAT_RULE
         + FREE_AI_STYLE_RULE
-        + "回答使用清晰的Markdown。默认只给一个短问题或一个检查点，80字以内。"
+        + "回答使用清晰的Markdown，适当说明与当前项目的联系；不确定时不要编造项目细节。"
         f"当前项目上下文：{free_ai_context(state, group)}"
         f"\n本次检索到的知识库来源：{json.dumps(sources, ensure_ascii=False)}"
         f"\n知识库摘录：\n{knowledge or '本次没有检索到可用正文摘录。'}"
@@ -2909,7 +2909,7 @@ class Handler(SimpleHTTPRequestHandler):
             self.json_response({"error": "请填写这次修改方案的原因。"}, HTTPStatus.BAD_REQUEST)
             return
         ensure_model_version(candidate, utc_now())
-        for key in ("thoughtHistory", "comparisonHistory", "productHistory", "roleAssignments", "evidence"):
+        for key in ("thoughtHistory", "comparisonHistory", "productHistory", "roleAssignments", "evidence", "events"):
             incoming[key] = candidate.get(key, [])
         incoming["versions"] = candidate.get("versions", [])
         requested = incoming.get("stageSubmitted", {}) if isinstance(incoming.get("stageSubmitted"), dict) else {}
@@ -3151,6 +3151,11 @@ class Handler(SimpleHTTPRequestHandler):
                 if not accounts.can_project(sys.modules[__name__], session, project_id):
                     self.json_response({"error": "无权进入这个项目。"}, HTTPStatus.FORBIDDEN)
                     return
+                if session['role'] == 'student':
+                    project_state = db.execute('SELECT data FROM states WHERE scope=?', (state_scope('class', project_id),)).fetchone()
+                    if not project_state or json.loads(project_state['data']).get('published') is False:
+                        self.json_response({"error": "项目尚未发布。"}, HTTPStatus.FORBIDDEN)
+                        return
             else:
                 raise ValueError("项目操作无效")
             if deleted_project is None:

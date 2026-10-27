@@ -168,6 +168,16 @@ def immutable_records(app, old, new, actor):
             raise ValueError('附件不存在或不属于本组。')
     for name in ('thoughtHistory', 'roleAssignments', 'comparisonHistory', 'productHistory'):
         new[name] = copy.deepcopy(old.get(name, []))
+    events = copy.deepcopy(old.get('events', []))
+    seen_events = {json.dumps(item, sort_keys=True, ensure_ascii=False) for item in events}
+    for item in new.get('events', []):
+        if not isinstance(item, dict):
+            continue
+        key = json.dumps(item, sort_keys=True, ensure_ascii=False)
+        if key not in seen_events:
+            events.append(copy.deepcopy(item))
+            seen_events.add(key)
+    new['events'] = events
     before = old.get('firstThoughts', {})
     after = new.get('firstThoughts', before)
     for member, text in after.items():
@@ -233,6 +243,13 @@ def export_records(app, rows):
         records.append({'id': row['id'], 'ts': row['ts'], 'group_no': f"G{row['group_no']:02d}" if row['group_no'] else 'CLASS',
                         'event_type': row['event_type'], 'stage': row['stage'], 'data': ''})
     for number, state in states:
+        for field, kind, phase in [('thoughtHistory', 'thought_snapshot', 2), ('comparisonHistory', 'comparison_snapshot', 3), ('roleAssignments', 'roles_snapshot', 1), ('productHistory', 'product_revision', 5)]:
+            for index, item in enumerate(state.get(field, [])):
+                detail = copy.deepcopy(item)
+                detail.pop('teacher', None)
+                records.append({'id': f'G{number:02d}-{field}-{item.get("id", index)}', 'ts': item.get('time', ''),
+                                'group_no': f'G{number:02d}', 'stage': item.get('stage') or item.get('comparison', {}).get('stage') or phase,
+                                'event_type': kind, 'data': scrub(json.dumps(detail, ensure_ascii=False))})
         for version in app.model_versions(state):
             detail = {key: version.get(key, '') for key in ('v', 'model', 'variables', 'relation', 'constraints', 'reason', 'fileIds')}
             records.append({'id': f"G{number:02d}-{version['v']}", 'ts': version.get('time', ''), 'group_no': f'G{number:02d}',
@@ -290,6 +307,9 @@ def route(app, handler, method, path):
             data = app.state_get(f'group:{group}')
             action = path.rsplit('/', 1)[-1]
             result = {}
+            if action == 'notifications' and teacher and method == 'GET':
+                handler.json_response({'requests': [{'id': str(item.get('id', '')), 'group': item.get('group')} for item in state.get('queue', []) if not item.get('resolved')]})
+                return True
             if action == 'config' and teacher and method == 'POST':
                 check_revision(state, body.get('revision'))
                 config = state.setdefault('teacherConfig', {})
@@ -312,7 +332,7 @@ def route(app, handler, method, path):
                     state['taskBrief'].update(source=source_fingerprint(merged), confirmed=body.get('confirm') is True,
                                               teacher=session['teacherId'], time=app.utc_now())
                 app.state_put('class', state)
-            elif action in ('control', 'advance') and teacher and method == 'POST':
+            elif action in ('control', 'advance', 'rewind') and teacher and method == 'POST':
                 check_revision(state, body.get('revision'))
                 controls = state.setdefault('groupControls', {})
                 command = body.get('action')
@@ -334,20 +354,27 @@ def route(app, handler, method, path):
                             row['stage'] = old_stage
                     state['currentStage'] = before + 1
                     result['advanced'] = progressed
+                elif action == 'rewind':
+                    before = app.class_current_stage(state)
+                    if before <= 1:
+                        raise ValueError('已到第一个阶段。')
+                    for number in range(1, app.group_count() + 1):
+                        old_stage = effective_stage(state, number)
+                        row = controls.setdefault(str(number), {})
+                        row['stage'] = before - 1 if old_stage == before and not row.get('hold') else old_stage
+                    state['currentStage'] = before - 1
                 elif command == 'hold':
                     item.update(stage=current, hold=True)
                 elif command == 'next':
                     item.update(stage=min(5, current + 1), hold=False)
                 elif command == 'back':
-                    if not str(body.get('reason', '')).strip():
-                        raise ValueError('请填写回退原因。')
                     target_stage = max(1, current - 1)
                     submissions = data.get('stageSubmitted', {})
                     history = data.setdefault('submissionHistory', [])
                     for stage in range(target_stage, 6):
                         if submissions.get(str(stage), submissions.get(stage)):
                             history.append({'id': secrets.token_hex(8), 'stage': stage, 'reopenedAt': app.utc_now(),
-                                            'reason': str(body['reason'])[:800], 'workspace': copy.deepcopy(data.get('workspace', {})),
+                                            'reason': str(body.get('reason', ''))[:800], 'workspace': copy.deepcopy(data.get('workspace', {})),
                                             'product': copy.deepcopy(data.get('product', {})), 'version': (data.get('versions') or [{}])[-1].get('v', '')})
                         submissions[str(stage)] = False
                         submissions.pop(stage, None)
