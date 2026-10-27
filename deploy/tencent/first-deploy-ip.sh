@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-# 腾讯云 Ubuntu 首次部署。脚本会克隆仓库，并为公网 IP 配置由
-# Let's Encrypt 签发、浏览器直接信任且自动续期的 HTTPS 证书。
+# 腾讯云 Ubuntu 首次部署，使用 HTTP 提供服务。
 # 用法：curl -fsSL <本脚本 raw URL> | sudo bash -s -- 175.178.183.31
 
 APP_DIR="${MAPLE_APP_DIR:-/opt/maple/app}"

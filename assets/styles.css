@@ -402,6 +402,7 @@ html,body{color:var(--ink);background:#f5effb;background-image:linear-gradient(1
 .auth-login-card .auth-role-switch{position:relative;isolation:isolate;display:grid;grid-template-columns:1fr 1fr;min-height:56px;padding:4px;border:0;border-radius:24px;background:linear-gradient(145deg,#ebe6f4,#f8f4fc);box-shadow:inset 4px 4px 8px rgba(52,38,78,.1),inset -4px -4px 8px rgba(255,255,255,.9)}
 .auth-login-card .auth-role-switch::before{content:"";position:absolute;z-index:-1;top:4px;bottom:4px;left:4px;width:calc(50% - 4px);border-radius:20px;background:linear-gradient(145deg,#fdfcff,#f3eafd);box-shadow:6px 6px 14px rgba(66,48,101,.1),inset 3px 3px 6px rgba(255,255,255,.82),inset -2px -2px 4px rgba(64,45,94,.06);transition:transform 300ms cubic-bezier(.34,1.56,.64,1)}
 .auth-login-card[data-auth-role="teacher"] .auth-role-switch::before{transform:translateX(100%)}
+.auth-login-card .auth-role-switch:has([data-auth-role="teacher"].active)::before{transform:translateX(100%)}
 .auth-login-card .auth-role-tab{z-index:1;border:0;background:transparent!important;box-shadow:none!important;color:#756b87;font-weight:800;transition:color 300ms cubic-bezier(.34,1.56,.64,1),transform 300ms cubic-bezier(.34,1.56,.64,1)}
 .auth-login-card .auth-role-tab.active{color:#58439f}
 .auth-login-card .auth-role-tab:active{transform:scaleX(1.05) scaleY(.9)}
@@ -593,7 +594,7 @@ input[data-camera-ready][hidden]{display:none!important}
 .desmos-tool-tab{min-width:0;min-height:44px;white-space:normal;overflow-wrap:anywhere;line-height:1.45;padding:10px 8px}
 @media(max-width:760px){.desmos-tool-switch{grid-template-columns:repeat(2,minmax(0,1fr))}}
 
-.account-management{align-items:start}.account-management .field input,.account-management .field select{min-width:0}.class-entry-list{display:grid;gap:12px;margin-top:16px}.account-management form>.toolbar{justify-content:flex-end}
+.account-management{align-items:stretch}.account-management .field input,.account-management .field select{min-width:0}.class-entry-list{display:grid;gap:12px;margin-top:16px}.account-management form>.toolbar{justify-content:flex-end}
  .teacher-login-code{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-top:14px;padding:12px 16px;border:1px solid rgba(116,91,190,.2);border-radius:14px;background:rgba(246,241,255,.8);color:#5d5680}.teacher-login-code strong{font-size:1.4rem;letter-spacing:.18em;color:#6c56b5}.teacher-login-code span{font-size:.88rem;color:#817b9c}
 .project-picker .project-create-fields{grid-template-columns:repeat(4,minmax(0,1fr))}.project-picker .project-name-field{grid-column:1/-1}.project-picker .project-choice-copy small{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 @media(max-width:1050px) and (min-width:801px){.project-picker .project-create-fields{grid-template-columns:repeat(2,minmax(0,1fr))}}
@@ -604,6 +605,7 @@ input[data-camera-ready][hidden]{display:none!important}
    scroll region so a long list never pushes the create form out of view. */
 .auth-shell.auth-centered{min-height:100dvh;overflow:auto}
 .auth-centered .auth-main{display:flex;align-items:flex-start;justify-content:center;box-sizing:border-box;min-height:100dvh;padding:clamp(104px,11vh,144px) clamp(12px,3vw,48px) 28px}
+.auth-centered .auth-main:has(.auth-login-card){align-items:center;padding-block:112px 32px}
 .auth-card.project-picker-card:has(.project-picker){box-sizing:border-box;width:min(760px,100%);max-width:100%;}
 .project-picker{min-width:0}
 .project-picker .project-choice-list{box-sizing:border-box;width:100%;max-height:min(184px,26dvh);overflow-y:auto;overflow-x:hidden;overscroll-behavior:contain;scrollbar-gutter:stable}
@@ -687,3 +689,6 @@ input[data-camera-ready][hidden]{display:none!important}
   .project-picker .project-create input{min-height:44px}
   .project-picker .project-actions .btn,.project-picker-footer .btn{min-height:44px}
 }
+
+@media (min-width:801px){.auth-centered .auth-main:has(.project-picker-card){padding-top:max(128px,11vh)}.auth-centered-brand{max-width:min(420px,calc(100vw - 32px))}.auth-centered-brand .auth-brand-copy{min-width:0;overflow:hidden}.auth-centered-brand .auth-brand-copy small{overflow:hidden;text-overflow:ellipsis}}
+@media (max-width:800px){.auth-centered .auth-main:has(.auth-login-card){padding:96px 12px 18px}.auth-login-card{min-height:0}}

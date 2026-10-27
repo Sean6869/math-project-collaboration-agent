@@ -24,25 +24,15 @@ services:
           memory: 2304M
 
   caddy:
-    # Caddy 2.11+ supports ACME profiles, required for Let's Encrypt's
-    # short-lived, publicly trusted IP-address certificates.
     image: caddy:2.11.7-alpine
     restart: unless-stopped
     depends_on:
       app:
         condition: service_healthy
-    environment:
-      MAPLE_DOMAIN: ${MAPLE_DOMAIN}
     ports:
       - "80:80"
-      - "443:443"
-      - "443:443/udp"
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
-      - caddy_data:/data
-      - caddy_config:/config
 
 volumes:
   maple_data:
-  caddy_data:
-  caddy_config:

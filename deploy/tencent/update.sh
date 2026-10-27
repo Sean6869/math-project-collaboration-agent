@@ -24,8 +24,7 @@ retry git -C "${APP_DIR}" fetch origin "${BRANCH}"
 git -C "${APP_DIR}" checkout "${BRANCH}"
 retry git -C "${APP_DIR}" pull --ff-only origin "${BRANCH}"
 
-# 更新与首次部署共用同一套环境迁移、Caddy 版本、HTTPS 验证和启动逻辑，
-# 避免更新后重新出现 http://IP、非安全 Cookie 或本地证书配置。
+# 更新与首次部署共用 HTTP 配置和启动逻辑。
 export MAPLE_APP_DIR="${APP_DIR}"
 export MAPLE_BRANCH="${BRANCH}"
 export MAPLE_SKIP_SYSTEM_SETUP=1

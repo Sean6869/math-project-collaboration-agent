@@ -93,14 +93,14 @@ if [[ ! -f "${ENV_FILE}" ]]; then
     exit 1
   fi
   umask 077
-  ACCOUNT_KEY="$(openssl rand -hex 32)"
+  ACCOUNT_KEY="$(openssl rand -base64 32 | tr '+/' '-_')"
   {
     printf 'MAPLE_DOMAIN=%s\n' "${MAPLE_DOMAIN_INPUT}"
     printf 'MPT_ENV=production\nMPT_HOST=0.0.0.0\nMPT_PORT=8000\n'
     printf 'MPT_TEACHER_USERNAME=%s\n' "${MPT_TEACHER_USERNAME_INPUT}"
     printf 'MPT_TEACHER_PASSWORD=%s\n' "${MPT_TEACHER_PASSWORD_INPUT}"
     printf 'MPT_CLASS_NAME=默认班级\nMPT_GROUP_COUNT=3\n'
-    printf 'MPT_COOKIE_SECURE=1\n'
+    printf 'MPT_COOKIE_SECURE=0\n'
     printf 'MPT_ACCOUNT_ENCRYPTION_KEY=%s\n' "${ACCOUNT_KEY}"
     printf 'ARK_API_KEY=%s\n' "${ARK_API_KEY_INPUT}"
     printf 'ARK_TEXT_MODEL=doubao-seed-2-1-turbo-260628\n'
@@ -111,13 +111,11 @@ if [[ ! -f "${ENV_FILE}" ]]; then
   } > "${ENV_FILE}"
   chmod 600 "${ENV_FILE}"
 else
-  # Migrate older deployments that stored http://IP and disabled Secure
-  # cookies. Those values caused redirects/session loss on different devices.
   CURRENT_SITE="$(awk -F= '$1 == "MAPLE_DOMAIN" { sub(/^[^=]*=/, ""); print; exit }' "${ENV_FILE}")"
   CURRENT_SITE="${MAPLE_SITE_ADDRESS:-${CURRENT_SITE}}"
   CURRENT_SITE="$(normalize_site "${CURRENT_SITE}")"
   upsert_env "MAPLE_DOMAIN" "${CURRENT_SITE}"
-  upsert_env "MPT_COOKIE_SECURE" "1"
+  upsert_env "MPT_COOKIE_SECURE" "0"
 fi
 
 cd "${DEPLOY_DIR}"
@@ -127,12 +125,11 @@ docker compose up -d --build --remove-orphans
 docker compose ps
 
 MAPLE_DOMAIN="$(awk -F= '$1 == "MAPLE_DOMAIN" { sub(/^[^=]*=/, ""); print; exit }' "${ENV_FILE}")"
-echo "等待公开可信的 HTTPS 证书签发……"
-if curl --resolve "${MAPLE_DOMAIN}:443:127.0.0.1" --retry 18 --retry-all-errors --retry-delay 5 \
-  -fsS "https://${MAPLE_DOMAIN}/api/health" >/dev/null; then
-  echo "部署完成：https://${MAPLE_DOMAIN}/"
+if curl --retry 12 --retry-all-errors --retry-delay 5 \
+  -fsS "http://127.0.0.1/api/health" >/dev/null; then
+  echo "部署完成：http://${MAPLE_DOMAIN}/"
 else
-  echo "服务已启动，但 HTTPS 证书尚未签发。请确认腾讯云防火墙已开放 IPv4 TCP 80、443。" >&2
+  echo "服务健康检查未通过，请检查容器日志。" >&2
   echo "诊断命令：cd ${DEPLOY_DIR} && docker compose logs --tail=120 caddy" >&2
   exit 1
 fi
