@@ -126,8 +126,8 @@ docker compose ps
 
 MAPLE_DOMAIN="$(awk -F= '$1 == "MAPLE_DOMAIN" { sub(/^[^=]*=/, ""); print; exit }' "${ENV_FILE}")"
 if curl --retry 12 --retry-all-errors --retry-delay 5 \
-  -fsS "http://127.0.0.1/api/health" >/dev/null; then
-  echo "部署完成：http://${MAPLE_DOMAIN}/"
+  -fsS "http://127.0.0.1:8000/api/health" >/dev/null; then
+  echo "部署完成：http://${MAPLE_DOMAIN}:8000/"
 else
   echo "服务健康检查未通过，请检查容器日志。" >&2
   echo "诊断命令：cd ${DEPLOY_DIR} && docker compose logs --tail=120 caddy" >&2
