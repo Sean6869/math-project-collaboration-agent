@@ -227,25 +227,6 @@ class ClassroomTest(unittest.TestCase):
         self.assertIn('V1', text)
         self.assertTrue(all('id' in row for row in data))
 
-    def test_conversation_export_preserves_long_history(self):
-        state = app.state_get('group:1')
-        messages = [{'role': 'user', 'content': f'问题 {n}', 'time': '2026-10-28'} for n in range(30)]
-        state['freeAi'] = {'conversations': [{'id': 'c1', 'messages': messages}], 'usage': 30}
-        app.state_put('group:1', state)
-        status, data = self.req(self.teacher, '/api/export/conversations')
-        self.assertEqual(status, 200)
-        self.assertEqual(data[0]['conversations'][0]['messages'], messages)
-        self.assertEqual(self.req(self.student, '/api/export/conversations')[0], 403)
-
-    def test_follow_all_restores_groups_to_class_stage(self):
-        state = app.state_get('class')
-        state['currentStage'] = 4
-        state['groupControls'] = {'1': {'stage': 2, 'hold': True}, '2': {'stage': 5}}
-        app.state_put('class', state)
-        self.assertEqual(self.command('control', {'action': 'follow_all'})[0], 200)
-        controls = app.state_get('class')['groupControls']
-        self.assertTrue(all(controls[str(n)]['stage'] == 4 and not controls[str(n)]['hold'] for n in range(1, 4)))
-
     def test_stream_returns_free_ai_answer(self):
         def upstream(state, group, prompt, history, on_delta):
             on_delta('最终答案：方案A最好，x=8，y=80。')

@@ -383,9 +383,6 @@ def route(app, handler, method, path):
                     item.update(stage=target_stage, hold=False)
                 elif command == 'follow':
                     item.update(stage=app.class_current_stage(state), hold=False)
-                elif command == 'follow_all':
-                    for number in range(1, app.group_count() + 1):
-                        controls.setdefault(str(number), {}).update(stage=app.class_current_stage(state), hold=False)
                 else:
                     raise ValueError('操作无效。')
                 item['time'] = app.utc_now()
