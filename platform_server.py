@@ -1522,16 +1522,15 @@ def free_ai_state(group_state: dict) -> dict:
         )
         conversations = [{
             "id": "legacy", "title": first_prompt[:20], "createdAt": utc_now(), "updatedAt": utc_now(),
-            "messages": legacy_messages[-FREE_AI_HISTORY_LIMIT:],
+            "messages": legacy_messages,
         }]
     for conversation in conversations:
         messages = conversation.get("messages") if isinstance(conversation.get("messages"), list) else []
-        conversation["messages"] = messages[-FREE_AI_HISTORY_LIMIT:]
+        conversation["messages"] = messages
     try:
         usage = max(0, int(raw.get("usage", 0)))
     except (TypeError, ValueError):
         usage = 0
-    conversations = conversations[-FREE_AI_CONVERSATION_LIMIT:]
     active_id = str(raw.get("activeConversationId", ""))
     if not any(item["id"] == active_id for item in conversations):
         active_id = conversations[-1]["id"] if conversations else ""
@@ -2423,9 +2422,10 @@ class Handler(SimpleHTTPRequestHandler):
                 with database() as db:
                     rows = db.execute(
                         "SELECT p.id,p.name,p.created_at,p.created_by,c.name AS class_name,"
-                        "c.school,c.grade,c.group_count FROM projects p "
+                        "c.school,c.grade,c.group_count,t.username AS teacher_username FROM projects p "
                         "LEFT JOIN project_classes pc ON pc.project_id=p.id "
                         "LEFT JOIN school_classes c ON c.id=pc.class_id "
+                        "LEFT JOIN teachers t ON t.id=p.created_by "
                         "ORDER BY p.created_at DESC,p.rowid DESC"
                     ).fetchall()
                 rows = [row for row in rows if accounts.can_project(sys.modules[__name__], session, row['id'])]
@@ -2433,6 +2433,7 @@ class Handler(SimpleHTTPRequestHandler):
                     "projects": [{**classroom.project_metadata(sys.modules[__name__], row["id"]), "id": row["id"], "name": row["name"], "createdAt": row["created_at"],
                                   "school": row["school"] or "", "grade": row["grade"] or "", "className": row["class_name"] or "",
                                   "groupCount": row["group_count"] or 0,
+                                  **({"teacherUsername": row["teacher_username"] or "未知"} if session.get("isAdmin") else {}),
                                   "canDelete": session["role"] == "teacher" and (bool(session.get("isAdmin")) or row["created_by"] == session.get("teacherId")),
                                   "label": f"{str(row['created_at'])[:10]} - {row['name']}"} for row in rows],
                     "selectedProjectId": session.get("projectId"),
@@ -2593,6 +2594,20 @@ class Handler(SimpleHTTPRequestHandler):
             if not self.require_session("teacher"):
                 return
             self.export_events(parse_qs(route.query).get("format", ["csv"])[0])
+            return
+        if route.path == "/api/export/conversations":
+            if not self.require_session("teacher"):
+                return
+            conversations = [{"group": number, "conversations": free_ai_state(state_get(f"group:{number}"))["conversations"]}
+                             for number in range(1, group_count() + 1)]
+            raw = json.dumps(conversations, ensure_ascii=False, indent=2).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Content-Disposition", "attachment; filename=ai-conversations.json")
+            self.send_header("Content-Length", str(len(raw)))
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(raw)
             return
         if route.path.startswith("/api/"):
             self.json_response({"error": "接口不存在"}, HTTPStatus.NOT_FOUND)
@@ -3423,12 +3438,10 @@ class Handler(SimpleHTTPRequestHandler):
             {"role": "user", "kind": "text", "content": context["prompt"], "time": context["timestamp"], "files": context.get('files', [])},
             assistant_message,
         ])
-        conversation["messages"] = conversation["messages"][-FREE_AI_HISTORY_LIMIT:]
         conversation["updatedAt"] = utc_now()
         workspace["conversations"] = [
             item for item in workspace["conversations"] if item.get("id") != conversation["id"]
         ] + [conversation]
-        workspace["conversations"] = workspace["conversations"][-FREE_AI_CONVERSATION_LIMIT:]
         workspace["activeConversationId"] = conversation["id"]
         workspace["usage"] += 1
         context["group_state"]["freeAi"] = workspace
