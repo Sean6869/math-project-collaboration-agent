@@ -81,7 +81,7 @@ def normalize_ark_text_model(model: str | None) -> str:
 DATA_DIR = Path(os.environ.get("MPT_DATA_DIR", ROOT / "data")).resolve()
 UPLOAD_DIR = DATA_DIR / "uploads"
 DB_PATH = DATA_DIR / "platform.db"
-DEFAULT_KNOWLEDGE_SOURCE_DIR = ROOT.parent / "必须要的教材、教师用书和课标"
+DEFAULT_KNOWLEDGE_SOURCE_DIR = DATA_DIR / "knowledge" if (DATA_DIR / "knowledge").is_dir() else ROOT.parent / "必须要的教材、教师用书和课标"
 KNOWLEDGE_SOURCE_DIR = Path(
     os.environ.get("MPT_KNOWLEDGE_SOURCE_DIR", "").strip() or str(DEFAULT_KNOWLEDGE_SOURCE_DIR)
 ).resolve()
@@ -919,26 +919,22 @@ def extract_document(name: str, raw: bytes) -> str:
     suffix = Path(name).suffix.lower()
     try:
         if suffix in {".txt", ".md", ".csv"}:
-            return raw.decode("utf-8", errors="replace")[:120_000]
+            return raw.decode("utf-8", errors="replace")
         if suffix == ".docx":
             with zipfile.ZipFile(io.BytesIO(raw)) as archive:
                 xml = archive.read("word/document.xml")
             root = ElementTree.fromstring(xml)
-            return "\n".join("".join(node.itertext()) for node in root.iter() if node.tag.endswith("}p"))[:120_000]
+            return "\n".join("".join(node.itertext()) for node in root.iter() if node.tag.endswith("}p"))
         if suffix == ".pdf":
             import pdfplumber
             pages = []
-            total = 0
             with pdfplumber.open(io.BytesIO(raw)) as pdf:
                 for number, page in enumerate(pdf.pages, 1):
                     text = re.sub(r"[ \t]+", " ", page.extract_text() or "").strip()
                     if text:
                         entry = f"[第{number}页]\n{text}"
                         pages.append(entry)
-                        total += len(entry)
-                    if total >= 120_000:
-                        break
-            return "\n\n".join(pages)[:120_000]
+            return "\n\n".join(pages)
     except (OSError, KeyError, zipfile.BadZipFile, ElementTree.ParseError, ValueError):
         return ""
     return ""
@@ -959,7 +955,7 @@ def sync_builtin_knowledge() -> dict:
         target = UPLOAD_DIR / stored
         with database() as db:
             existing = db.execute("SELECT extracted_text FROM files WHERE id=? AND (project_id=current_project() OR uploaded_by='builtin-knowledge')", (file_id,)).fetchone()
-        if existing and target.is_file():
+        if existing and target.is_file() and len(existing["extracted_text"] or "") != 120_000:
             result["indexed"] += bool(existing["extracted_text"])
             continue
         if not target.is_file():
@@ -970,12 +966,15 @@ def sync_builtin_knowledge() -> dict:
         raw = target.read_bytes()
         extracted = extract_document(source.name, raw)
         with database() as db:
-            db.execute(
+            if existing:
+                db.execute("UPDATE files SET extracted_text=? WHERE id=? AND uploaded_by='builtin-knowledge'", (extracted, file_id))
+            else:
+                db.execute(
                 "INSERT OR REPLACE INTO files(id,original_name,stored_name,mime,size,extracted_text,uploaded_at,uploaded_by,group_no) "
                 "VALUES(?,?,?,?,?,?,?,?,NULL)",
                 (file_id, source.name, stored, mimetypes.guess_type(source.name)[0] or "application/octet-stream",
                  len(raw), extracted, utc_now(), "builtin-knowledge"),
-            )
+                )
         result["imported"] += 1
         result["indexed"] += bool(extracted)
     return result

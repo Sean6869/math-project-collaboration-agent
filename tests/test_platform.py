@@ -21,6 +21,10 @@ import platform_server as app
 
 
 class ArkConfigurationTest(unittest.TestCase):
+    def test_knowledge_text_is_not_truncated(self):
+        text = '教材内容' * 40000 + '末尾知识点'
+        self.assertEqual(app.extract_document('教材.md', text.encode('utf-8')), text)
+
     def test_current_model_and_deprecated_aliases(self):
         default = "doubao-seed-2-1-turbo-260628"
         self.assertEqual(app.normalize_ark_text_model(None), default)
