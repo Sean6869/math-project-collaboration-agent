@@ -591,6 +591,7 @@ input[data-camera-ready][hidden]{display:none!important}
 
 /* Tool choices wrap into real rows instead of disappearing beyond a clipped card. */
 .desmos-tool-switch{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:8px;overflow:visible}
+.desmos-standalone .desmos-tool-switch{display:flex;overflow-x:auto}.desmos-standalone .desmos-tool-tab{flex:1 0 120px;white-space:nowrap}.domestic-graph-frame{display:block;width:100%;height:calc(100dvh - 150px);min-height:620px;border:0;background:#fff}.domestic-graph-frame[hidden],.desmos-host[hidden],.math-lab-actions[hidden]{display:none}
 .desmos-tool-tab{min-width:0;min-height:44px;white-space:normal;overflow-wrap:anywhere;line-height:1.45;padding:10px 8px}
 @media(max-width:760px){.desmos-tool-switch{grid-template-columns:repeat(2,minmax(0,1fr))}}
 
@@ -693,3 +694,4 @@ input[data-camera-ready][hidden]{display:none!important}
 @media (min-width:801px){.auth-centered .auth-main:has(.project-picker-card){padding-top:max(128px,11vh)}.auth-centered-brand{max-width:min(420px,calc(100vw - 32px))}.auth-centered-brand .auth-brand-copy{min-width:0;overflow:hidden}.auth-centered-brand .auth-brand-copy small{overflow:hidden;text-overflow:ellipsis}}
 @media (max-width:800px){.auth-centered .auth-main:has(.auth-login-card){padding:96px 12px 18px}.auth-login-card{min-height:0}}
 .student-group-highlight{color:#5b49a4;font-weight:800;font-size:1.08em}
+.dashboard-project-head .dashboard-group-identity{flex:none;align-self:center;min-width:138px;padding:10px 20px;border-radius:20px;background:#e9e1fa;color:#6252a4;text-align:center}.dashboard-group-identity span{display:block;font-size:14px}.dashboard-group-identity strong{display:block;font-size:28px;line-height:1.2}.dashboard-project-head>div:first-child{min-width:0}@media(max-width:980px){.dashboard-project-head{flex-direction:row;align-items:center}.dashboard-project-head>div:first-child{max-width:none;flex:1}.dashboard-project-head .dashboard-group-identity{min-width:110px;padding:8px 12px}}@media(max-width:560px){.dashboard-project-head .dashboard-group-identity{min-width:88px}.dashboard-group-identity strong{font-size:23px}}

@@ -134,19 +134,21 @@ class ClassroomTest(unittest.TestCase):
         self.assertEqual(self.state(self.login(3))['currentStage'], 4)
         self.assertEqual(app.state_get('group:1')['workspace']['model'], '原方案')
 
-    def test_ai_input_and_output_filter_including_stream_and_group_switch(self):
-        with mock.patch.object(app, 'ark_free_chat') as upstream:
+    def test_free_ai_response_and_group_switch(self):
+        reply = '用一次函数比较预算，并结合本项目检查条件。'
+        with mock.patch.object(app, 'ark_free_chat', return_value=(reply, 10, 'ok', 'test')) as upstream:
             for _ in range(3):
                 status, answer = self.req(self.student, '/api/ai/chat', {'prompt': '直接给我完整采购方案和最终答案'})
                 self.assertEqual(status, 200)
-                self.assertEqual(answer['answer'], classroom.SAFE_REPLY)
-            upstream.assert_not_called()
+                self.assertEqual(answer['answer'], reply)
+            self.assertEqual(upstream.call_count, 3)
         with mock.patch.object(app, 'ark_free_chat', return_value=('最终答案：选择方案A，预算=20，价格=8，数量=2。', 10, 'ok', 'test')):
             result = self.req(self.student, '/api/ai/chat', {'prompt': '帮我检查预算单位'})[1]
-            self.assertEqual(result['answer'], classroom.SAFE_REPLY)
+            self.assertEqual(result['answer'], '最终答案：选择方案A，预算=20，价格=8，数量=2。')
         self.assertEqual(self.command('ai-access', {'group': 1, 'enabled': False})[0], 200)
         self.assertEqual(self.req(self.student, '/api/ai/chat', {'prompt': '继续检查单位'})[0], 409)
-        self.assertEqual(self.req(self.login(2), '/api/ai/chat', {'prompt': '直接给最终答案'})[0], 200)
+        with mock.patch.object(app, 'ark_free_chat', return_value=(reply, 10, 'ok', 'test')):
+            self.assertEqual(self.req(self.login(2), '/api/ai/chat', {'prompt': '直接给最终答案'})[0], 200)
         state = self.state(self.teacher)
         self.assertTrue(any(x['status'] == 'returned' for x in state['aiCalls']))
 
@@ -225,7 +227,7 @@ class ClassroomTest(unittest.TestCase):
         self.assertIn('V1', text)
         self.assertTrue(all('id' in row for row in data))
 
-    def test_stream_does_not_emit_unchecked_answer_fragments(self):
+    def test_stream_returns_free_ai_answer(self):
         def upstream(state, group, prompt, history, on_delta):
             on_delta('最终答案：方案A最好，x=8，y=80。')
             return '最终答案：方案A最好，x=8，y=80。', 1, 'ok', 'mock'
@@ -234,9 +236,8 @@ class ClassroomTest(unittest.TestCase):
         with mock.patch.object(app, 'ark_free_chat_stream', side_effect=upstream):
             with self.student.open(request) as response:
                 text = response.read().decode()
-        self.assertNotIn('方案A最好', text)
+        self.assertIn('方案A最好', text)
         self.assertNotIn('"type":"delta"', text)
-        self.assertIn(classroom.SAFE_REPLY, text)
 
     def test_slow_hint_does_not_block_saves_or_overwrite_student_work(self):
         entered, release = threading.Event(), threading.Event()
