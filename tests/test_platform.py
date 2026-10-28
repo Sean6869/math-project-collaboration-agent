@@ -532,7 +532,7 @@ class PlatformTest(unittest.TestCase):
         self.assertIn('切换学习项目', script)
         self.assertIn('切换教学项目', script)
         self.assertIn('data-delete-project', script)
-        self.assertIn("data.canDelete", script)
+        self.assertIn("project.canDelete", script)
         self.assertIn('auth-login-card', script)
         self.assertIn('teacherGroupDashboard', script)
         self.assertIn('teacherCommonDashboard', script)
@@ -636,7 +636,7 @@ class PlatformTest(unittest.TestCase):
                     db.execute("DELETE FROM projects WHERE id=?", (project_id,))
                     db.execute("UPDATE sessions SET project_id=NULL WHERE project_id=?", (project_id,))
 
-    def test_only_admin_can_delete_project_and_related_state(self):
+    def test_teacher_can_delete_own_project_and_admin_can_delete_any(self):
         admin, teacher = self.client(), self.client()
         self.json_request(admin, "/api/login", "POST", {
             "role": "teacher", "username": "test_teacher", "password": "StrongTeacher#2026",
@@ -644,14 +644,14 @@ class PlatformTest(unittest.TestCase):
         username = "project_delete_teacher"
         with app.database() as db:
             db.execute("DELETE FROM teachers WHERE username=?", (username,))
-            db.execute(
-                "INSERT INTO teachers(username,password_hash,created_at,is_admin) VALUES(?,?,?,0)",
-                (username, app.password_hash("ProjectTeacher#2026"), app.utc_now()),
-            )
+        self.json_request(teacher, "/api/teacher/register", "POST", {
+            "username": username, "password": "ProjectTeacher#2026",
+        })
         self.json_request(teacher, "/api/login", "POST", {
             "role": "teacher", "username": username, "password": "ProjectTeacher#2026",
         })
         project_id = None
+        teacher_project_id = None
         try:
             _, created = self.json_request(admin, "/api/projects", "POST", {
                 "action": "create", "name": "待删除项目",
@@ -664,6 +664,23 @@ class PlatformTest(unittest.TestCase):
                     "action": "delete", "projectId": project_id,
                 })
             self.assertEqual(denied.exception.code, 403)
+            _, teacher_created = self.json_request(teacher, "/api/projects", "POST", {
+                "action": "create", "name": "教师自己的项目",
+            })
+            teacher_project_id = teacher_created["projectId"]
+            teacher_listing = self.json_request(teacher, "/api/projects")[1]
+            own_project = next(item for item in teacher_listing["projects"] if item["id"] == teacher_project_id)
+            self.assertTrue(own_project["canDelete"])
+            status, own_deleted = self.json_request(teacher, "/api/projects", "POST", {
+                "action": "delete", "projectId": teacher_project_id,
+            })
+            self.assertEqual(status, 200)
+            self.assertTrue(own_deleted["deleted"])
+            with app.database() as db:
+                self.assertIsNone(db.execute("SELECT id FROM projects WHERE id=?", (teacher_project_id,)).fetchone())
+                self.assertEqual(db.execute(
+                    "SELECT COUNT(*) FROM states WHERE scope LIKE ?", (f"project:{teacher_project_id}:%",)
+                ).fetchone()[0], 0)
             status, deleted = self.json_request(admin, "/api/projects", "POST", {
                 "action": "delete", "projectId": project_id,
             })
@@ -682,6 +699,9 @@ class PlatformTest(unittest.TestCase):
                 if project_id:
                     db.execute("DELETE FROM states WHERE scope LIKE ?", (f"project:{project_id}:%",))
                     db.execute("DELETE FROM projects WHERE id=?", (project_id,))
+                if teacher_project_id:
+                    db.execute("DELETE FROM states WHERE scope LIKE ?", (f"project:{teacher_project_id}:%",))
+                    db.execute("DELETE FROM projects WHERE id=?", (teacher_project_id,))
                 db.execute("DELETE FROM teachers WHERE username=?", (username,))
 
     def test_broadcast_publish_permissions_and_stale_state(self):

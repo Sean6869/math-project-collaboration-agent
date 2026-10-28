@@ -2432,6 +2432,7 @@ class Handler(SimpleHTTPRequestHandler):
                     "projects": [{**classroom.project_metadata(sys.modules[__name__], row["id"]), "id": row["id"], "name": row["name"], "createdAt": row["created_at"],
                                   "school": row["school"] or "", "grade": row["grade"] or "", "className": row["class_name"] or "",
                                   "groupCount": row["group_count"] or 0,
+                                  "canDelete": session["role"] == "teacher" and (bool(session.get("isAdmin")) or row["created_by"] == session.get("teacherId")),
                                   "label": f"{str(row['created_at'])[:10]} - {row['name']}"} for row in rows],
                     "selectedProjectId": session.get("projectId"),
                     "classId": session.get("classId"), "className": session.get("className"),
@@ -3027,13 +3028,13 @@ class Handler(SimpleHTTPRequestHandler):
         deleted_project = None
         with database() as db:
             if action == "delete":
-                if session["role"] != "teacher" or not session.get("isAdmin"):
-                    self.json_response({"error": "只有管理员教师可以删除项目"}, HTTPStatus.FORBIDDEN)
-                    return
                 project_id = str(body.get("projectId", ""))
-                project = db.execute("SELECT id,name FROM projects WHERE id=?", (project_id,)).fetchone()
+                project = db.execute("SELECT id,name,created_by FROM projects WHERE id=?", (project_id,)).fetchone()
                 if not project:
                     raise ValueError("项目不存在，请刷新项目列表后重试")
+                if session["role"] != "teacher" or (not session.get("isAdmin") and project["created_by"] != session.get("teacherId")):
+                    self.json_response({"error": "只能删除自己创建的项目"}, HTTPStatus.FORBIDDEN)
+                    return
                 db.execute("DELETE FROM states WHERE scope LIKE ?", (f"project:{project_id}:%",))
                 db.execute("UPDATE sessions SET project_id=NULL WHERE project_id=?", (project_id,))
                 db.execute("DELETE FROM projects WHERE id=?", (project_id,))
