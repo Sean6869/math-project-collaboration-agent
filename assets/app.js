@@ -488,7 +488,7 @@ async function renderExport(){
  const range=data.events?(data.firstEventAt+' 至 '+data.lastEventAt):'尚无课堂事件';
  setRoot(shell('teacher','export',head('课堂数据导出','导出文件由服务器根据当前数据库实时生成，不读取前端预设内容。','','数据导出')+
  `<div class="grid cols-4">${metric('事件总数',data.events,'数据库记录')}${metric('涉及小组',data.groupsWithEvents+'组',s.groupCount+'组已配置')}${metric('文件记录',data.files,'项目知识库')}${metric('时间范围',data.events?'已形成':'无数据',range)}</div>
- <div class="grid cols-2 mt16"><section class="card"><h2>生成导出文件</h2><p>CSV 与 JSON 包含阶段、提示、版本和教师处理事件；小组仅使用去标识化编号。</p><div class="toolbar"><a class="btn primary" href="/api/export?format=csv">下载CSV</a><a class="btn green" href="/api/export?format=json">下载JSON</a><a class="btn" href="/api/export/conversations">下载AI对话</a></div></section>
+ <div class="grid cols-2 mt16"><section class="card"><h2>生成导出文件</h2><p>课堂过程包含阶段、提示、版本和教师处理事件；小组仅使用去标识化编号。</p><div class="toolbar"><a class="btn primary" href="/api/export?format=xlsx">下载课堂过程 Excel</a><a class="btn green" href="/api/export?format=json">下载JSON</a><a class="btn" href="/api/export/conversations?format=xlsx">下载AI对话 Excel</a></div></section>
  <section class="card"><h2>最近服务器事件</h2><div style="max-height:360px;overflow:auto">${events.length?events.map(e=>`<div class="log-row">${esc(displayDateTime(e.ts))} | ${e.group_no?`G${String(e.group_no).padStart(2,'0')}`:'CLASS'} | ${esc(e.event_type)} | ${esc(e.data)}</div>`).join(''):'<div class="empty">数据库中尚无课堂事件</div>'}</div></section></div>`));
 }
 async function renderTeacherGovernance(){

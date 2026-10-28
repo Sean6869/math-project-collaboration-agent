@@ -1,5 +1,7 @@
 """Cross-end regression scenarios for the classroom specification (T01–T20)."""
 import base64
+import io
+from openpyxl import load_workbook
 import copy
 import http.cookiejar
 import json
@@ -232,9 +234,17 @@ class ClassroomTest(unittest.TestCase):
         messages = [{'role': 'user', 'content': f'问题 {n}', 'time': '2026-10-28'} for n in range(30)]
         state['freeAi'] = {'conversations': [{'id': 'c1', 'messages': messages}], 'usage': 30}
         app.state_put('group:1', state)
-        status, data = self.req(self.teacher, '/api/export/conversations')
+        status, data = self.req(self.teacher, '/api/export/conversations?format=json')
         self.assertEqual(status, 200)
         self.assertEqual(data[0]['conversations'][0]['messages'], messages)
+        with self.teacher.open(self.base + '/api/export/conversations?format=xlsx') as response:
+            self.assertIn('spreadsheetml', response.headers['Content-Type'])
+            sheet = load_workbook(io.BytesIO(response.read())).active
+            self.assertEqual([row[8] for row in list(sheet.values)[1:]], [m['content'] for m in messages])
+        with self.teacher.open(self.base + '/api/export?format=xlsx') as response:
+            self.assertIn('spreadsheetml', response.headers['Content-Type'])
+            sheet = load_workbook(io.BytesIO(response.read())).active
+            self.assertEqual([cell.value for cell in sheet[1]], ['编号', '时间', '小组', '阶段', '事件类型', '内容'])
         self.assertEqual(self.req(self.student, '/api/export/conversations')[0], 403)
 
     def test_follow_all_restores_groups_to_class_stage(self):

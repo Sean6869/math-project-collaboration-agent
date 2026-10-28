@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import base64
 import csv
+from openpyxl import Workbook
+from openpyxl.cell.cell import ILLEGAL_CHARACTERS_RE
 import contextvars
 import functools
 import gzip
@@ -913,6 +915,23 @@ def session_from_cookie(raw_cookie: str | None) -> dict | None:
         "projectId": row["project_id"], "projectName": row["project_name"],
         "projectLabel": project_label,
     }
+
+
+def spreadsheet_bytes(title: str, headers: list, rows: list) -> bytes:
+    book = Workbook()
+    sheet = book.active
+    sheet.title = title
+    sheet.append(headers)
+    for row in rows:
+        sheet.append([ILLEGAL_CHARACTERS_RE.sub('', value) if isinstance(value, str) else value for value in row])
+        for cell in sheet[sheet.max_row]:
+            if cell.data_type == 'f':
+                cell.data_type = 's'
+    sheet.freeze_panes = 'A2'
+    sheet.auto_filter.ref = sheet.dimensions
+    output = io.BytesIO()
+    book.save(output)
+    return output.getvalue()
 
 
 def extract_document(name: str, raw: bytes) -> str:
@@ -2599,10 +2618,22 @@ class Handler(SimpleHTTPRequestHandler):
                 return
             conversations = [{"group": number, "conversations": free_ai_state(state_get(f"group:{number}"))["conversations"]}
                              for number in range(1, group_count() + 1)]
-            raw = json.dumps(conversations, ensure_ascii=False, indent=2).encode("utf-8")
+            fmt = parse_qs(route.query).get("format", ["json"])[0]
+            if fmt == "json":
+                raw = json.dumps(conversations, ensure_ascii=False, indent=2).encode("utf-8")
+            else:
+                rows = []
+                for group in conversations:
+                    for conversation in group['conversations']:
+                        for message in conversation.get('messages', []):
+                            content = str(message.get('content', ''))
+                            parts = [content[i:i+32000] for i in range(0, len(content), 32000)] or ['']
+                            for index, part in enumerate(parts, 1):
+                                rows.append([group['group'], conversation.get('id', ''), conversation.get('title', ''), message.get('time', ''), message.get('role', ''), message.get('kind', 'text'), index, len(parts), part, json.dumps({k: v for k, v in message.items() if k not in ('content', 'time', 'role', 'kind')}, ensure_ascii=False)])
+                raw = spreadsheet_bytes('AI对话', ['小组', '对话编号', '对话标题', '时间', '角色', '类型', '内容分段', '总段数', '内容', '其他信息'], rows)
             self.send_response(200)
-            self.send_header("Content-Type", "application/json; charset=utf-8")
-            self.send_header("Content-Disposition", "attachment; filename=ai-conversations.json")
+            self.send_header("Content-Type", "application/json; charset=utf-8" if fmt == 'json' else 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+            self.send_header("Content-Disposition", "attachment; filename=ai-conversations." + ('json' if fmt == 'json' else 'xlsx'))
             self.send_header("Content-Length", str(len(raw)))
             self.send_header("Cache-Control", "no-store")
             self.end_headers()
@@ -3961,6 +3992,9 @@ class Handler(SimpleHTTPRequestHandler):
         if fmt == "json":
             raw = json.dumps([dict(row) for row in rows], ensure_ascii=False, indent=2).encode()
             mime, name = "application/json; charset=utf-8", "课堂过程事件.json"
+        elif fmt == "xlsx":
+            raw = spreadsheet_bytes('课堂过程', ['编号', '时间', '小组', '阶段', '事件类型', '内容'], [[row['id'], row['ts'], row['group_no'] or 'CLASS', row['stage'] or '', row['event_type'], row['data']] for row in rows])
+            mime, name = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', '课堂过程事件.xlsx'
         else:
             output = io.StringIO(newline="")
             writer = csv.writer(output)
