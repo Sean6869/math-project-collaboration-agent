@@ -105,14 +105,14 @@ class ClassroomTest(unittest.TestCase):
         self.assertEqual(result['workspace'], {})
         self.assertFalse(result['stageTaskStatus'][1][0])
 
-    def test_group_control_rollback_holds_history_and_class_advance_skips_hold(self):
+    def test_group_control_rollback_and_class_advance(self):
         app.state_put('class', {'currentStage': 2, 'groupCount': 3, 'groupControls': {'2': {'stage': 2, 'hold': True}, '3': {'stage': 3, 'hold': False}}})
         app.state_put('group:3', {'versions': [{'v': 'V1', 'model': '原始方案'}], 'workspace': {'model': '原始方案'}})
         self.assertEqual(self.command('control', {'group': 3, 'action': 'back', 'reason': '补核条件'})[0], 200)
         self.assertEqual(self.state(self.teacher, 3)['versions'][0]['model'], '原始方案')
         self.assertEqual(self.command('advance', {})[0], 200)
-        self.assertEqual(self.state(self.login(2))['currentStage'], 2)
-        self.assertEqual(self.state(self.login(3))['currentStage'], 2)
+        self.assertEqual(self.state(self.login(2))['currentStage'], 3)
+        self.assertEqual(self.state(self.login(3))['currentStage'], 3)
         old = self.state(self.teacher)
         self.assertEqual(self.command('control', {'group': 1, 'action': 'hold'}, base=old)[0], 200)
         self.assertEqual(self.command('control', {'group': 1, 'action': 'next'}, base=old)[0], 409)
@@ -253,14 +253,27 @@ class ClassroomTest(unittest.TestCase):
             self.assertEqual([cell.value for cell in sheet[1]], ['编号', '时间', '小组', '阶段', '事件类型', '内容'])
         self.assertEqual(self.req(self.student, '/api/export/conversations')[0], 403)
 
-    def test_follow_all_restores_groups_to_class_stage(self):
+    def test_class_advance_moves_lagging_groups_without_rewinding_ahead(self):
+        app.state_put('class', {'currentStage': 2, 'groupCount': 3, 'groupControls': {'1': {'stage': 1, 'hold': True}, '2': {'stage': 4}}})
+        app.state_put('group:1', {'workspace': {'model': '保留已有作品'}})
+        status, result = self.command('advance', {})
+        self.assertEqual(status, 200)
+        self.assertEqual(result.get('advanced'), [1, 3])
+        self.assertEqual([self.state(self.login(n))['currentStage'] for n in range(1, 4)], [3, 4, 3])
+        self.assertEqual(app.state_get('group:1')['workspace']['model'], '保留已有作品')
+        self.assertFalse(app.state_get('class')['groupControls']['1']['hold'])
+
+    def test_follow_all_only_advances_lagging_groups(self):
         state = app.state_get('class')
         state['currentStage'] = 4
-        state['groupControls'] = {'1': {'stage': 2, 'hold': True}, '2': {'stage': 5}}
+        state['groupControls'] = {'1': {'stage': 2, 'hold': True}, '2': {'stage': 5}, '3': {'stage': 4, 'hold': True}}
         app.state_put('class', state)
         self.assertEqual(self.command('control', {'action': 'follow_all'})[0], 200)
         controls = app.state_get('class')['groupControls']
-        self.assertTrue(all(controls[str(n)]['stage'] == 4 and not controls[str(n)]['hold'] for n in range(1, 4)))
+        self.assertEqual(controls['1']['stage'], 4)
+        self.assertFalse(controls['1']['hold'])
+        self.assertEqual(controls['2']['stage'], 5)
+        self.assertTrue(controls['3']['hold'])
 
     def test_stream_returns_free_ai_answer(self):
         def upstream(state, group, prompt, history, on_delta):

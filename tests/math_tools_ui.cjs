@@ -26,6 +26,14 @@ const root=path.resolve(__dirname,'..');
   for(const size of [{width:1440,height:900},{width:820,height:1180},{width:390,height:844}]){await page.setViewportSize(size);assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+2));assert.equal(await page.locator('.desmos-tool-switch').evaluate(e=>new Set([...e.children].map(x=>x.offsetTop)).size),1)}
   await page.locator('[data-domestic-graph]').click();await page.frameLocator('.domestic-graph-frame').getByText('函数图像生成器').waitFor();assert(await page.locator('.desmos-host').isHidden());assert(await page.locator('#captureMathLab').isHidden());
   await page.locator('button[data-desmos-tool="graph"]').click();await page.locator('#desmosCalculator[data-desmos-ready="true"]').waitFor();assert(await page.locator('.domestic-graph-frame').isHidden());assert(await page.locator('#captureMathLab').isVisible());
+  await page.goto(base+'/student/dashboard.html');
+  const controls=await teacher.newPage();await controls.goto(base+'/teacher/stages.html');
+  controls.on('dialog',dialog=>dialog.accept());
+  const advanced=controls.waitForResponse(response=>response.url().endsWith('/api/classroom/advance')&&response.request().method()==='POST');
+  await controls.locator('#advanceClass').click();assert((await advanced).ok());
+  await page.waitForFunction(()=>document.querySelector('[data-nav-key="stage-2"]')!==null,null,{timeout:15000});
+  assert.equal((await (await student.request.get(base+'/api/state')).json()).state.currentStage,2);
+  await controls.close();
   console.log('PASS: group identity, math tool switching and responsive layout');
  }finally{if(browser)await browser.close();const exited=once(child,'exit');child.stdin.end();await exited}
 })().catch(error=>{console.error(error);process.exitCode=1});

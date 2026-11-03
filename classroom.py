@@ -343,16 +343,12 @@ def route(app, handler, method, path):
                     if before >= 5:
                         raise ValueError('已到最后一个阶段。')
                     progressed = []
+                    target = before + 1
                     for number in range(1, app.group_count() + 1):
-                        old_stage = effective_stage(state, number)
-                        row = controls.setdefault(str(number), {})
-                        ready = app.validated_stage_submissions(app.state_get(f'group:{number}')).get(old_stage)
-                        if not row.get('hold') and old_stage == before and ready:
-                            row['stage'] = before + 1
+                        if effective_stage(state, number) < target:
+                            controls.setdefault(str(number), {}).update(stage=target, hold=False)
                             progressed.append(number)
-                        else:
-                            row['stage'] = old_stage
-                    state['currentStage'] = before + 1
+                    state['currentStage'] = target
                     result['advanced'] = progressed
                 elif action == 'rewind':
                     before = app.class_current_stage(state)
@@ -385,7 +381,8 @@ def route(app, handler, method, path):
                     item.update(stage=app.class_current_stage(state), hold=False)
                 elif command == 'follow_all':
                     for number in range(1, app.group_count() + 1):
-                        controls.setdefault(str(number), {}).update(stage=app.class_current_stage(state), hold=False)
+                        if effective_stage(state, number) < app.class_current_stage(state):
+                            controls.setdefault(str(number), {}).update(stage=app.class_current_stage(state), hold=False)
                 else:
                     raise ValueError('操作无效。')
                 item['time'] = app.utc_now()
