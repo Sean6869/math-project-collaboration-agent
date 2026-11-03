@@ -81,7 +81,7 @@ window.MPT_CLASSROOM=function(C){
  }
  function groups(){
   const s=load();
-  page('teacher','groups','小组课堂情况',`<section class="card"><div class="toolbar"><select id="groupFilter" aria-label="筛选小组"><option value="all">全部</option><option value="help">求助中</option><option value="evidence">证据待核验</option><option value="idle">本阶段无更新</option>${STAGES.map(st=>`<option value="stage-${st.n}">阶段${st.n}</option>`).join('')}</select></div><div id="groupCards" class="grid cols-2"></div></section>`);
+  page('teacher','situation','小组课堂情况',`<section class="card"><div class="toolbar"><select id="groupFilter" aria-label="筛选小组"><option value="all">全部</option><option value="help">求助中</option><option value="evidence">证据待核验</option><option value="idle">本阶段无更新</option>${STAGES.map(st=>`<option value="stage-${st.n}">阶段${st.n}</option>`).join('')}</select></div><div id="groupCards" class="grid cols-2"></div></section>`);
   const draw=()=>{$('groupCards').innerHTML=[...s.groups].sort((a,b)=>Number(b.status==='等待教师')-Number(a.status==='等待教师')).filter(g=>value('groupFilter')==='all'||value('groupFilter')==='help'&&s.queue.some(q=>q.group===g.id&&!q.resolved)||value('groupFilter')==='evidence'&&g.evidencePending||value('groupFilter')==='idle'&&(!g.updatedAt||Date.now()-Date.parse(g.updatedAt)>(Number(s.teacherConfig.idleMinutes)||10)*60000)||value('groupFilter')==='stage-'+g.stage).map(g=>`<article class="task"><h2>${g.id}组 · ${esc(STAGES[g.stage-1].name)}</h2><b>${esc(g.version||'尚无版本')}</b><h3>最近提交的算式／数据</h3><p class="line-two">${esc(g.math||'尚未记录')}</p><h3>还没核对的条件</h3><p class="line-two">${esc(g.pendingCheck||'尚未记录')}</p><a class="btn" href="group-detail.html?g=${g.id}&view=readonly">查看本组工作区</a></article>`).join('')};$('groupFilter').onchange=draw;draw();
  }
  function readonly(){
@@ -150,5 +150,5 @@ window.MPT_CLASSROOM=function(C){
   if(['student-stage2-understanding','student-stage3-compare','student-stage5-product'].includes(id)&&!$('roleReminder')&&s.roleAssignments?.at(-1)?.stage!==s.currentStage)document.querySelector('.main')?.insertAdjacentHTML('afterbegin',`<div class="toolbar" id="roleReminder"><a class="btn sm" href="group.html">确认本阶段分工</a><button class="btn sm" type="button" id="dismissRoles">收起</button></div>`);
   if($('dismissRoles'))$('dismissRoles').onclick=()=>$('roleReminder').remove();
  }
- return {decorate,pages:{'student-stage1-materials':materials,'student-stage2-understanding':understanding,'student-stage3-model':model,'student-stage3-compare':compare,'student-group':roles,'teacher-evaluation':evaluation,'teacher-stages':stages,'teacher-groups':groups,'teacher-group-detail':readonly,'teacher-queue':queue,'teacher-report':report,'teacher-template':templates}};
+ return {decorate,pages:{'student-stage1-materials':materials,'student-stage2-understanding':understanding,'student-stage3-model':model,'student-stage3-compare':compare,'student-group':roles,'teacher-evaluation':evaluation,'teacher-stages':stages,'teacher-group-situation':groups,'teacher-group-detail':readonly,'teacher-queue':queue,'teacher-report':report,'teacher-template':templates}};
 };

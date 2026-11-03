@@ -2520,6 +2520,13 @@ class Handler(SimpleHTTPRequestHandler):
             group = max(1, min(count, int(group)))
             self.json_response({"state": merged_state(group, monitoring=session["role"] == "teacher"), "role": session["role"]})
             return
+        if route.path == "/api/class-board":
+            session = self.require_session()
+            if not session:
+                return
+            groups = merged_state(session.get("groupId") or 1, monitoring=True)["groups"]
+            self.json_response({"groups": [{"id": g["id"], "stage": g["stage"], "progress": g["progress"]} for g in groups]})
+            return
         if route.path == "/api/knowledge":
             session = self.require_teacher()
             if not session:

@@ -214,6 +214,12 @@ class ClassroomTest(unittest.TestCase):
     def test_removed_join_tokens_cannot_bypass_group_login(self):
         self.assertEqual(self.req(self.student, '/api/classroom/join', {'token': 'old-token'})[0],410)
 
+    def test_student_board_exposes_only_group_progress(self):
+        status, data = self.req(self.student, '/api/class-board')
+        self.assertEqual(status, 200)
+        self.assertTrue(data['groups'])
+        self.assertTrue(all(set(group) == {'id', 'stage', 'progress'} for group in data['groups']))
+
     def test_export_uses_ids_and_versions_without_names_keys_or_conversations(self):
         state = app.state_get('group:1')
         state['workspace'] = {'model': '8×10=80', 'revisionReason': '核对数量'}
