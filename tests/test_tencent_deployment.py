@@ -38,8 +38,11 @@ class TencentDeploymentTests(unittest.TestCase):
         self.assertIn("deploy/tencent/deploy.sh", first)
         self.assertIn("</dev/tty", first)
         self.assertIn('export MAPLE_SKIP_GIT_SYNC=1', first)
-        self.assertIn("deploy/tencent/deploy.sh", update)
-        self.assertIn('MAPLE_SKIP_GIT_SYNC=1', update)
+        self.assertIn("api.github.com/repos/${REPO_SLUG}/commits/${BRANCH}", update)
+        self.assertIn("codeload.github.com/${REPO_SLUG}/tar.gz/${COMMIT_SHA}", update)
+        self.assertIn("依赖文件未变化，复用现有 Python 环境。", update)
+        self.assertIn('docker rename "${CONTAINER_NAME}" "${OLD_CONTAINER}"', update)
+        self.assertIn('docker exec "${CONTAINER_NAME}" cat /app/.github-commit', update)
 
     def test_documentation_describes_http(self):
         guide = self.read("docs/腾讯云部署.md")
