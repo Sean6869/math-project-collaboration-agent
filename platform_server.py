@@ -2230,7 +2230,8 @@ class Handler(SimpleHTTPRequestHandler):
         public_page = len(relative.parts) == 2 and relative.parts[0] in {'student', 'teacher'} and target.suffix == '.html'
         public_asset = len(relative.parts) >= 2 and relative.parts[0] == 'assets' and target.suffix.lower() in {'.js', '.css', '.png', '.jpg', '.jpeg', '.webp', '.svg', '.ico', '.woff', '.woff2'}
         visualization = len(relative.parts) >= 3 and relative.parts[:2] == ('vendor', 'math-viz-kit') and target.suffix.lower() == '.html'
-        if target not in (ROOT, ROOT / 'index.html') and not public_page and not public_asset and not visualization:
+        public_metadata = len(relative.parts) == 1 and relative.name in {'BingSiteAuth.xml', 'robots.txt', 'sitemap.xml'}
+        if target not in (ROOT, ROOT / 'index.html') and not public_page and not public_asset and not visualization and not public_metadata:
             return str(ROOT / '__not_found__')
         return str(target)
 

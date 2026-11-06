@@ -1,0 +1,6 @@
+User-agent: *
+Disallow: /api/
+Disallow: /teacher/
+Disallow: /student/
+
+Sitemap: https://www.mapleclass.online/sitemap.xml
