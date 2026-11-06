@@ -28,7 +28,7 @@ if [[ "${EUID}" -ne 0 ]]; then
   exit 1
 fi
 
-for command in curl docker tar sed grep git; do
+for command in curl docker tar grep git python3 timeout; do
   command -v "${command}" >/dev/null || {
     echo "缺少命令：${command}" >&2
     exit 1
@@ -61,7 +61,13 @@ trap cleanup EXIT
 mkdir -p "${BACKUP_DIR}" "${STAGE_DIR}"
 cp "${ENV_FILE}" "${ENV_COPY}"
 
-COMMIT_SHA="$(retry git ls-remote "https://github.com/${REPO_SLUG}.git" "refs/heads/${BRANCH}" | awk 'NR == 1 { print $1; exit }')"
+API_URL="https://api.github.com/repos/${REPO_SLUG}/commits/${BRANCH}?t=$(date +%s)"
+COMMIT_SHA="$(curl -fsSL --connect-timeout 15 --max-time 30 -H 'Cache-Control: no-cache' \
+  -A 'Maple-Update/1' "${API_URL}" | python3 -c 'import json, sys; print(json.load(sys.stdin)["sha"])' 2>/dev/null || true)"
+if [[ ! "${COMMIT_SHA}" =~ ^[0-9a-f]{40}$ ]]; then
+  echo "GitHub API 不可用，尝试读取 Git 分支引用。" >&2
+  COMMIT_SHA="$(timeout 45 git ls-remote "https://github.com/${REPO_SLUG}.git" "refs/heads/${BRANCH}" | awk 'NR == 1 { print $1 }' || true)"
+fi
 if [[ ! "${COMMIT_SHA}" =~ ^[0-9a-f]{40}$ ]]; then
   echo "无法从 GitHub 读取 ${REPO_SLUG}:${BRANCH} 的 commit。" >&2
   exit 1
