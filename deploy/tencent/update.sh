@@ -28,7 +28,7 @@ if [[ "${EUID}" -ne 0 ]]; then
   exit 1
 fi
 
-for command in curl docker tar sed grep; do
+for command in curl docker tar sed grep git; do
   command -v "${command}" >/dev/null || {
     echo "缺少命令：${command}" >&2
     exit 1
@@ -49,7 +49,6 @@ DATA_BACKUP="${BACKUP_DIR}/data-${STAMP}.tar.gz"
 TMP_DIR="$(mktemp -d)"
 ARCHIVE="${TMP_DIR}/source.tar.gz"
 STAGE_DIR="${TMP_DIR}/source"
-COMMIT_JSON="${TMP_DIR}/commit.json"
 HEALTH_FILE="${TMP_DIR}/health.json"
 ENV_COPY="${TMP_DIR}/deploy.env"
 CANDIDATE_IMAGE="${IMAGE}-${STAMP}"
@@ -62,13 +61,9 @@ trap cleanup EXIT
 mkdir -p "${BACKUP_DIR}" "${STAGE_DIR}"
 cp "${ENV_FILE}" "${ENV_COPY}"
 
-API_URL="https://api.github.com/repos/${REPO_SLUG}/commits/${BRANCH}"
-retry curl -fsSL --retry 0 --connect-timeout 20 --max-time 120 \
-  -A "Maple-Update/1" "${API_URL}" -o "${COMMIT_JSON}"
-
-COMMIT_SHA="$(sed -n 's/.*\"sha\"[[:space:]]*:[[:space:]]*\"\([0-9a-f]\{40\}\)\".*/\1/p' "${COMMIT_JSON}" | head -n 1)"
+COMMIT_SHA="$(retry git ls-remote "https://github.com/${REPO_SLUG}.git" "refs/heads/${BRANCH}" | awk 'NR == 1 { print $1; exit }')"
 if [[ ! "${COMMIT_SHA}" =~ ^[0-9a-f]{40}$ ]]; then
-  echo "无法从 GitHub API 读取 ${REPO_SLUG}:${BRANCH} 的 commit。" >&2
+  echo "无法从 GitHub 读取 ${REPO_SLUG}:${BRANCH} 的 commit。" >&2
   exit 1
 fi
 
