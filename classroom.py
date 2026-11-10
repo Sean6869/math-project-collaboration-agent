@@ -215,19 +215,30 @@ def immutable_records(app, old, new, actor, activity_stage=None):
                                               'comparison': copy.deepcopy(new.get('comparison', {})), 'modelVersion': (old.get('versions') or [{}])[-1].get('v')})
         if new.get('comparison', {}).get('conditions') != old.get('comparison', {}).get('conditions'):
             new.setdefault('comparison', {})['needsCheck'] = not new['comparison'].get('checked')
+    for index, issue in enumerate(new.get('product', {}).get('rehearsalIssues', [])):
+        old_issues = old.get('product', {}).get('rehearsalIssues', [])
+        previous = next((item for item in old_issues if issue.get('id') and item.get('id') == issue['id']), None)
+        if previous is None and not issue.get('id') and index < len(old_issues) and issue.get('time') == old_issues[index].get('time'):
+            previous = old_issues[index]
+        issue.setdefault('id', (previous or {}).get('id') or secrets.token_hex(8))
+        if issue != previous:
+            issue['updatedAt'], issue['updatedBy'] = timestamp, actor
     if new.get('product') != old.get('product') and new.get('product'):
         product = new['product']
         if product.get('modelVersion') and product['modelVersion'] not in {v.get('v') for v in new.get('versions', [])}:
             raise ValueError('请选择本组已保存的方案版本。')
         if any(ref not in {e.get('id') for e in new.get('evidence', [])} for ref in product.get('evidenceRefs', [])):
             raise ValueError('引用证据不存在，请重新选择。')
-        new['productHistory'].append({'id': secrets.token_hex(8), 'time': timestamp, 'product': copy.deepcopy(new['product'])})
+        new['productHistory'].append({'id': secrets.token_hex(8), 'time': timestamp, 'product': copy.deepcopy(new['product']), 'actor': actor})
     for item in new.get('evidence', []):
         if isinstance(item, dict):
             item.setdefault('id', secrets.token_hex(8))
             item.setdefault('time', timestamp)
             item.setdefault('modelVersion', (new.get('versions') or [{}])[-1].get('v', ''))
             previous = next((row for row in old.get('evidence', []) if row.get('id') == item['id']), None)
+            version = item.get('modelVersion', '')
+            if version and version not in {row['v'] for row in app.model_versions(new)} and (previous is None or version != previous.get('modelVersion')):
+                raise ValueError('证据关联的方案版本不存在，请选择本组已保存的版本或暂不关联。')
             if item != previous:
                 item['updatedAt'] = timestamp
                 item['updatedBy'] = actor
@@ -246,19 +257,36 @@ def student_view(state):
     return state
 
 
+def help_origin_stage(thread, queue=()):
+    candidates = [thread.get('stage'), *[message.get('stage') for message in thread.get('messages', [])],
+                  *[row.get('stage') for row in queue if row.get('threadId') == thread.get('id')]]
+    return next((value for value in candidates if isinstance(value, int) and 1 <= value <= 5), None)
+
+
 def export_records(app, rows):
     """Export source IDs and anonymous evidence, never credentials or AI transcripts."""
     records = []
     states = [(n, app.state_get(f'group:{n}')) for n in range(1, app.group_count() + 1)]
-    names = {str(name): f'G{n:02d}-M{i + 1}' for n, state in states for i, name in enumerate(state.get('members', [])) if str(name).strip()}
-    def scrub(text):
-        text = str(text)
-        for name, anonymous in sorted(names.items(), key=lambda item: -len(item[0])):
-            text = text.replace(json.dumps(name, ensure_ascii=False), json.dumps(anonymous, ensure_ascii=False))
-            if len(name) >= 2:
-                text = text.replace(name, anonymous)
-        text = re.sub(r'[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}|(?<!\d)1[3-9]\d{9}(?!\d)|(?:ark|sk)-[A-Za-z0-9-]{12,}', '[已隐去]', text)
-        return text
+    local_names = {number: {str(name): f'G{number:02d}-M{index + 1}' for index, name in enumerate(state.get('members', [])) if str(name).strip()} for number, state in states}
+    aliases = {}
+    for members in local_names.values():
+        for name, anonymous in members.items():
+            aliases.setdefault(name, set()).add(anonymous)
+    names = {name: next(iter(values)) if len(values) == 1 else '匿名成员（同名）' for name, values in aliases.items()}
+    def scrub(text, group=None):
+        replacements = {**names, **local_names.get(group, {})}
+        pattern = re.compile('|'.join(re.escape(name) for name in sorted(replacements, key=len, reverse=True))) if replacements else None
+        def clean(value):
+            if isinstance(value, str):
+                if pattern:
+                    value = pattern.sub(lambda match: replacements[match.group()], value)
+                return re.sub(r'[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}|(?<!\d)1[3-9]\d{9}(?!\d)|(?:ark|sk)-[A-Za-z0-9-]{12,}', '[已隐去]', value)
+            if isinstance(value, list):
+                return [clean(item) for item in value]
+            if isinstance(value, dict):
+                return {key: clean(item) for key, item in value.items()}
+            return value
+        return json.dumps(clean(json.loads(text)), ensure_ascii=False)
     # Event free text can contain private student/teacher conversations. Export
     # metadata only; artifact snapshots below carry the permitted mathematical work.
     for row in rows:
@@ -271,21 +299,21 @@ def export_records(app, rows):
                 detail.pop('teacher', None)
                 records.append({'id': f'G{number:02d}-{field}-{item.get("id", index)}', 'ts': item.get('time', ''),
                                 'group_no': f'G{number:02d}', 'stage': item.get('stage') or item.get('comparison', {}).get('stage') or phase,
-                                'event_type': kind, 'request_id': item.get('requestId', ''), 'data': scrub(json.dumps(detail, ensure_ascii=False))})
+                                'event_type': kind, 'request_id': item.get('requestId', ''), 'data': scrub(json.dumps(detail, ensure_ascii=False), number)})
         for version in app.model_versions(state):
             detail = {key: version.get(key, '') for key in ('v', 'model', 'variables', 'relation', 'constraints', 'reason', 'fileIds', 'changeSummary', 'quantityRows', 'conditionChecks', 'checks', 'representation')}
             records.append({'id': f"G{number:02d}-{version['v']}", 'ts': version.get('time', ''), 'group_no': f'G{number:02d}',
-                            'event_type': 'model_snapshot', 'request_id': version.get('requestId', ''), 'stage': 3, 'data': scrub(json.dumps(detail, ensure_ascii=False))})
+                            'event_type': 'model_snapshot', 'request_id': version.get('requestId', ''), 'stage': 3, 'data': scrub(json.dumps(detail, ensure_ascii=False), number)})
         for item in state.get('evidence', []):
             detail = {key: item.get(key, '') for key in ('id', 'text', 'type', 'stage', 'verified', 'invalid', 'modelVersion', 'updatedAt', 'updatedBy')}
             detail['fileId'] = (item.get('file') or {}).get('id')
             records.append({'id': item.get('id', ''), 'ts': item.get('time', ''), 'group_no': f'G{number:02d}', 'stage': 4,
-                            'event_type': 'evidence_snapshot', 'data': scrub(json.dumps(detail, ensure_ascii=False))})
+                            'event_type': 'evidence_snapshot', 'data': scrub(json.dumps(detail, ensure_ascii=False), number)})
         product = state.get('product', {})
         if product:
             detail = {key: product.get(key, '') for key in ('modelVersion', 'evidenceRefs', 'claim', 'limitations', 'reflection', 'photos')}
             records.append({'id': f'G{number:02d}-product', 'ts': state.get('_savedAt', ''), 'group_no': f'G{number:02d}', 'stage': 5,
-                            'event_type': 'product_snapshot', 'data': scrub(json.dumps(detail, ensure_ascii=False))})
+                            'event_type': 'product_snapshot', 'data': scrub(json.dumps(detail, ensure_ascii=False), number)})
     for index, item in enumerate(app.state_get('class').get('evaluationHistory', [])):
         detail = {key: item.get(key) for key in ('scores', 'status', 'evidenceRefs', 'aiAdopted')}
         records.append({'id': f"evaluation-{item['group']}-{index}", 'ts': item.get('time', ''), 'group_no': f"G{int(item['group']):02d}",
@@ -294,18 +322,20 @@ def export_records(app, rows):
         for field, kind in [('helpThreads', 'help_thread'), ('helpFeedback', 'help_followup')]:
             for index, item in enumerate(state.get(field, [])):
                 thread_id = item.get('threadId') or item.get('id', '')
-                detail = {key: item.get(key) for key in ('currentLevel', 'status', 'outcome', 'next', 'createdAt', 'updatedAt', 'transitions') if key in item}
-                records.append({'id': f'G{number:02d}-{field}-{index}', 'ts': item.get('time') or item.get('createdAt', ''), 'group_no': f'G{number:02d}', 'stage': item.get('stage'), 'event_type': kind, 'request_id': thread_id, 'data': scrub(json.dumps(detail, ensure_ascii=False))})
+                detail = {key: item.get(key) for key in ('currentLevel', 'status', 'outcome', 'next', 'createdAt', 'updatedAt', 'transitions', 'actor', 'sourceStage') if key in item}
+                if kind == 'help_followup':
+                    detail['stageSource'] = 'recorded' if 'stage' in item else 'legacy_help_stage'
+                records.append({'id': f'G{number:02d}-{field}-{index}', 'ts': item.get('time') or item.get('createdAt', ''), 'group_no': f'G{number:02d}', 'stage': item.get('stage', next((help_origin_stage(thread, app.state_get('class').get('queue', [])) for thread in state.get('helpThreads', []) if thread.get('id') == thread_id), None)), 'event_type': kind, 'request_id': thread_id, 'data': scrub(json.dumps(detail, ensure_ascii=False), number)})
         for index, item in enumerate(state.get('helpHistory', [])):
             records.append({'id': f'G{number:02d}-hint-{index}', 'ts': item.get('ts', item.get('time', '')), 'group_no': f'G{number:02d}', 'stage': item.get('stage'), 'event_type': 'hint_usage', 'request_id': item.get('threadId', ''), 'data': json.dumps({key: item.get(key) for key in ('level', 'type', 'source')}, ensure_ascii=False)})
         for index, item in enumerate(state.get('events', [])):
             detail = {key:item.get(key) for key in ('type','stage','actor')}
             if not re.match(r'(ai_|free_|hint_|help_)', str(item.get('type',''))):
                 detail['data'] = item.get('data','')
-            records.append({'id': item.get('id') or f'G{number:02d}-action-{index}', 'ts': item.get('ts', item.get('time', '')), 'group_no': f'G{number:02d}', 'stage': item.get('stage'), 'event_type': item.get('type', 'student_action'), 'request_id': item.get('requestId',''), 'data': scrub(json.dumps(detail, ensure_ascii=False))})
+            records.append({'id': item.get('id') or f'G{number:02d}-action-{index}', 'ts': item.get('ts', item.get('time', '')), 'group_no': f'G{number:02d}', 'stage': item.get('stage'), 'event_type': item.get('type', 'student_action'), 'request_id': item.get('requestId',''), 'data': scrub(json.dumps(detail, ensure_ascii=False), number)})
     for item in app.state_get('class').get('queue', []):
         for index, step in enumerate([{'time': item.get('createdAt'), 'status': 'received'}, *item.get('history', [])]):
-            records.append({'id': step.get('id', str(item.get('id')) + '-' + str(index)), 'ts': step.get('time', ''), 'group_no': f"G{int(item['group']):02d}", 'stage': item.get('stage'), 'event_type': 'teacher_help_status', 'request_id': item.get('threadId', ''), 'data': scrub(json.dumps(step, ensure_ascii=False))})
+            records.append({'id': step.get('id', str(item.get('id')) + '-' + str(index)), 'ts': step.get('time', ''), 'group_no': f"G{int(item['group']):02d}", 'stage': item.get('stage'), 'event_type': 'teacher_help_status', 'request_id': item.get('threadId', ''), 'data': scrub(json.dumps(step, ensure_ascii=False), int(item['group']))})
     for item in records:
         item['event_id'] = item['id']
         item.setdefault('request_id', '')
@@ -553,7 +583,13 @@ def route(app, handler, method, path):
                 outcome = body.get('outcome')
                 if outcome not in ('continue', 'unresolved', 'resolved'):
                     raise ValueError('请选择后续操作。')
-                data.setdefault('helpFeedback', []).append({'threadId': thread['id'], 'next': next_action, 'outcome': outcome, 'time': app.utc_now()})
+                operator = str(body.get('operator', ''))
+                actor = operator if operator in data.get('members', []) else f'G{group}'
+                page_stage = body.get('pageStage')
+                stage = page_stage if isinstance(page_stage, int) and 1 <= page_stage <= effective_stage(state, group) else effective_stage(state, group)
+                feedback = {'id': secrets.token_hex(8), 'threadId': thread['id'], 'next': next_action, 'outcome': outcome, 'time': app.utc_now(), 'stage': stage, 'sourceStage': help_origin_stage(thread, state.get('queue', [])), 'actor': actor}
+                data.setdefault('helpFeedback', []).append(feedback)
+                data.setdefault('events', []).append({'id': feedback['id'] + ':action', 'ts': feedback['time'], 'type': 'help_followup', 'stage': stage, 'actor': actor, 'requestId': thread['id'], 'data': next_action})
                 data.setdefault('workspace', {})['next'] = next_action
                 if outcome == 'resolved':
                     thread['status'] = 'resolved'

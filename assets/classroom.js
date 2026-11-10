@@ -39,7 +39,7 @@ window.MPT_CLASSROOM=function(C){
  document.addEventListener('click',event=>{
   const link=event.target.closest?.('[data-field-help]');if(!link)return;
   const id=link.dataset.fieldHelp,rule=fieldRule(link.dataset.schemaId||id),s=load(),control=$(id);
-  const prompt=[`项目：${s.project}；阶段：${Number(document.body.dataset.page?.match(/^student-stage([1-5])/)?.[1]||s.currentStage)}；填写项：${rule.title||id}`,`已有内容：${control?.value||'还未填写'}`,rule.hint||'先解释这一项，再提醒我下一步怎样检查。'].join('\n');
+  const prompt=[`项目：${s.project}；阶段：${C.currentTaskStage()}；填写项：${rule.title||id}`,`已有内容：${control?.value||'还未填写'}`,rule.hint||'先解释这一项，再提醒我下一步怎样检查。'].join('\n');
   link.href='ai.html?field='+encodeURIComponent(id)+'&prompt='+encodeURIComponent(prompt);
  });
  const button=(id,label,cls='primary')=>`<button type="button" class="btn ${cls}" id="${id}">${label}</button>`;
@@ -48,7 +48,7 @@ window.MPT_CLASSROOM=function(C){
  async function request(action,body={},base=load()){
   try{
    C.saveStatus('正在保存……');
-   const result=await api('/api/classroom/'+action,{method:'POST',body:JSON.stringify({operator:C.currentOperator(),pageStage:Number(document.body.dataset.page?.match(/^student-stage([1-5])/)?.[1]||load().currentStage),revision:body.groupRevision?base._revision:base._classRevision,...body})});
+   const result=await api('/api/classroom/'+action,{method:'POST',body:JSON.stringify({operator:C.currentOperator(),pageStage:C.currentTaskStage(),revision:body.groupRevision?base._revision:base._classRevision,...body})});
    if(result.state)acceptState(result.state);
    C.clearDraft();C.saveStatus('已保存到服务器');return result;
   }catch(error){C.saveStatus(error.code==='revision_conflict'?'内容已有更新，请比较后保存':'保存失败，请重试');if(error.code==='revision_conflict')C.showConflict(error,body,async fresh=>{await request(action,body,fresh)});else toast(error.message);return null}
@@ -80,8 +80,9 @@ window.MPT_CLASSROOM=function(C){
   $('saveThoughtOne').onclick=async()=>{
    const mode=value('thoughtMode');if(mode==='proxy'&&!$('thoughtConfirmed').checked){toast('请先向这位成员复述并确认');return}
    let fileId='';if(mode==='photo'&&$('thoughtPhoto').files.length){try{const files=await uploadEvidenceFiles([...$('thoughtPhoto').files]);fileId=files[0]?.id||''}catch(error){toast(error.message);return}}
+   const draftBase=C.draftBase();
    const result=await request('thought',{groupRevision:true,member:Number(value('thoughtMember')),content:value('thoughtContent'),uncertain:value('thoughtUncertain'),mode,fileId,confirmed:$('thoughtConfirmed').checked},s);
-   if(result){toast(result.draft?'草稿内容还在':'已保存到服务器');understanding()}
+   if(result&&!result.draft){const draftFields=Object.fromEntries(['problem','known','unknown','constraints'].map(key=>['under-'+key,value('under-'+key)])),dirty=Object.entries(draftFields).some(([id,text])=>text!==String(s.workspace[id.slice(6)]||'')),base=draftBase._revision===s._revision?deepClone(load()):draftBase;understanding();if(dirty)C.restorePendingFields(draftFields,base);toast('已保存到服务器')}else if(result)toast('草稿内容还在')
   };
   $('saveUnderstandingNew').onclick=async()=>{const x=deepClone(load());for(const key of ['problem','known','unknown','constraints'])x.workspace[key]=value('under-'+key);event(x,'understanding_save','保存小组讨论结果');if(await save(x))toast('已保存到服务器')};
  }
@@ -386,7 +387,7 @@ window.MPT_CLASSROOM=function(C){
    const drawStatus=async()=>{try{const result=await api('/api/state');const items=result.state?.queue||[];const panel=$('studentQueueStatus')||document.createElement('section');panel.id='studentQueueStatus';panel.className='card mt16';panel.innerHTML='<h2>发给老师的求助</h2>'+items.map(row=>`<p>${esc(({received:'已发送',viewed:'教师已查看',processing:'处理中',visiting:'处理中',broadcast:'已回应',handled:'已回应'})[row.handling]||'已发送')} · ${esc(row.feedback||'等待老师回应')}</p>`).join('');if(!panel.isConnected)document.querySelector('.help-conversation')?.append(panel)}catch(_){}};
    drawStatus();clearInterval(window.mapleQueueTimer);window.mapleQueueTimer=setInterval(()=>{if(!document.hidden)drawStatus()},5000);
    const labels={'L1':'给我一点方向','L2':'帮我们把问题分成几步','L3':'只检查我们卡住的这一处'};
-   document.querySelectorAll('[data-help-level]').forEach(b=>{if(b.dataset.helpLevel==='4'){b.hidden=true;return}b.textContent=labels['L'+b.dataset.helpLevel]||b.textContent});
+   document.querySelectorAll('[data-help-level]').forEach(b=>{const title=b.querySelector('b'),label=labels['L'+b.dataset.helpLevel];if(title&&label)title.textContent=label});
    const current=s.activeHelpThread||s.helpThreads?.at(-1);if(current&&!$('helpNextAction')){
     document.querySelector('.help-conversation')?.insertAdjacentHTML('beforeend',`<section class="task mt16">${field('helpNextAction','我们接下来准备做什么？',s.workspace.next)}${(s.queue||[]).filter(q=>q.threadId===current.id&&q.feedback).map(q=>`<article class="task"><b>老师的回应</b><p>${esc(q.feedback)}</p></article>`).join('')}<div class="toolbar">${button('helpContinue','继续尝试')}${button('helpUnresolved','还没解决','warn')}${button('helpResolved','问题已解决','green')}</div></section>`);
     for(const [key,outcome] of [['helpContinue','continue'],['helpUnresolved','unresolved'],['helpResolved','resolved']])if($(key))$(key).onclick=async()=>{if(await request('help-feedback',{threadId:current.id,next:value('helpNextAction'),outcome},load())){toast('已保存到服务器');location.reload()}};

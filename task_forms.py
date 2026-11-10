@@ -69,8 +69,14 @@ for key, label in [('problem', '共同要解决的问题'), ('known', '题目给
 for index, label in enumerate(['字母、符号和单位都写清楚', '算式能从题目条件中找到根据', '别人能按我们的步骤重新检查',
                                '这个量可以取哪些值', '最小、最大或接近限制的情况已检查', '结论还没有考虑到哪些情况']):
     add_field('math-check-' + str(index), label, 3, 3, 'checklist.' + str(index), '检查后再勾选。', 'checkbox', False, True)
-for index in range(4):
-    add_field('rehearsal-check-' + str(index), '上台前检查第' + str(index + 1) + '项', 5, 1,
+REHEARSAL_CHECKS = [
+    '每位成员知道自己讲什么、负责回答什么问题',
+    '图表标题、单位和研究量的含义都写清楚',
+    '能说明怎样检查，以及结论根据什么得出',
+    '能说明方案还没有考虑到哪些实际情况',
+]
+for index, title in enumerate(REHEARSAL_CHECKS):
+    add_field('rehearsal-check-' + str(index), title, 5, 1,
               'product.rehearsalChecks.' + str(index), '完成这一项检查后勾选。', 'checkbox', True, True)
 for key, title in [('goal','已阅读项目目标与成果要求'), ('materials','已核对材料与设备'), ('rules','已确认课堂规则')]:
     add_field('prep-' + key, title, 1, {'goal':0,'materials':1,'rules':3}[key],
@@ -258,13 +264,12 @@ def apply_workflow(state, statuses, config):
             result[stage-1][task] = all(field_complete(state,CATALOG_BY_ID[key],rules) for key in fields)
             if stage == 4:
                 result[stage-1][task] = result[stage-1][task] and len(state.get('viewpoints',[])) >= 2
+    required_status = [[True] * 4 for _ in range(5)]
     for spec in FIELD_CATALOG:
         if spec['id'] not in rules or spec['stage'] < 1 or spec['task'] < 0 or not spec['path']:
             continue
         if rules[spec['id']].get('required') is True and not field_complete(state,spec,rules):
-            if spec['id'].startswith('representation') and statuses[2][3]:
-                continue
-            result[spec['stage']-1][spec['task']] = False
+            required_status[spec['stage']-1][spec['task']] = False
     evaluated = {}
     def evaluate(key):
         if key in evaluated:
@@ -286,7 +291,7 @@ def apply_workflow(state, statuses, config):
             elif metric == 'questions':
                 records = [row for row in records[1:] if filled(row)]
             valid = len(records) >= rule.get('minimum',1)
-        valid = valid and all(evaluate(dep) for dep in rule.get('dependsOn',[]))
+        valid = valid and required_status[stage-1][task] and all(evaluate(dep) for dep in rule.get('dependsOn',[]))
         evaluated[key] = valid
         return valid
     for stage in range(1,6):

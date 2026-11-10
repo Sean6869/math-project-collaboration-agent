@@ -833,6 +833,11 @@ def merged_state(group_no: int, monitoring: bool = True) -> dict:
         else: value.pop('classGrade', None)
     value["groupId"] = group_no
     value["fieldCatalog"] = classroom.FIELD_CATALOG
+    value["teacherConfig"] = copy.deepcopy(value.get("teacherConfig", {}))
+    for index, title in enumerate(classroom.task_forms.REHEARSAL_CHECKS):
+        rule = value["teacherConfig"].get("fieldRules", {}).get(f"rehearsal-check-{index}")
+        if isinstance(rule, dict) and rule.get("title") == f"上台前检查第{index + 1}项":
+            rule["title"] = title
     value["hintPolicy"] = hint_policy(value)
     value["hintUsage"] = hint_usage(group_state)
     value["hintUsed"] = sum(value["hintUsage"].values())
@@ -3773,7 +3778,7 @@ class Handler(SimpleHTTPRequestHandler):
                 thread = {
                     "id": secrets.token_hex(8), "status": "active", "currentLevel": 1,
                     "type": issue_type, "issue": issue or "需要教师介入", "createdAt": utc_now(), "updatedAt": utc_now(),
-                    "messages": [], "transitions": [],
+                    "stage": state.get("currentStage", 1), "messages": [], "transitions": [],
                 }
                 threads.append(thread)
                 group_state["activeHelpThreadId"] = thread["id"]
@@ -3809,7 +3814,7 @@ class Handler(SimpleHTTPRequestHandler):
             thread = {
                 "id": secrets.token_hex(8), "status": "active", "currentLevel": 1,
                 "type": issue_type, "issue": issue, "createdAt": utc_now(), "updatedAt": utc_now(),
-                "messages": [], "transitions": [],
+                "stage": state.get("currentStage", 1), "messages": [], "transitions": [],
             }
             threads.append(thread)
             group_state["activeHelpThreadId"] = thread["id"]

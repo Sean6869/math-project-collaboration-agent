@@ -1,5 +1,6 @@
 """Regression checks for the first classroom trial feedback."""
 from unittest import mock
+import json
 import io
 from openpyxl import load_workbook
 import platform_server as app
@@ -169,6 +170,85 @@ class DbrTest(ClassroomTest):
         self.assertEqual(result[0],200,result)
         self.assertEqual(self.state(self.teacher)['queue'][0]['group'],2)
 
+    def test_explicit_required_field_applies_to_every_completion_path(self):
+        forms=app.classroom.task_forms
+        state={'checklist':{str(i):True for i in range(6)},'versions':[{'v':'V1','model':'本组方案'}]}
+        self.assertTrue(app.stage_task_status(state)[2][3])
+        rules=forms.clean_field_rules({'representationMeaning':{'required':True}})
+        self.assertFalse(app.stage_task_status(state,rules)[2][3])
+        workflow=forms.clean_workflow({'3.3':{'mode':'count','metric':'versions','minimum':1}})
+        self.assertFalse(app.stage_task_status(state,rules,workflow)[2][3])
+        state['mathTools']={'representation':{'meaning':'测量值随边长变化'}}
+        self.assertTrue(app.stage_task_status(state,rules,workflow)[2][3])
+
+    def test_export_anonymizes_same_names_in_their_own_group(self):
+        for number in (1,3):
+            state=app.state_get(f'group:{number}')
+            state['product']={'claim':'同学甲核对结果','limitations':'联系 test@example.com 13800138000 sk-testsecretforexport'}
+            app.state_put(f'group:{number}',state)
+        status,rows=self.req(self.teacher,'/api/export?format=json')
+        self.assertEqual(status,200)
+        for number in (1,3):
+            row=next(row for row in rows if row['event_type']=='product_snapshot' and row['group_no']==f'G{number:02d}')
+            self.assertEqual(json.loads(row['data'])['claim'],f'G{number:02d}-M1核对结果')
+            self.assertEqual(json.loads(row['data'])['limitations'],'联系 [已隐去] [已隐去] [已隐去]')
+
+    def test_evidence_version_validation_and_legacy_repair(self):
+        state=self.state()
+        state['evidence']=[{'text':'测量结果','modelVersion':'V9999','stage':4,'verified':True}]
+        status,result=self.req(self.student,'/api/state',{'state':state},'PUT')
+        self.assertEqual(status,400,result)
+        state=self.state()
+        state['evidence']=[{'text':'暂不关联方案','modelVersion':'','stage':4}]
+        self.assertEqual(self.req(self.student,'/api/state',{'state':state},'PUT')[0],200)
+        legacy=app.state_get('group:1')
+        legacy['evidence'][0]['modelVersion']='V9999'
+        app.state_put('group:1',legacy)
+        unchanged=self.state()
+        unchanged['workspace']['next']='先核对数据'
+        self.assertEqual(self.req(self.student,'/api/state',{'state':unchanged},'PUT')[0],200)
+        repaired=self.state()
+        repaired['evidence'][0]['modelVersion']=''
+        status,result=self.req(self.student,'/api/state',{'state':repaired},'PUT')
+        self.assertEqual(status,200,result)
+        self.assertEqual(result['state']['evidence'][0]['modelVersion'],'')
+
+    def test_help_followup_has_stage_actor_and_linked_export(self):
+        _,result=self.req(self.student,'/api/hints',{'action':'teacher','issue':'核对单位','newThread':True,'requestId':'followup-stage'})
+        thread_id=result['threadId']
+        status,result=self.req(self.student,'/api/classroom/help-feedback',{'threadId':thread_id,'next':'重新检查单位','outcome':'continue','operator':'同学甲','pageStage':4})
+        self.assertEqual(status,200,result)
+        feedback=app.state_get('group:1')['helpFeedback'][-1]
+        self.assertEqual(feedback['stage'],4)
+        self.assertEqual(feedback['sourceStage'],5)
+        self.assertEqual(feedback['actor'],'同学甲')
+        _,rows=self.req(self.teacher,'/api/export?format=json')
+        row=next(row for row in rows if row['event_type']=='help_followup' and row.get('request_id')==thread_id and row['id'].startswith('G01-helpFeedback'))
+        self.assertEqual(row['stage'],4)
+        self.assertEqual(json.loads(row['data'])['actor'],'G01-M1')
+        self.assertEqual(json.loads(row['data'])['stageSource'],'recorded')
+        self.assertEqual(len({row['event_id'] for row in rows}),len(rows))
+
+    def test_rehearsal_edits_keep_identity_and_history(self):
+        state=self.state()
+        state['product']={'rehearsalIssues':[{'time':app.utc_now(),'problem':'缺少单位','solution':'准备补齐','rechecked':False}]}
+        status,result=self.req(self.student,'/api/state',{'state':state},'PUT')
+        self.assertEqual(status,200,result)
+        old=result['state']['product']['rehearsalIssues'][0]
+        state=result['state']
+        state['_operator']='同学甲'
+        state['product']['rehearsalIssues'][0].update(solution='已补齐单位并重新计算',rechecked=True)
+        status,result=self.req(self.student,'/api/state',{'state':state},'PUT')
+        self.assertEqual(status,200,result)
+        current=result['state']['product']['rehearsalIssues'][0]
+        self.assertEqual(current['id'],old['id'])
+        self.assertEqual(current['time'],old['time'])
+        self.assertEqual(current['updatedBy'],'同学甲')
+        snapshots=result['state']['productHistory']
+        self.assertFalse(snapshots[-2]['product']['rehearsalIssues'][0]['rechecked'])
+        self.assertTrue(snapshots[-1]['product']['rehearsalIssues'][0]['rechecked'])
+        self.assertEqual(snapshots[-1]['actor'],'同学甲')
+
 
 def load_tests(loader, tests, pattern):
     names = [
@@ -180,5 +260,10 @@ def load_tests(loader, tests, pattern):
         'test_optional_fields_do_not_keep_hidden_completion_gates',
         'test_preview_respects_unsaved_rules_without_writing',
         'test_queue_preserves_fifo_for_same_second_and_priority_across_pages',
+        'test_explicit_required_field_applies_to_every_completion_path',
+        'test_export_anonymizes_same_names_in_their_own_group',
+        'test_evidence_version_validation_and_legacy_repair',
+        'test_help_followup_has_stage_actor_and_linked_export',
+        'test_rehearsal_edits_keep_identity_and_history',
     ]
     return loader.suiteClass(DbrTest(name) for name in names)
