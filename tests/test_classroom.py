@@ -34,6 +34,7 @@ class ClassroomTest(unittest.TestCase):
         with app.database() as db:
             cls.student_code = db.execute("SELECT student_login_code FROM teachers WHERE username='classroom_teacher'").fetchone()[0]
         cls.server = app.ThreadingHTTPServer(('127.0.0.1', 0), app.Handler)
+        cls.server.daemon_threads = False
         cls.thread = threading.Thread(target=cls.server.serve_forever, daemon=True)
         cls.thread.start()
         cls.base = f'http://127.0.0.1:{cls.server.server_port}'
@@ -154,7 +155,7 @@ class ClassroomTest(unittest.TestCase):
         state = self.state(self.teacher)
         self.assertTrue(any(x['status'] == 'returned' for x in state['aiCalls']))
 
-    def test_hints_stage_limit_retry_idempotent_and_teacher_extra(self):
+    def test_hints_project_level_quota_and_retry_idempotent(self):
         reply = ('先检查一个单位是否与题目一致？', 1, 'ok')
         with mock.patch.object(app, 'ark_hint', return_value=reply) as upstream:
             body = {'newThread': True, 'done': '写了单位', 'issue': '预算单位怎么核验', 'requestId': 'first'}
@@ -165,10 +166,13 @@ class ClassroomTest(unittest.TestCase):
             body['requestId'] = 'second'
             self.assertEqual(self.req(self.student, '/api/hints', body)[0], 200)
             body['requestId'] = 'third'
-            self.assertEqual(self.req(self.student, '/api/hints', body)[0], 409)
-            self.assertEqual(self.command('ai-access', {'group': 1, 'extra': 1, 'reason': '核对单位'})[0], 200)
             self.assertEqual(self.req(self.student, '/api/hints', body)[0], 200)
             self.assertEqual(self.state()['stageHintUsed'], 3)
+            group = app.state_get('group:1')
+            group['hintUsage'] = {'L1': 20}
+            app.state_put('group:1', group)
+            body['requestId'] = 'limit'
+            self.assertEqual(self.req(self.student, '/api/hints', body)[0], 409)
 
     def test_evaluation_draft_publication_and_withdrawal_not_visible_to_other_groups(self):
         body = {'group': 1, 'scores': {'model': 1, 'evidence': None}, 'comment': '核对单位', 'status': 'draft'}

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import base64
 import csv
 from openpyxl import Workbook
@@ -129,15 +130,15 @@ def compressed_static(path: str, modified_ns: int, size: int) -> bytes:
 CLASS_KEYS = {
     "project", "className", "currentStage", "stagePaused",
     "aiOpen", "freeAiEnabled", "freeAiQuota", "projectType", "projectHours", "hintQuota",
-    "maxHintLevel", "hintPolicy", "broadcast", "teacherConfig", "groups", "queue", "common",
+    "maxHintLevel", "hintPolicy", "hintPolicyVersion", "broadcast", "teacherConfig", "groups", "queue", "common",
     "evaluations", "audit", "groupControls", "groupOverrides", "hintStageLimit", "taskBrief", "teachingReview", "evaluationHistory",
 }
 GROUP_KEYS = {
     "groupId", "roles", "roleRound", "stageSubmitted", "stageTimes",
     "workspace", "versions", "evidence", "viewpoints", "comparisonAi", "firstThoughts",
-    "debate", "product", "events", "questionTree", "graphConfig", "checklist", "preparationChecks", "freeAi", "mathTools", "thoughtMeta", "thoughtHistory", "roleAssignments", "comparison", "comparisonHistory", "productHistory",
+    "debate", "product", "events", "questionTree", "graphConfig", "checklist", "preparationChecks", "freeAi", "mathTools", "thoughtMeta", "thoughtHistory", "roleAssignments", "comparison", "comparisonHistory", "productHistory", "evidenceHistory", "fieldHistory",
 }
-HINT_POLICY_DEFAULT = {"L1": 20, "L2": 10, "L3": 5, "L4": 3}
+HINT_POLICY_DEFAULT = {"L1": 20, "L2": 10, "L3": 5, "L4": 2}
 HINT_LEVEL_NAMES = {1: "定位", 2: "拆解", 3: "局部示范", 4: "教师介入"}
 ROLE_NAMES = ["建模者", "质疑者", "记录者", "解释者", "验证者", "资料员", "协调者", "展示者", "计算者", "检查者"]
 ALLOWED_UPLOADS = {
@@ -315,8 +316,9 @@ def validated_members(value: object) -> list[str]:
 
 def roles_for_members(existing: object, count: int) -> list[str]:
     roles = [str(item) for item in existing] if isinstance(existing, list) else []
-    roles = [item for item in roles if item in ROLE_NAMES]
-    roles.extend(item for item in ROLE_NAMES if item not in roles)
+    allowed = ROLE_NAMES[:count]
+    roles = list(dict.fromkeys(item for item in roles if item in allowed))
+    roles.extend(item for item in allowed if item not in roles)
     return roles[:count]
 
 
@@ -527,14 +529,14 @@ def model_versions(state: dict) -> list[dict]:
     return [item for item in versions if isinstance(item, dict) and _has_value(item.get("model"))] if isinstance(versions, list) else []
 
 
-def ensure_model_version(state: dict, timestamp: str, recover_only: bool = False) -> None:
+def ensure_model_version(state: dict, timestamp: str, recover_only: bool = False, actor: str = '') -> None:
     workspace = state.get("workspace")
     if not isinstance(workspace, dict) or not _has_value(workspace.get("model")):
         return
     valid = model_versions(state)
     if recover_only and valid:
         return
-    snapshot = {key: workspace.get(key, "") for key in ("model", "variables", "relation", "constraints", "modelFiles")}
+    snapshot = {key: workspace.get(key, "") for key in ("model", "variables", "relation", "constraints", "modelFiles", "quantityRows", "conditionChecks")}
     if valid and all(snapshot[key] == valid[-1].get(key, snapshot[key]) for key in snapshot):
         return
     versions = state.get("versions")
@@ -542,12 +544,14 @@ def ensure_model_version(state: dict, timestamp: str, recover_only: bool = False
     number = max([len(versions)] + [int(item["v"][1:]) for item in valid if re.fullmatch(r"V\d+", str(item.get("v", "")))]) + 1
     versions.append({"v": f"V{number}", "time": timestamp,
                      "note": "从已保存模型恢复版本记录" if recover_only else "保存模型与变量、关系、约束快照",
-                     "reason": workspace.get("revisionReason", ""), "fileIds": workspace.get("modelFiles", []),
+                     "requestId": state.get("activeHelpThreadId", ""), "actor": actor, "reason": workspace.get("revisionReason", ""), "fileIds": workspace.get("modelFiles", []),
+                     "checks": copy.deepcopy(state.get("checklist", {})),
+                     "representation": copy.deepcopy(state.get("mathTools", {}).get("representation", {})),
                      **snapshot})
     state["versions"] = versions
 
 
-def stage_task_status(group_state: dict) -> list[list[bool]]:
+def stage_task_status(group_state: dict, field_rules: dict | None = None, workflow: dict | None = None) -> list[list[bool]]:
     workspace = group_state.get("workspace", {}) if isinstance(group_state.get("workspace"), dict) else {}
     members = [name for name in group_state.get("members", []) if isinstance(name, str) and name.strip()]
     thoughts = group_state.get("firstThoughts", {}) if isinstance(group_state.get("firstThoughts"), dict) else {}
@@ -579,35 +583,38 @@ def stage_task_status(group_state: dict) -> list[list[bool]]:
         for state in desmos_states.values()
     )
     checklist_complete = all(checklist.get(str(i), checklist.get(i)) is True for i in range(6))
-    return [
+    statuses = [
         [preparation.get("goal") is True, preparation.get("materials") is True,
          bool(group_state.get("membersLocked")) and bool(members), preparation.get("rules") is True],
         [bool(members) and all(_has_value(thoughts.get(str(i), thoughts.get(i))) for i in range(len(members))),
          _has_value(workspace.get("problem")),
          all(_has_value(workspace.get(key)) for key in ("known", "constraints")),
-         len([item for item in questions if _has_value(item)]) >= 3 and _has_value(questions[0] if questions else "")],
+         len([item for item in questions if _has_value(item)]) >= 2 and _has_value(questions[0] if questions else "")],
         [all(_has_value(workspace.get(key)) for key in ("variables", "constraints")),
          _has_value(workspace.get("relation")),
          _has_value(workspace.get("model")) and len(versions) >= 1,
          graph_complete or desmos_complete or checklist_complete or all(_has_value(math_tools.get("representation", {}).get(k)) for k in ("meaning", "check"))],
-        [len(evidence) >= 1, any(isinstance(item, dict) and item.get("verified") is True for item in evidence),
-         sum(isinstance(item, dict) and all(_has_value(item.get(key)) for key in ("claim", "basis", "risk")) for item in viewpoints) >= 2,
+        [any(isinstance(item, dict) and not item.get("invalid") for item in evidence), any(isinstance(item, dict) and item.get("verified") is True and not item.get("invalid") for item in evidence),
+         sum(isinstance(item, dict) and all(_has_value(item.get(key)) for key in ("claim", "basis")) for item in viewpoints) >= 2,
          len(versions) >= 2],
         [all(_has_value(value) for value in (workspace.get("problem"), workspace.get("model"), product.get("evidenceValidation"), product.get("claim"))),
          _has_value(product.get("rehearsal")) and len(rehearsal_checks) >= 4 and all(value is True for value in rehearsal_checks[:4]),
          all(_has_value(product.get(key)) for key in ("audience", "claim", "limitations")),
          len(reflection) >= 3 and all(reflection[:3])],
     ]
+    return classroom.task_forms.apply_workflow(group_state, statuses, {"fieldRules": field_rules or {}, "workflow": workflow or {}})
 
 
-def validated_stage_submissions(group_state: dict) -> dict:
+def validated_stage_submissions(group_state: dict, field_rules: dict | None = None, workflow: dict | None = None) -> dict:
     raw = group_state.get("stageSubmitted", {}) if isinstance(group_state.get("stageSubmitted"), dict) else {}
-    status = stage_task_status(group_state)
+    status = stage_task_status(group_state, field_rules, workflow)
     return {number: bool(raw.get(str(number), raw.get(number, False))) and all(status[number - 1]) for number in range(1, 6)}
 
 
 def hint_policy(state: dict) -> dict[str, int]:
     raw = state.get("hintPolicy") if isinstance(state.get("hintPolicy"), dict) else {}
+    if not state.get("hintPolicyVersion") and raw == {"L1": 20, "L2": 10, "L3": 5, "L4": 3}:
+        raw = HINT_POLICY_DEFAULT
     result = {}
     for level, default in HINT_POLICY_DEFAULT.items():
         try:
@@ -654,9 +661,9 @@ def highest_hint_level(group_state: dict) -> int:
     return max(levels, default=0)
 
 
-def group_completion(group_state: dict) -> tuple[int, int]:
-    signals = stage_task_status(group_state)
-    submitted_count = sum(validated_stage_submissions(group_state).values())
+def group_completion(group_state: dict, field_rules: dict | None = None, workflow: dict | None = None) -> tuple[int, int]:
+    signals = stage_task_status(group_state, field_rules, workflow)
+    submitted_count = sum(validated_stage_submissions(group_state, field_rules, workflow).values())
     partial = sum(round(sum(stage) / len(stage) * 20) for stage in signals)
     return min(100, max(partial, submitted_count * 20)), submitted_count
 
@@ -685,7 +692,7 @@ def dynamic_group_summaries(class_state: dict) -> list[dict]:
         saved = next((item for item in stored if isinstance(item, dict) and int(item.get("id", 0)) == number), {})
         group_state = state_get(f"group:{number}")
         current_stage = classroom.effective_stage(class_state, number)
-        progress, submitted_count = group_completion(group_state)
+        progress, submitted_count = group_completion(group_state, class_state.get("teacherConfig", {}).get("fieldRules"), class_state.get("teacherConfig", {}).get("workflow"))
         versions = group_state.get("versions", [])
         latest = versions[-1].get("note", "模型版本已保存") if isinstance(versions, list) and versions and isinstance(versions[-1], dict) else "工作区已保存" if _has_value(group_state.get("workspace")) else "尚未保存"
         active = progress > 0 or bool(help_total(group_state)) or bool(group_state.get("helpHistory"))
@@ -698,7 +705,7 @@ def dynamic_group_summaries(class_state: dict) -> list[dict]:
             "membersLocked": bool(group_state.get("membersLocked")),
             "stage": current_stage,
             "submitted": submitted_count,
-            "currentSubmitted": validated_stage_submissions(group_state).get(current_stage, False),
+            "currentSubmitted": validated_stage_submissions(group_state, class_state.get("teacherConfig", {}).get("fieldRules"), class_state.get("teacherConfig", {}).get("workflow")).get(current_stage, False),
             "status": status,
             "help": help_total(group_state),
             "maxHint": highest_hint_level(group_state),
@@ -785,12 +792,13 @@ def merged_state(group_no: int, monitoring: bool = True) -> dict:
     value = dict(class_state)
     group_state = state_get(f"group:{group_no}")
     value.update(group_state)
+    value["roles"] = roles_for_members(group_state.get("roles"), len(group_state.get("members", [])))
     # The project title is shared by the entire class, never a group draft.
     if "project" in class_state:
         value["project"] = class_state["project"]
     value.update(broadcast_for_session({"role": "student", "groupId": group_no}) if not monitoring else current_broadcast(class_state))
-    value["stageSubmitted"] = validated_stage_submissions(group_state)
-    value["stageTaskStatus"] = stage_task_status(group_state)
+    value["stageSubmitted"] = validated_stage_submissions(group_state, class_state.get("teacherConfig", {}).get("fieldRules"), class_state.get("teacherConfig", {}).get("workflow"))
+    value["stageTaskStatus"] = stage_task_status(group_state, class_state.get("teacherConfig", {}).get("fieldRules"), class_state.get("teacherConfig", {}).get("workflow"))
     value["broadcastViewed"] = group_no in value.get("seenGroups", [])
     # 课堂阶段、暂停状态和 AI 开关由教师端统一控制；小组初始状态中的
     # currentStage=1 不能覆盖教师已经开放的阶段，否则学生刷新后会被误判回阶段1。
@@ -821,6 +829,7 @@ def merged_state(group_no: int, monitoring: bool = True) -> dict:
         if grade: value['classGrade'] = grade
         else: value.pop('classGrade', None)
     value["groupId"] = group_no
+    value["fieldCatalog"] = classroom.FIELD_CATALOG
     value["hintPolicy"] = hint_policy(value)
     value["hintUsage"] = hint_usage(group_state)
     value["hintUsed"] = sum(value["hintUsage"].values())
@@ -929,6 +938,10 @@ def spreadsheet_bytes(title: str, headers: list, rows: list) -> bytes:
                 cell.data_type = 's'
     sheet.freeze_panes = 'A2'
     sheet.auto_filter.ref = sheet.dimensions
+    if title == '课堂过程':
+        dictionary = book.create_sheet('字段说明')
+        for row in [('字段', '含义'), ('event_id', '事件或版本的唯一编号'), ('request_id', '关联同一求助主题的编号'), ('时间', '服务器记录时间'), ('匿名小组', '用小组编号代替学生身份'), ('阶段', '发生时的项目阶段'), ('事件类型', '求助、回应、修改、提交等操作'), ('内容', '匿名化后的操作或版本数据')]:
+            dictionary.append(row)
     output = io.BytesIO()
     book.save(output)
     return output.getvalue()
@@ -2277,9 +2290,10 @@ class Handler(SimpleHTTPRequestHandler):
         self.send_header("X-Content-Type-Options", "nosniff")
         document_preview = path in ('/api/lesson-plan/source', '/api/lesson-plan/material')
         visualization = path.startswith('/vendor/math-viz-kit/')
-        self.send_header("X-Frame-Options", "SAMEORIGIN" if document_preview or visualization else "DENY")
+        student_preview = path.startswith("/student/") and parse_qs(urlparse(self.path).query).get("preview") == ["1"]
+        self.send_header("X-Frame-Options", "SAMEORIGIN" if document_preview or visualization or student_preview else "DENY")
         self.send_header("Referrer-Policy", "same-origin")
-        photo_capture = path in {"/student/stage2-understanding.html", "/student/stage3-model.html", "/student/stage4-evidence.html", "/student/ai.html", "/teacher/project.html"}
+        photo_capture = path in {"/student/stage2-understanding.html", "/student/stage3-model.html", "/student/stage4-evidence.html", "/student/stage5-product.html", "/student/ai.html", "/teacher/project.html"}
         self.send_header("Permissions-Policy", f"camera={'(self)' if photo_capture else '()'}, microphone=(), geolocation=()")
         if path in {"/student/math-tools.html", "/student/stage3-graph.html"}:
             # Desmos v1.12 contains generated Function/eval code. Scope unsafe-eval
@@ -2892,6 +2906,17 @@ class Handler(SimpleHTTPRequestHandler):
         if not isinstance(incoming, dict):
             self.json_response({"error": "state必须是对象"}, HTTPStatus.BAD_REQUEST)
             return
+        if session["role"] == "teacher" and "teacherConfig" in incoming:
+            try:
+                config = incoming["teacherConfig"]
+                if not isinstance(config, dict):
+                    raise ValueError("教师配置格式无效。")
+                for key, cleaner in (("fieldRules", classroom.task_forms.clean_field_rules), ("workflow", classroom.task_forms.clean_workflow)):
+                    if key in config:
+                        config[key] = cleaner(config[key])
+            except (ValueError, TypeError) as exc:
+                self.json_response({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
+                return
         count = group_count()
         group = int(session.get("groupId") or incoming.get("groupId") or 1)
         group = max(1, min(count, group))
@@ -2919,7 +2944,7 @@ class Handler(SimpleHTTPRequestHandler):
                 self.json_response({"error": "角色由教师统一轮换，请刷新获取最新分工"}, HTTPStatus.CONFLICT)
                 return
             saved_submissions = group_state.get("stageSubmitted", {}) if isinstance(group_state.get("stageSubmitted"), dict) else {}
-            if bool(saved_submissions.get("5", saved_submissions.get(5, False))):
+            if validated_stage_submissions(group_state, class_snapshot.get("teacherConfig", {}).get("fieldRules"), class_snapshot.get("teacherConfig", {}).get("workflow")).get(5):
                 saved_product = group_state.get("product", {}) if isinstance(group_state.get("product"), dict) else {}
                 incoming_product = incoming.get("product", saved_product)
                 saved_workspace = group_state.get("workspace", {}) if isinstance(group_state.get("workspace"), dict) else {}
@@ -2954,7 +2979,9 @@ class Handler(SimpleHTTPRequestHandler):
         # Old clients cannot erase history or complete a task with empty versions.
         candidate["versions"] = group_state.get("versions", [])
         try:
-            candidate = classroom.immutable_records(sys.modules[__name__], group_state, candidate, str(session.get("teacherId") or f"G{group}"))
+            operator = str(incoming.get("_operator", ""))
+            actor = operator if session["role"] == "student" and operator in group_state.get("members", []) else str(session.get("teacherId") or f"G{group}")
+            candidate = classroom.immutable_records(sys.modules[__name__], group_state, candidate, actor)
         except ValueError as exc:
             self.json_response({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
             return
@@ -2963,19 +2990,19 @@ class Handler(SimpleHTTPRequestHandler):
         if model_versions(group_state) and any(after_model.get(k) != before_model.get(k) for k in ("model", "variables", "relation", "constraints", "modelFiles")) and not str(after_model.get("revisionReason", "")).strip():
             self.json_response({"error": "请填写这次修改方案的原因。"}, HTTPStatus.BAD_REQUEST)
             return
-        ensure_model_version(candidate, utc_now())
-        for key in ("thoughtHistory", "comparisonHistory", "productHistory", "roleAssignments", "evidence", "events"):
+        ensure_model_version(candidate, utc_now(), actor=actor)
+        for key in ("thoughtHistory", "comparisonHistory", "productHistory", "evidenceHistory", "fieldHistory", "roleAssignments", "evidence", "events"):
             incoming[key] = candidate.get(key, [])
         incoming["versions"] = candidate.get("versions", [])
         requested = incoming.get("stageSubmitted", {}) if isinstance(incoming.get("stageSubmitted"), dict) else {}
         saved_submissions = group_state.get("stageSubmitted", {}) if isinstance(group_state.get("stageSubmitted"), dict) else {}
-        valid_submissions = validated_stage_submissions(candidate)
+        valid_submissions = validated_stage_submissions(candidate, class_snapshot.get("teacherConfig", {}).get("fieldRules"), class_snapshot.get("teacherConfig", {}).get("workflow"))
         for number in range(1, 6):
             wants_submit = bool(requested.get(str(number), requested.get(number, False)))
             was_submitted = bool(saved_submissions.get(str(number), saved_submissions.get(number, False)))
             if session["role"] == "student" and wants_submit and not was_submitted:
                 class_check = state_get("class")
-                if class_check.get("stagePaused") or classroom.control(class_check, group).get("hold") or number != classroom.effective_stage(class_check, group):
+                if class_check.get("stagePaused") or classroom.control(class_check, group).get("hold") or number > classroom.effective_stage(class_check, group):
                     self.json_response({"error": "只能提交当前开放且未暂停的阶段"}, HTTPStatus.CONFLICT)
                     return
             if wants_submit and not was_submitted and not valid_submissions[number]:
@@ -2999,6 +3026,7 @@ class Handler(SimpleHTTPRequestHandler):
                 self.json_response({"error": "额度必须按L1、L2、L3、L4逐级递减"}, HTTPStatus.BAD_REQUEST)
                 return
             incoming["hintPolicy"] = checked_policy
+            incoming["hintPolicyVersion"] = 2
         group_state.update({key: incoming[key] for key in GROUP_KEYS if key in incoming})
         group_state["groupId"] = group
         if session["role"] == "student" or any(incoming.get(k, group_state.get(k)) != group_state.get(k) for k in GROUP_KEYS):
@@ -3666,8 +3694,6 @@ class Handler(SimpleHTTPRequestHandler):
             self.json_response({"ok": True, "message": "当前问题已关闭，可以从L1开始新的求助主题"})
             return
 
-        if action in {"ask", "advance"} and state.get("stageHintUsed", 0) >= state.get("hintStageLimit", 2):
-            raise UpstreamServiceError("这一步的AI提示已用完，请老师帮助。", HTTPStatus.CONFLICT)
         if action == "advance":
             if not thread or thread.get("status") not in {"active", "resolved"}:
                 raise ValueError("请先建立并使用当前求助主题")
@@ -3866,12 +3892,12 @@ class Handler(SimpleHTTPRequestHandler):
         item = groups[group - 1]
         versions = group_state.get("versions")
         latest = versions[-1].get("note", "模型版本已保存") if isinstance(versions, list) and versions and isinstance(versions[-1], dict) else "工作区已保存" if _has_value(group_state.get("workspace")) else "尚未保存"
-        progress, submitted_count = group_completion(group_state)
+        progress, submitted_count = group_completion(group_state, class_state.get("teacherConfig", {}).get("fieldRules"), class_state.get("teacherConfig", {}).get("workflow"))
         active = progress > 0 or bool(help_total(group_state)) or bool(group_state.get("helpHistory"))
         item.update({
             "id": group, "stage": int(group_state.get("currentStage", class_state.get("currentStage", 1))),
             "submitted": submitted_count,
-            "currentSubmitted": validated_stage_submissions(group_state).get(class_current_stage(class_state), False),
+            "currentSubmitted": validated_stage_submissions(group_state, class_state.get("teacherConfig", {}).get("fieldRules"), class_state.get("teacherConfig", {}).get("workflow")).get(class_current_stage(class_state), False),
             "help": help_total(group_state), "maxHint": highest_hint_level(group_state),
             "latest": latest, "status": "等待教师" if item.get("teacher") else "已完成" if submitted_count == 5 else "持续推进" if active else "准备中", "progress": progress,
         })
@@ -3897,11 +3923,21 @@ class Handler(SimpleHTTPRequestHandler):
             requested_stage = int(body.get("stage", stage_no))
         except (TypeError, ValueError) as exc:
             raise ValueError("阶段编号无效") from exc
-        if requested_stage != stage_no or class_state.get("stagePaused") or classroom.control(class_state, group).get("hold"):
+        if not 1 <= requested_stage <= stage_no or class_state.get("stagePaused") or classroom.control(class_state, group).get("hold"):
             self.json_response({"error": "只能提交当前开放且未暂停的阶段"}, HTTPStatus.CONFLICT)
             return
+        stage_no = requested_stage
         group_state = state_get(f"group:{group}")
-        if not all(stage_task_status(group_state)[stage_no - 1]):
+        if body.get("reopen") is True:
+            submissions = dict(group_state.get("stageSubmitted") or {})
+            submissions[str(stage_no)] = False
+            group_state["stageSubmitted"] = submissions
+            state_put(f"group:{group}", group_state)
+            self.sync_group_summary(group, group_state)
+            record_event("student", group, "stage_reopen", stage_no, f"阶段{stage_no}重新编辑")
+            self.json_response({"ok": True, "state": merged_state(group, monitoring=False)})
+            return
+        if not all(stage_task_status(group_state, class_state.get("teacherConfig", {}).get("fieldRules"), class_state.get("teacherConfig", {}).get("workflow"))[stage_no - 1]):
             self.json_response({"error": f"阶段{stage_no}任务尚未全部完成，不能提交"}, HTTPStatus.CONFLICT)
             return
         submissions = group_state.get("stageSubmitted", {})
@@ -3913,7 +3949,11 @@ class Handler(SimpleHTTPRequestHandler):
         state_put(f"group:{group}", group_state)
         self.sync_group_summary(group, group_state)
         record_event("student", group, "stage_submit", stage_no, f"阶段{stage_no}产出")
-        self.json_response({"ok": True, "state": merged_state(group, monitoring=False)})
+        next_page = class_state.get("teacherConfig", {}).get("workflow", {}).get(f"{stage_no}.3", {}).get("next", "")
+        target_stage = re.match(r"stage([1-5])", next_page)
+        if next_page not in classroom.task_forms.PAGE_PATHS or (target_stage and int(target_stage[1]) > classroom.effective_stage(class_state, group)):
+            next_page = ""
+        self.json_response({"ok": True, "state": merged_state(group, monitoring=False), "next": next_page})
 
     def remove_knowledge_material(self, session: dict, body: dict) -> None:
         name = Path(str(body.get("name", ""))).name[:180]
@@ -4001,14 +4041,14 @@ class Handler(SimpleHTTPRequestHandler):
             raw = json.dumps([dict(row) for row in rows], ensure_ascii=False, indent=2).encode()
             mime, name = "application/json; charset=utf-8", "课堂过程事件.json"
         elif fmt == "xlsx":
-            raw = spreadsheet_bytes('课堂过程', ['编号', '时间', '小组', '阶段', '事件类型', '内容'], [[row['id'], row['ts'], row['group_no'] or 'CLASS', row['stage'] or '', row['event_type'], row['data']] for row in rows])
+            raw = spreadsheet_bytes('课堂过程', ['event_id', 'request_id', '时间', '匿名小组', '阶段', '事件类型', '内容'], [[row['event_id'], row['request_id'], row['ts'], row['group_no'] or 'CLASS', row['stage'] or '', row['event_type'], row['data']] for row in rows])
             mime, name = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', '课堂过程事件.xlsx'
         else:
             output = io.StringIO(newline="")
             writer = csv.writer(output)
-            writer.writerow(["id", "timestamp", "group", "stage", "event_type", "data"])
+            writer.writerow(["event_id", "request_id", "timestamp", "group", "stage", "event_type", "data"])
             for row in rows:
-                writer.writerow([row["id"], row["ts"], row["group_no"] or "CLASS", row["stage"] or "", row["event_type"], row["data"]])
+                writer.writerow([row["event_id"], row["request_id"], row["ts"], row["group_no"] or "CLASS", row["stage"] or "", row["event_type"], row["data"]])
             raw = ("\ufeff" + output.getvalue()).encode("utf-8")
             mime, name = "text/csv; charset=utf-8", "课堂过程事件.csv"
         self.send_response(200)

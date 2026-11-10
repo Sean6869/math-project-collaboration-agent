@@ -8,7 +8,9 @@ import secrets
 import threading
 import time
 import sys
+import task_forms
 
+FIELD_CATALOG = task_forms.FIELD_CATALOG
 WRITE_LOCK = threading.RLock()
 HINT_LOCKS = {}
 SAFE_REPLY = '请先发来你们已经尝试的算式、数据或草稿，我们一起检查其中一个条件。'
@@ -160,13 +162,14 @@ def immutable_records(app, old, new, actor):
     # A guessed attachment ID must never become cross-group evidence.
     group = int(new.get('groupId') or old.get('groupId') or 1)
     refs = list(new.get('workspace', {}).get('modelFiles', []))
+    refs += [photo.get('id') for photo in new.get('product', {}).get('photos', []) if isinstance(photo, dict)]
     refs += [r.get('file', {}).get('id') for r in new.get('evidence', []) if isinstance(r, dict) and isinstance(r.get('file'), dict)]
     for file_id in filter(None, refs):
         with app.database() as db:
             row = db.execute('SELECT id FROM files WHERE id=? AND group_no=? AND project_id=?', (file_id, group, app.PROJECT_CONTEXT.get())).fetchone()
         if not row:
             raise ValueError('附件不存在或不属于本组。')
-    for name in ('thoughtHistory', 'roleAssignments', 'comparisonHistory', 'productHistory'):
+    for name in ('thoughtHistory', 'roleAssignments', 'comparisonHistory', 'productHistory', 'evidenceHistory', 'fieldHistory'):
         new[name] = copy.deepcopy(old.get(name, []))
     events = copy.deepcopy(old.get('events', []))
     seen_events = {json.dumps(item, sort_keys=True, ensure_ascii=False) for item in events}
@@ -178,10 +181,22 @@ def immutable_records(app, old, new, actor):
             events.append(copy.deepcopy(item))
             seen_events.add(key)
     new['events'] = events
+    seen_paths = set()
+    for spec in task_forms.FIELD_CATALOG:
+        path = tuple(spec['path'])
+        if not path or path in seen_paths:
+            continue
+        seen_paths.add(path)
+        before_values = task_forms.field_values(old, spec['path'])
+        after_values = task_forms.field_values(new, spec['path'])
+        if before_values != after_values:
+            new['fieldHistory'].append({'id': secrets.token_hex(8), 'time': timestamp, 'actor': actor,
+                                        'modelVersion': (old.get('versions') or [{}])[-1].get('v', ''), 'requestId': new.get('activeHelpThreadId', ''), 'stage': spec['stage'], 'fieldId': spec['id'], 'title': spec['title'],
+                                        'before': copy.deepcopy(before_values), 'after': copy.deepcopy(after_values)})
     before = old.get('firstThoughts', {})
     after = new.get('firstThoughts', before)
     for member, text in after.items():
-        if text == before.get(member) or not str(text).strip():
+        if (text == before.get(member) and new.get('thoughtMeta', {}).get(str(member)) == old.get('thoughtMeta', {}).get(str(member))) or not str(text).strip():
             continue
         metadata = new.get('thoughtMeta', {}).get(str(member), {})
         mode = metadata.get('mode', 'self')
@@ -190,7 +205,7 @@ def immutable_records(app, old, new, actor):
         history = new['thoughtHistory']
         members = new.get('members', old.get('members', []))
         member_name = members[int(member)] if str(member).isdigit() and int(member) < len(members) else ''
-        history.append({'id': secrets.token_hex(8), 'member': str(member), 'memberName': member_name, 'content': text,
+        history.append({'id': secrets.token_hex(8), 'member': str(member), 'memberName': member_name, 'content': text, 'uncertain': metadata.get('uncertain', ''),
                         'mode': mode, 'fileId': metadata.get('fileId', ''), 'confirmed': metadata.get('confirmed', False),
                         'operator': actor, 'time': timestamp, 'version': 1 + sum(r.get('member') == str(member) for r in history)})
     views = new.get('viewpoints', [])
@@ -210,7 +225,13 @@ def immutable_records(app, old, new, actor):
     for item in new.get('evidence', []):
         if isinstance(item, dict):
             item.setdefault('id', secrets.token_hex(8))
+            item.setdefault('time', timestamp)
             item.setdefault('modelVersion', (new.get('versions') or [{}])[-1].get('v', ''))
+            previous = next((row for row in old.get('evidence', []) if row.get('id') == item['id']), None)
+            if item != previous:
+                item['updatedAt'] = timestamp
+                item['updatedBy'] = actor
+                new['evidenceHistory'].append({'id': secrets.token_hex(8), 'time': timestamp, 'actor': actor, 'evidenceId': item['id'], 'record': copy.deepcopy(item)})
     return new
 
 
@@ -233,6 +254,7 @@ def export_records(app, rows):
     def scrub(text):
         text = str(text)
         for name, anonymous in sorted(names.items(), key=lambda item: -len(item[0])):
+            text = text.replace(json.dumps(name, ensure_ascii=False), json.dumps(anonymous, ensure_ascii=False))
             if len(name) >= 2:
                 text = text.replace(name, anonymous)
         text = re.sub(r'[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}|(?<!\d)1[3-9]\d{9}(?!\d)|(?:ark|sk)-[A-Za-z0-9-]{12,}', '[已隐去]', text)
@@ -243,19 +265,19 @@ def export_records(app, rows):
         records.append({'id': row['id'], 'ts': row['ts'], 'group_no': f"G{row['group_no']:02d}" if row['group_no'] else 'CLASS',
                         'event_type': row['event_type'], 'stage': row['stage'], 'data': ''})
     for number, state in states:
-        for field, kind, phase in [('thoughtHistory', 'thought_snapshot', 2), ('comparisonHistory', 'comparison_snapshot', 3), ('roleAssignments', 'roles_snapshot', 1), ('productHistory', 'product_revision', 5)]:
+        for field, kind, phase in [('thoughtHistory', 'thought_snapshot', 2), ('comparisonHistory', 'comparison_snapshot', 3), ('roleAssignments', 'roles_snapshot', 1), ('productHistory', 'product_revision', 5), ('evidenceHistory', 'evidence_revision', 4), ('fieldHistory', 'field_revision', 0), ('submissionHistory', 'stage_submission', 0)]:
             for index, item in enumerate(state.get(field, [])):
                 detail = copy.deepcopy(item)
                 detail.pop('teacher', None)
                 records.append({'id': f'G{number:02d}-{field}-{item.get("id", index)}', 'ts': item.get('time', ''),
                                 'group_no': f'G{number:02d}', 'stage': item.get('stage') or item.get('comparison', {}).get('stage') or phase,
-                                'event_type': kind, 'data': scrub(json.dumps(detail, ensure_ascii=False))})
+                                'event_type': kind, 'request_id': item.get('requestId', ''), 'data': scrub(json.dumps(detail, ensure_ascii=False))})
         for version in app.model_versions(state):
-            detail = {key: version.get(key, '') for key in ('v', 'model', 'variables', 'relation', 'constraints', 'reason', 'fileIds')}
+            detail = {key: version.get(key, '') for key in ('v', 'model', 'variables', 'relation', 'constraints', 'reason', 'fileIds', 'quantityRows', 'conditionChecks', 'checks', 'representation')}
             records.append({'id': f"G{number:02d}-{version['v']}", 'ts': version.get('time', ''), 'group_no': f'G{number:02d}',
-                            'event_type': 'model_snapshot', 'stage': 3, 'data': scrub(json.dumps(detail, ensure_ascii=False))})
+                            'event_type': 'model_snapshot', 'request_id': version.get('requestId', ''), 'stage': 3, 'data': scrub(json.dumps(detail, ensure_ascii=False))})
         for item in state.get('evidence', []):
-            detail = {key: item.get(key, '') for key in ('id', 'text', 'verified', 'modelVersion')}
+            detail = {key: item.get(key, '') for key in ('id', 'text', 'type', 'stage', 'verified', 'invalid', 'modelVersion', 'updatedAt', 'updatedBy')}
             detail['fileId'] = (item.get('file') or {}).get('id')
             records.append({'id': item.get('id', ''), 'ts': item.get('time', ''), 'group_no': f'G{number:02d}', 'stage': 4,
                             'event_type': 'evidence_snapshot', 'data': scrub(json.dumps(detail, ensure_ascii=False))})
@@ -264,17 +286,37 @@ def export_records(app, rows):
             detail = {key: product.get(key, '') for key in ('modelVersion', 'evidenceRefs', 'claim', 'limitations', 'reflection')}
             records.append({'id': f'G{number:02d}-product', 'ts': state.get('_savedAt', ''), 'group_no': f'G{number:02d}', 'stage': 5,
                             'event_type': 'product_snapshot', 'data': scrub(json.dumps(detail, ensure_ascii=False))})
-    for item in app.state_get('class').get('evaluationHistory', []):
+    for index, item in enumerate(app.state_get('class').get('evaluationHistory', [])):
         detail = {key: item.get(key) for key in ('scores', 'status', 'evidenceRefs', 'aiAdopted')}
-        records.append({'id': 'evaluation-' + str(item.get('time', '')), 'ts': item.get('time', ''), 'group_no': f"G{int(item['group']):02d}",
+        records.append({'id': f"evaluation-{item['group']}-{index}", 'ts': item.get('time', ''), 'group_no': f"G{int(item['group']):02d}",
                         'stage': 5, 'event_type': 'evaluation_status', 'data': json.dumps(detail, ensure_ascii=False)})
+    for number, state in states:
+        for field, kind in [('helpThreads', 'help_thread'), ('helpFeedback', 'help_followup')]:
+            for index, item in enumerate(state.get(field, [])):
+                thread_id = item.get('threadId') or item.get('id', '')
+                detail = {key: item.get(key) for key in ('currentLevel', 'status', 'outcome', 'next', 'createdAt', 'updatedAt', 'transitions') if key in item}
+                records.append({'id': f'G{number:02d}-{field}-{index}', 'ts': item.get('time') or item.get('createdAt', ''), 'group_no': f'G{number:02d}', 'stage': item.get('stage'), 'event_type': kind, 'request_id': thread_id, 'data': scrub(json.dumps(detail, ensure_ascii=False))})
+        for index, item in enumerate(state.get('helpHistory', [])):
+            records.append({'id': f'G{number:02d}-hint-{index}', 'ts': item.get('ts', item.get('time', '')), 'group_no': f'G{number:02d}', 'stage': item.get('stage'), 'event_type': 'hint_usage', 'request_id': item.get('threadId', ''), 'data': json.dumps({key: item.get(key) for key in ('level', 'type', 'source')}, ensure_ascii=False)})
+        for index, item in enumerate(state.get('events', [])):
+            detail = {key:item.get(key) for key in ('type','stage','actor')}
+            if not re.match(r'(ai_|free_|hint_|help_)', str(item.get('type',''))):
+                detail['data'] = item.get('data','')
+            records.append({'id': item.get('id') or f'G{number:02d}-action-{index}', 'ts': item.get('ts', item.get('time', '')), 'group_no': f'G{number:02d}', 'stage': item.get('stage'), 'event_type': item.get('type', 'student_action'), 'request_id': item.get('requestId',''), 'data': scrub(json.dumps(detail, ensure_ascii=False))})
+    for item in app.state_get('class').get('queue', []):
+        for index, step in enumerate([{'time': item.get('createdAt'), 'status': 'received'}, *item.get('history', [])]):
+            records.append({'id': step.get('id', str(item.get('id')) + '-' + str(index)), 'ts': step.get('time', ''), 'group_no': f"G{int(item['group']):02d}", 'stage': item.get('stage'), 'event_type': 'teacher_help_status', 'request_id': item.get('threadId', ''), 'data': scrub(json.dumps(step, ensure_ascii=False))})
+    for item in records:
+        item['event_id'] = item['id']
+        item.setdefault('request_id', '')
+    records.append({'id': 'export-schema', 'event_id': 'export-schema', 'request_id': '', 'ts': '', 'group_no': 'CLASS', 'stage': None, 'event_type': 'field_dictionary', 'data': json.dumps({'event_id':'事件或版本唯一编号', 'request_id':'关联同一求助主题', 'ts':'服务器时间', 'group_no':'匿名小组', 'stage':'发生阶段', 'event_type':'操作类型', 'data':'匿名化操作或版本内容'}, ensure_ascii=False)})
     return records
 
 
 def summary(app, class_state, group_no, state):
     versions = app.model_versions(state)
     work = state.get('workspace', {})
-    return {'math': work.get('relation') or work.get('model', ''), 'version': versions[-1].get('v', '') if versions else '',
+    return {'freeAiUsage': app.free_ai_state(state)['usage'], 'math': work.get('relation') or work.get('model', ''), 'version': versions[-1].get('v', '') if versions else '',
             'pendingCheck': work.get('constraints', ''), 'updatedAt': state.get('_savedAt', ''),
             'evidencePending': sum(not e.get('verified') for e in state.get('evidence', []) if isinstance(e, dict)),
             'hold': bool(control(class_state, group_no).get('hold'))}
@@ -307,6 +349,30 @@ def route(app, handler, method, path):
             data = app.state_get(f'group:{group}')
             action = path.rsplit('/', 1)[-1]
             result = {}
+            if action == 'field-templates' and teacher:
+                scope = f"teacher:{session['teacherId']}:field-templates"
+                with app.database() as db:
+                    stored = db.execute('SELECT data FROM states WHERE scope=?', (scope,)).fetchone()
+                    templates = json.loads(stored['data']).get('items', []) if stored else []
+                    if method == 'POST':
+                        stage, task = int(body.get('stage', -1)), int(body.get('task', -1))
+                        if stage not in range(-1,6) or task not in range(-1,4):
+                            raise ValueError('模板范围无效。')
+                        name = str(body.get('name', '')).strip()[:100]
+                        if not name:
+                            raise ValueError('请填写模板名称。')
+                        rules = task_forms.clean_field_rules(body.get('fieldRules', {}))
+                        rules = {key: rule for key, rule in rules.items() if (stage < 0 or task_forms.CATALOG_BY_ID[key]['stage'] == stage) and (task < 0 or task_forms.CATALOG_BY_ID[key]['task'] == task)}
+                        workflow = task_forms.clean_workflow(body.get('workflow', {}))
+                        workflow = {key: rule for key, rule in workflow.items() if (stage < 0 or int(key[0]) == stage) and (task < 0 or int(key[-1]) == task)}
+                        templates.append(dict(id=secrets.token_hex(8), name=name, stage=stage, task=task,
+                                              fieldRules=rules, workflow=workflow, time=app.utc_now()))
+                        db.execute('INSERT INTO states(scope,data,updated_at) VALUES(?,?,?) ON CONFLICT(scope) DO UPDATE SET data=excluded.data,updated_at=excluded.updated_at',
+                                   (scope, json.dumps({'items': templates}, ensure_ascii=False), app.utc_now()))
+                    elif method != 'GET':
+                        raise ValueError('模板操作无效。')
+                handler.json_response({'ok': True, 'templates': templates})
+                return True
             if action == 'notifications' and teacher and method == 'GET':
                 handler.json_response({'requests': [{'id': str(item.get('id', '')), 'group': item.get('group')} for item in state.get('queue', []) if not item.get('resolved')]})
                 return True
@@ -321,6 +387,10 @@ def route(app, handler, method, path):
                     if not isinstance(tasks, dict):
                         raise ValueError('阶段任务格式无效。')
                     config['stageTasks'] = {str(n): {key: str(tasks.get(str(n), {}).get(key, ''))[:400] for key in ('goal', 'action', 'output')} for n in range(1, 6)}
+                if 'fieldRules' in body:
+                    config['fieldRules'] = task_forms.clean_field_rules(body['fieldRules'])
+                if 'workflow' in body:
+                    config['workflow'] = task_forms.clean_workflow(body['workflow'])
                 if 'hintStageLimit' in body:
                     state['hintStageLimit'] = max(0, min(50, int(body['hintStageLimit'])))
                 if 'brief' in body:
@@ -427,19 +497,17 @@ def route(app, handler, method, path):
                     return True
                 candidate = copy.deepcopy(data)
                 candidate.setdefault('firstThoughts', {})[str(member)] = text or '纸笔照片'
-                candidate.setdefault('thoughtMeta', {})[str(member)] = {'mode': mode, 'fileId': file_id, 'confirmed': body.get('confirmed') is True}
-                candidate = immutable_records(app, data, candidate, f'G{group}')
+                candidate.setdefault('thoughtMeta', {})[str(member)] = {'mode': mode, 'fileId': file_id, 'confirmed': body.get('confirmed') is True, 'uncertain': str(body.get('uncertain', '')).strip()[:1000]}
+                operator = str(body.get('operator', ''))
+                candidate = immutable_records(app, data, candidate, operator if operator in data.get('members', []) else f'G{group}')
                 app.state_put(f'group:{group}', candidate)
                 app.record_event('student', group, 'first_think_save', 2, candidate['thoughtHistory'][-1]['id'])
             elif action == 'roles' and method == 'POST':
                 check_revision(data, body.get('revision'))
                 roles = body.get('roles', data.get('roles', []))
-                if not isinstance(roles, list) or len(roles) != len(data.get('members', [])) or any(r not in app.ROLE_NAMES for r in roles):
+                if not isinstance(roles, list) or len(roles) != len(data.get('members', [])) or any(r not in app.ROLE_NAMES[:len(roles)] for r in roles) or len(set(roles)) != len(roles):
                     raise ValueError('请为每位成员选择分工。')
-                unchanged = roles == data.get('roles', [])
                 reason = str(body.get('reason', '')).strip()[:800]
-                if unchanged and data.get('roleAssignments') and not reason:
-                    raise ValueError('请填写本次不轮换的原因。')
                 data['roles'] = roles
                 data['roleAssignments'] = [*data.get('roleAssignments', []), {'stage': effective_stage(state, group), 'round': len(data.get('roleAssignments', [])) + 1,
                     'roles': roles, 'members': data.get('members', []), 'reason': reason, 'confirmed': True, 'time': app.utc_now(), 'actor': session.get('teacherId') or f'G{group}'}]
@@ -497,8 +565,9 @@ def route(app, handler, method, path):
                 row = next((q for q in state.get('queue', []) if str(q.get('id')) == str(body.get('id'))), None)
                 if not row:
                     raise ValueError('求助不存在。')
+                previous_handling = row.get('handling', 'received')
                 row['handling'] = str(body.get('handling', 'received'))
-                if row['handling'] not in ('received', 'visiting', 'broadcast', 'handled'):
+                if row['handling'] not in ('received', 'viewed', 'processing', 'visiting', 'broadcast', 'handled'):
                     raise ValueError('处理状态无效。')
                 row['feedback'] = str(body.get('feedback', ''))[:1200]
                 row['urgent'] = body.get('urgent') is True
@@ -506,6 +575,7 @@ def route(app, handler, method, path):
                     raise ValueError('请填写优先处理原因。')
                 row['priorityReason'] = str(body.get('reason', ''))[:800]
                 row['handledAt'] = app.utc_now()
+                row.setdefault('history', []).append({'id': secrets.token_hex(8), 'time': app.utc_now(), 'from': previous_handling, 'status': row['handling'], 'feedback': row['feedback'], 'urgent': row['urgent'], 'reason': row['priorityReason']})
                 # Only a student can close their own question.
                 row['resolved'] = False
                 app.state_put('class', state)
