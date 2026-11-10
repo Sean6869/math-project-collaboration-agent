@@ -39,7 +39,7 @@ window.MPT_CLASSROOM=function(C){
  document.addEventListener('click',event=>{
   const link=event.target.closest?.('[data-field-help]');if(!link)return;
   const id=link.dataset.fieldHelp,rule=fieldRule(link.dataset.schemaId||id),s=load(),control=$(id);
-  const prompt=[`项目：${s.project}；阶段：${s.currentStage}；填写项：${rule.title||id}`,`已有内容：${control?.value||'还未填写'}`,rule.hint||'先解释这一项，再提醒我下一步怎样检查。'].join('\n');
+  const prompt=[`项目：${s.project}；阶段：${Number(document.body.dataset.page?.match(/^student-stage([1-5])/)?.[1]||s.currentStage)}；填写项：${rule.title||id}`,`已有内容：${control?.value||'还未填写'}`,rule.hint||'先解释这一项，再提醒我下一步怎样检查。'].join('\n');
   link.href='ai.html?field='+encodeURIComponent(id)+'&prompt='+encodeURIComponent(prompt);
  });
  const button=(id,label,cls='primary')=>`<button type="button" class="btn ${cls}" id="${id}">${label}</button>`;
@@ -48,17 +48,21 @@ window.MPT_CLASSROOM=function(C){
  async function request(action,body={},base=load()){
   try{
    C.saveStatus('正在保存……');
-   const result=await api('/api/classroom/'+action,{method:'POST',body:JSON.stringify({operator:C.currentOperator(),revision:body.groupRevision?base._revision:base._classRevision,...body})});
+   const result=await api('/api/classroom/'+action,{method:'POST',body:JSON.stringify({operator:C.currentOperator(),pageStage:Number(document.body.dataset.page?.match(/^student-stage([1-5])/)?.[1]||load().currentStage),revision:body.groupRevision?base._revision:base._classRevision,...body})});
    if(result.state)acceptState(result.state);
    C.clearDraft();C.saveStatus('已保存到服务器');return result;
   }catch(error){C.saveStatus(error.code==='revision_conflict'?'内容已有更新，请比较后保存':'保存失败，请重试');if(error.code==='revision_conflict')C.showConflict(error,body,async fresh=>{await request(action,body,fresh)});else toast(error.message);return null}
+ }
+ function readProductDraft(x){document.querySelectorAll('[data-w]').forEach(el=>x.workspace[el.dataset.w]=el.value);document.querySelectorAll('[data-p]').forEach(el=>x.product[el.dataset.p]=el.value)}
+ function productPhotos(s,editable=false){
+  return `<section class="card mt16" id="productPhotoGallery"><h2>成果照片</h2>${(s.product.photos||[]).map((photo,i)=>`<article class="task"><a href="/api/files/${encodeURIComponent(photo.id)}" target="_blank" rel="noopener">${photo.mime?.startsWith('image/')?`<img src="/api/files/${encodeURIComponent(photo.id)}" alt="${esc(photo.name||'成果照片')}" loading="lazy" style="max-width:100%;max-height:240px;object-fit:contain">`:''}<p>${esc(photo.name||'查看成果照片')}</p></a>${editable?`<button class="btn sm" type="button" data-remove-product-photo="${i}">移除这张照片</button>`:''}</article>`).join('')||'<p>尚未保存成果照片</p>'}</section>`;
  }
  function timeline(s){
   return `<section class="card mt16"><h2>我们的方案是怎样改过来的？</h2><div class="version-compare">${s.versions?.length?s.versions.map(v=>{
    const evidence=(s.evidence||[]).filter(row=>row.modelVersion===v.v);
    const laterChecks=(s.fieldHistory||[]).filter(row=>row.modelVersion===v.v&&/^(math-check-|representation)/.test(row.fieldId));
    const checks=Object.entries(v.checks||{}).filter(([,checked])=>checked).map(([index])=>(s.fieldCatalog||[]).find(field=>field.id==='math-check-'+index)?.title||'已检查第'+(Number(index)+1)+'项');
-   return `<details class="task" data-model-version="${esc(v.v)}"><summary>${esc(String(v.v).replace(/^V(\\d+)$/,'第$1版方案'))} · ${esc(localTime(v.time))} · ${esc(v.actor||'小组')} · ${esc(v.reason||'保存数学方案')}</summary><dl><dt>数量与数据</dt><dd>${esc(v.variables||'')}</dd><dt>关系</dt><dd>${esc(v.relation||'')}</dd><dt>数学方案</dt><dd>${esc(v.model||'')}</dd><dt>条件</dt><dd>${esc(v.constraints||'')}</dd></dl><h3>保存时的检查记录</h3>${checks.map(text=>`<p>${esc(text)} · 已检查</p>`).join('')}${v.representation?.check?`<p>${esc(v.representation.check)}</p>`:''}${!checks.length&&!v.representation?.check?'<p>保存时尚无检查记录</p>':''}${laterChecks.map(row=>`<p>${esc(localTime(row.time))} · ${esc(row.actor||'小组')} · ${esc(row.title)}：${esc(row.after.map(value=>value===true?'已检查':value===false?'重新检查':String(value||'')).join('；'))}</p>`).join('')}<h3>这一版方案的相关记录</h3>${evidence.map(row=>`<p>${esc(row.text||row.file?.name||'')} · ${row.invalid?'已标记无效':row.verified?'已检查':'还需要检查'}</p>`).join('')||'<p>尚无关联记录</p>'}${(v.fileIds||[]).map(id=>`<a class="btn sm" href="/api/files/${encodeURIComponent(id)}" target="_blank" rel="noopener">查看草稿</a>`).join('')}</details>`;
+   return `<details class="task" data-model-version="${esc(v.v)}"><summary>${esc(String(v.v).replace(/^V(\d+)$/,'第$1版方案'))} · ${esc(localTime(v.time))} · ${esc(v.actor||'小组')} · ${esc(v.reason||v.changeSummary||'保存数学方案')}</summary><dl><dt>数量与数据</dt><dd>${esc(v.variables||'')}</dd><dt>关系</dt><dd>${esc(v.relation||'')}</dd><dt>数学方案</dt><dd>${esc(v.model||'')}</dd><dt>条件</dt><dd>${esc(v.constraints||'')}</dd></dl><h3>保存时的检查记录</h3>${checks.map(text=>`<p>${esc(text)} · 已检查</p>`).join('')}${v.representation?.check?`<p>${esc(v.representation.check)}</p>`:''}${!checks.length&&!v.representation?.check?'<p>保存时尚无检查记录</p>':''}${laterChecks.map(row=>`<p>${esc(localTime(row.time))} · ${esc(row.actor||'小组')} · ${esc(row.title)}：${esc(row.after.map(value=>value===true?'已检查':value===false?'重新检查':String(value||'')).join('；'))}</p>`).join('')}<h3>这一版方案的相关记录</h3>${evidence.map(row=>`<p>${esc(row.text||row.file?.name||'')} · ${row.invalid?'已标记无效':row.verified?'已检查':'还需要检查'}</p>`).join('')||'<p>尚无关联记录</p>'}${(v.fileIds||[]).map(id=>`<a class="btn sm" href="/api/files/${encodeURIComponent(id)}" target="_blank" rel="noopener">查看草稿</a>`).join('')}</details>`;
   }).join(''):'<div class="empty">尚无方案版本</div>'}</div></section>`;
  }
  function materials(){
@@ -81,14 +85,16 @@ window.MPT_CLASSROOM=function(C){
   };
   $('saveUnderstandingNew').onclick=async()=>{const x=deepClone(load());for(const key of ['problem','known','unknown','constraints'])x.workspace[key]=value('under-'+key);event(x,'understanding_save','保存小组讨论结果');if(await save(x))toast('已保存到服务器')};
  }
- function quantityRow(row){return '<tr>'+['name','symbol','meaning','unit','source'].map(key=>`<td><input data-quantity="${key}" aria-label="${({name:'数量',symbol:'符号',meaning:'表示什么',unit:'单位',source:'数据来自哪里'})[key]}" value="${esc(row[key]||'')}"></td>`).join('')+'</tr>'}
+ const quantityKeys=()=>['name','symbol','meaning','unit','source'].sort((a,b)=>Number(fieldRule('quantity-'+a).order)-Number(fieldRule('quantity-'+b).order));
+ function quantityRow(row){return '<tr>'+quantityKeys().map(key=>`<td><input data-quantity="${key}" aria-label="${({name:'数量',symbol:'符号',meaning:'表示什么',unit:'单位',source:'数据来自哪里'})[key]}" value="${esc(row[key]||'')}"></td>`).join('')+'<td><button type="button" class="btn sm" data-remove-quantity>移除</button></td></tr>'}
  function model(){
   const s=load(),w=s.workspace||{},number=(s.versions?.length||0)+1;
-  page('student','s3','设计数学方案',`<div class="grid cols-2"><section class="card"><h2>1 · 用到哪些数量或数据？</h2><div class="table-wrap"><table class="table"><thead><tr>${['name','symbol','meaning','unit','source'].map(key=>{const rule=fieldRule('quantity-'+key);return `<th title="${esc(rule.help||'')}">${esc(rule.title)}${rule.required?'（必须完成）':'（可以跳过）'}</th>`}).join('')}</tr></thead><tbody id="quantityRows">${(w.quantityRows?.length?w.quantityRows:[{name:w.variables||''}]).map(row=>quantityRow(row)).join('')}</tbody></table></div>${button('addQuantity','增加一个数量','ghost')}<h2 class="mt16">2 · 这些量怎样联系？</h2><div class="symbol-toolbar" role="toolbar" aria-label="数学符号">${['x','y','a','b','²','³','+','−','×','÷','=','≠','<','>','≤','≥','(',')','|','√','π','≈'].map(v=>`<button type="button" class="btn sm" data-symbol="${esc(v)}">${esc(v)}</button>`).join('')}</div>${field('modelRelation','写式子或列表',w.relation)}<div class="field mt12"><label for="modelPhoto">纸笔照片</label><input id="modelPhoto" type="file" accept="image/*" multiple capture="environment"></div><h2 class="mt16">3 · 在什么条件下成立？</h2><div class="task-list">${['符合题目给出的信息','单位保持一致','研究量在允许范围内'].map((label,i)=>`<label class="check"><input type="checkbox" data-model-condition="${i}" ${w.conditionChecks?.[i]?'checked':''}>${label}</label>`).join('')}</div>${field('modelConditions','补充条件与允许范围',w.constraints)}${field('modelReason','这次改了什么？')}${button('saveModelNew',`保存数学方案第${number}版`)}<a class="btn" href="stage3-graph.html">用图、表或算式说明</a></section><section class="card"><h2>已有方案</h2>${timeline(s)}</section></div>`);
+  page('student','s3','设计数学方案',`<div class="grid cols-2"><section class="card"><h2>1 · 用到哪些数量或数据？</h2><div class="table-wrap"><table class="table"><thead><tr>${quantityKeys().map(key=>{const rule=fieldRule('quantity-'+key);return `<th title="${esc(rule.help||'')}">${esc(rule.title)}${rule.required?'（必须完成）':'（可以跳过）'}</th>`}).join('')}<th>操作</th></tr></thead><tbody id="quantityRows">${(w.quantityRows?.length?w.quantityRows:[{name:w.variables||''}]).map(row=>quantityRow(row)).join('')}</tbody></table></div>${button('addQuantity','增加一个数量','ghost')}<h2 class="mt16">2 · 这些量怎样联系？</h2><div class="symbol-toolbar" role="toolbar" aria-label="数学符号">${['x','y','a','b','²','³','+','−','×','÷','=','≠','<','>','≤','≥','(',')','|','√','π','≈'].map(v=>`<button type="button" class="btn sm" data-symbol="${esc(v)}">${esc(v)}</button>`).join('')}</div>${field('modelRelation','写式子或列表',w.relation)}<div class="field mt12"><label for="modelPhoto">纸笔照片</label><input id="modelPhoto" type="file" accept="image/*" multiple capture="environment"></div><h2 class="mt16">3 · 在什么条件下成立？</h2><div class="task-list">${['符合题目给出的信息','单位保持一致','研究量在允许范围内'].map((label,i)=>`<label class="check"><input type="checkbox" data-model-condition="${i}" ${w.conditionChecks?.[i]?'checked':''}>${label}</label>`).join('')}</div>${field('modelConditions','补充条件与允许范围',w.constraints)}${field('modelReason','这次改了什么？')}${button('saveModelNew',`保存数学方案第${number}版`)}<a class="btn" href="stage3-graph.html">用图、表或算式说明</a></section><section class="card"><h2>已有方案</h2>${timeline(s)}</section></div>`);
+  $('quantityRows').onclick=event=>{const button=event.target.closest('[data-remove-quantity]');if(button){button.closest('tr').remove();C.installDraftAutosave()}};
   $('addQuantity').onclick=()=>{$('quantityRows').insertAdjacentHTML('beforeend',quantityRow({}));decorateFields($('quantityRows'));C.installDraftAutosave()};
   document.querySelectorAll('[data-symbol]').forEach(b=>{b.onpointerdown=e=>e.preventDefault();b.onclick=()=>{const input=$('modelRelation');if(input.tagName!=='TEXTAREA'&&input.type!=='text'){toast('请使用当前填写项的选项');return}const at=input.selectionStart,end=input.selectionEnd;input.setRangeText(b.dataset.symbol,at,end,'end');input.focus();input.dispatchEvent(new Event('input',{bubbles:true}))}});
   $('saveModelNew').onclick=async()=>{
-   if(number>1&&!value('modelReason')){toast('请填写这次改了什么');return}
+   if(number>1&&s.teacherConfig?.fieldRules?.modelReason?.required===true&&!value('modelReason')){toast('请填写这次改了什么');return}
    let files=[];try{if($('modelPhoto').files.length)files=await uploadEvidenceFiles([...$('modelPhoto').files])}catch(error){toast(error.message);return}
    const x=deepClone(load());x.workspace.quantityRows=[...document.querySelectorAll('#quantityRows tr')].map(row=>Object.fromEntries([...row.querySelectorAll('[data-quantity]')].map(el=>[el.dataset.quantity,el.value.trim()]))).filter(row=>Object.values(row).some(Boolean));x.workspace.variables=x.workspace.quantityRows.map(row=>[row.name,row.symbol,row.meaning,row.unit,row.source].filter(Boolean).join(' · ')).join('\n');x.workspace.conditionChecks=[...document.querySelectorAll('[data-model-condition]')].map(el=>el.checked);x.workspace.relation=value('modelRelation').replaceAll('＝','=').replaceAll('−','-');x.workspace.constraints=value('modelConditions');x.workspace.revisionReason=value('modelReason');x.workspace.modelFiles=[...(w.modelFiles||[]),...files.map(f=>f.id)];x.workspace.model=x.workspace.relation|| (x.workspace.modelFiles.length?'纸笔方案':'');
    if(await save(x)){toast(`${load().versions.at(-1)?.v||'方案'}已保存`);model()}
@@ -104,10 +110,10 @@ window.MPT_CLASSROOM=function(C){
  }
  function evidence(){
   const s=load();
-  page('student','s4','计算和图表记录',`<section class="card">${s.evidence.map((row,i)=>`<article class="task"><b>${esc(row.type||'其他')} · ${esc(row.text||row.file?.name||'')}</b><p>阶段${row.stage||4} · ${esc(row.modelVersion||'尚未关联方案')} · ${row.invalid?'已标记无效':row.verified?'已检查':'还需要检查'}</p>${row.file?`<a class="btn sm" href="/api/files/${encodeURIComponent(row.file.id)}" target="_blank" rel="noopener">查看上传内容</a>`:''}<button class="btn sm" data-edit-record="${i}">编辑记录</button></article>`).join('')}<div class="toolbar">${button('newRecord','增加一条记录')}</div></section>`);
+  page('student','s4','计算和图表记录',`<section class="card">${s.evidence.map((row,i)=>`<article class="task"><b>${esc(row.type||'其他')} · ${esc(row.text||row.file?.name||'')}</b><p>阶段${row.stage||4} · ${esc(String(row.modelVersion||'尚未关联方案').replace(/^V(\d+)$/,'第$1版方案'))} · ${row.invalid?'已标记无效':row.verified?'已检查':'还需要检查'}</p>${row.file?`<a class="btn sm" href="/api/files/${encodeURIComponent(row.file.id)}" target="_blank" rel="noopener">查看上传内容</a>`:''}<button class="btn sm" data-edit-record="${i}">编辑记录</button></article>`).join('')}<div class="toolbar">${button('newRecord','增加一条记录')}</div></section>`);
   const open=index=>{
    const row=s.evidence[index]||{};
-   modal(index<0?'增加记录':'编辑记录',`<div class="field"><label>记录类型</label><select id="recordType">${['计算','图表','测量','资料','其他'].map(type=>`<option ${row.type===type?'selected':''}>${type}</option>`).join('')}</select></div>${field('recordText','它说明了什么',row.text)}<div class="field mt12"><label>对应哪一步</label><select id="recordStage">${STAGES.map(st=>`<option value="${st.n}" ${Number(row.stage||4)===st.n?'selected':''}>${st.n} ${esc(st.name)}</option>`).join('')}</select></div><div class="field mt12"><label>这条记录对应的方案版本</label><select id="recordVersion"><option value="">暂不关联</option>${s.versions.map(v=>`<option ${row.modelVersion===v.v?'selected':''}>${esc(v.v)}</option>`).join('')}</select></div><div class="field mt12"><label>拍照或上传内容（可不填）</label><input type="file" accept="image/*,.pdf,.docx,.csv" capture="environment" id="recordFile"></div><label class="check mt12"><input id="recordVerified" type="checkbox" ${row.verified?'checked':''}>已检查</label><label class="check mt12"><input id="recordInvalid" type="checkbox" ${row.invalid?'checked':''}>这条记录无效</label>${button('saveRecord','保存记录')}`);
+   modal(index<0?'增加记录':'编辑记录',`<div class="field"><label>记录类型</label><select id="recordType">${['计算','图表','测量','资料','其他'].map(type=>`<option ${row.type===type?'selected':''}>${type}</option>`).join('')}</select></div>${field('recordText','它说明了什么',row.text)}<div class="field mt12"><label>对应哪一步</label><select id="recordStage">${STAGES.map(st=>`<option value="${st.n}" ${Number(row.stage||4)===st.n?'selected':''}>${st.n} ${esc(st.name)}</option>`).join('')}</select></div><div class="field mt12"><label>这条记录对应的方案版本</label><select id="recordVersion"><option value="">暂不关联</option>${s.versions.map(v=>`<option value="${esc(v.v)}" ${row.modelVersion===v.v?'selected':''}>${esc(String(v.v).replace(/^V(\d+)$/,'第$1版方案'))}</option>`).join('')}</select></div><div class="field mt12"><label>拍照或上传内容（可不填）</label><input type="file" accept="image/*,.pdf,.docx,.csv" capture="environment" id="recordFile"></div><label class="check mt12"><input id="recordVerified" type="checkbox" ${row.verified?'checked':''}>已检查</label><label class="check mt12"><input id="recordInvalid" type="checkbox" ${row.invalid?'checked':''}>这条记录无效</label>${button('saveRecord','保存记录')}`);
    $('saveRecord').onclick=async()=>{
     const x=deepClone(load()),files=$('recordFile').files;
     let attachment=row.file;try{if(files.length)attachment=(await uploadEvidenceFiles([...files]))[0]}catch(error){toast(error.message);return}
@@ -134,9 +140,10 @@ window.MPT_CLASSROOM=function(C){
  }
  function questions(){
   const s=load(),rows=(s.questionTree||[]).slice(1).filter(Boolean);
-  page('student','s2','问题拆分表',`<section class="card">${field('questionMain','共同要解决的问题',s.questionTree?.[0]||s.workspace.problem)}<div id="questionRows">${rows.map((row,i)=>`<div class="field mt12"><label>小问题${i+1}</label><textarea data-question-row>${esc(row)}</textarea><select data-question-link><option value="">选择接下来要做的事</option><option value="stage3-model.html">设计数学方案</option><option value="stage3-graph.html">画图或计算</option><option value="stage4-evidence.html">收集检查根据</option></select></div>`).join('')}</div><div class="toolbar">${button('addQuestion','添加一个小问题','ghost')}${button('saveQuestions','保存问题拆分表')}</div></section>`);
+  page('student','s2','问题拆分表',`<section class="card">${field('questionMain','共同要解决的问题',s.questionTree?.[0]||s.workspace.problem)}<div id="questionRows">${rows.map((row,i)=>`<div class="field mt12"><label>小问题${i+1}</label><textarea data-question-row>${esc(row)}</textarea><select data-question-link><option value="">选择接下来要做的事</option><option value="stage3-model.html">设计数学方案</option><option value="stage3-graph.html">画图或计算</option><option value="stage4-evidence.html">收集检查根据</option></select><button type="button" class="btn sm" data-remove-question>移除这个小问题</button></div>`).join('')}</div><div class="toolbar">${button('addQuestion','添加一个小问题','ghost')}${button('saveQuestions','保存问题拆分表')}</div></section>`);
   const bind=()=>document.querySelectorAll('[data-question-link]').forEach((el,i)=>{el.value=s.workspace.questionLinks?.[i]||''});
-  bind();$('addQuestion').onclick=()=>{$('questionRows').insertAdjacentHTML('beforeend','<div class="field mt12"><label>小问题</label><textarea data-question-row></textarea><select data-question-link><option value="">选择接下来要做的事</option><option value="stage3-model.html">设计数学方案</option><option value="stage3-graph.html">画图或计算</option><option value="stage4-evidence.html">收集检查根据</option></select></div>');decorateFields($('questionRows'));C.installDraftAutosave()};
+  $('questionRows').onclick=event=>{const button=event.target.closest('[data-remove-question]');if(button){const field=button.closest('.field');(field.closest('[data-field-fold]')||field).remove();C.installDraftAutosave()}};
+  bind();$('addQuestion').onclick=()=>{$('questionRows').insertAdjacentHTML('beforeend','<div class="field mt12"><label>小问题</label><textarea data-question-row></textarea><select data-question-link><option value="">选择接下来要做的事</option><option value="stage3-model.html">设计数学方案</option><option value="stage3-graph.html">画图或计算</option><option value="stage4-evidence.html">收集检查根据</option></select><button type="button" class="btn sm" data-remove-question>移除这个小问题</button></div>');decorateFields($('questionRows'));C.installDraftAutosave()};
   $('saveQuestions').onclick=async()=>{const x=deepClone(load());const rows=[...document.querySelectorAll('[data-question-row]')].map(el=>({text:el.value.trim(),link:el.parentElement.querySelector('[data-question-link]').value})).filter(row=>row.text);x.questionTree=[value('questionMain'),...rows.map(row=>row.text)];x.workspace.questionLinks=rows.map(row=>row.link);event(x,'question_tree_save','保存问题拆分表');if(await save(x)){toast('已保存');questions()}};
  }
  function roles(){
@@ -177,6 +184,7 @@ window.MPT_CLASSROOM=function(C){
  function readonly(){
   const s=load(),gid=Number(new URLSearchParams(location.search).get('g')||1);
   page('teacher','groups',`${gid}组工作区 · 只读`,`<section class="card"><h2>任务与数学记录</h2>${Object.entries(s.workspace).filter(([,v])=>typeof v==='string'&&v).map(([k,v])=>`<dl><dt>${esc(({problem:'项目问题',known:'已知信息',unknown:'待核对信息',constraints:'条件',variables:'数量与数据',relation:'数量关系',model:'数学方案',next:'下一步'})[k]||'记录')}</dt><dd>${esc(v)}</dd></dl>`).join('')}</section>${timeline(s)}<section class="card mt16"><h2>证据</h2>${s.evidence.map(e=>`<article class="task"><p>${esc(e.text||'')}</p><span>${e.verified?'已核验':'待核验'}</span>${e.file?`<a class="btn" href="/api/files/${encodeURIComponent(e.file.id)}" target="_blank" rel="noopener">查看原始附件</a>`:''}</article>`).join('')}</section><section class="card mt16"><h2>本组设置</h2><div class="toolbar">${button('unlockGroupMembers','解锁成员与角色','ghost')}${button('groupAiOff','关闭本组自由AI','warn')}${button('groupAiOn','开放本组自由AI')}${button('groupExtraHints','调整分层额度')}</div></section>`);
+  document.querySelector('.main')?.insertAdjacentHTML('beforeend',productPhotos(s));
   if(new URLSearchParams(location.search).get('from')==='evaluation'||document.body.dataset.page==='teacher-evaluation-evidence'){document.querySelector('.page-head')?.insertAdjacentHTML('beforeend',`<a class="btn primary" href="evaluation.html?g=${gid}">返回该组评价</a>`);$('unlockGroupMembers').closest('section').remove();return}
   $('unlockGroupMembers').onclick=async()=>{try{await api('/api/group/members',{method:'POST',body:JSON.stringify({action:'unlock',groupId:gid})});toast('已开放小组修改')}catch(error){toast(error.message)}};
   $('groupAiOff').onclick=async()=>{if(await request('ai-access',{group:gid,enabled:false},s))toast('已关闭')};$('groupAiOn').onclick=async()=>{if(await request('ai-access',{group:gid,enabled:true},load()))toast('已开放')};$('groupExtraHints').onclick=()=>location.href='scaffolds.html';
@@ -229,7 +237,16 @@ window.MPT_CLASSROOM=function(C){
   const filter=()=>document.querySelectorAll('[data-config-id]').forEach(row=>row.hidden=(value('fieldStage')!==''&&row.dataset.configStage!==value('fieldStage'))||(value('fieldTask')!==''&&row.dataset.configTask!==value('fieldTask')));
   $('fieldStage').onchange=filter;$('fieldTask').onchange=filter;
   const read=()=>Object.fromEntries([...document.querySelectorAll('[data-config-id]')].map(row=>[row.dataset.configId,Object.fromEntries([...row.querySelectorAll('[data-field-setting]')].map(el=>[el.dataset.fieldSetting,el.type==='checkbox'?el.checked:el.type==='number'?Number(el.value):el.value]))]));
-  $('previewStudentPage').onclick=()=>{sessionStorage.setItem('mpt:preview:'+session().projectId,JSON.stringify(read()));const routes={0:'workspace.html',1:'stage1-materials.html',2:'stage2-understanding.html',3:'stage3-model.html',4:'stage4-evidence.html',5:'stage5-product.html'},route=routes[value('fieldStage')||2];modal('学生页面预览',`<iframe title="学生页面预览" src="/student/${route}?preview=1&g=${s.groupId||1}" style="width:100%;height:70vh;border:0"></iframe>`)};
+  $('previewStudentPage').onclick=async()=>{
+   try{
+    const result=await api('/api/classroom/preview',{method:'POST',body:JSON.stringify({group:s.groupId||1,fieldRules:read(),workflow:readWorkflow()})});
+    sessionStorage.setItem('mpt:preview:'+session().projectId,JSON.stringify(result));
+    const selectedStage=Number(value('fieldStage')||2),selectedTask=value('fieldTask'),defaults={0:'workspace.html',1:'stage1-materials.html',2:'stage2-understanding.html',3:'stage3-model.html',4:'stage4-evidence.html',5:'stage5-product.html'};
+    const route=selectedTask!==''&&selectedStage?C.taskRoute(selectedStage,Number(selectedTask)):defaults[selectedStage],url=new URL('/student/'+route,location.origin);
+    url.searchParams.set('preview','1');url.searchParams.set('g',s.groupId||1);
+    modal('学生页面预览',`<iframe title="学生页面预览" src="${esc(url.href)}" style="width:100%;height:70vh;border:0"></iframe>`);
+   }catch(error){toast(error.message)}
+  };
   $('previewFields').onclick=()=>{const current=read();document.querySelectorAll('[data-config-id]').forEach(row=>{if(row.hidden)return;const rule=current[row.dataset.configId];row.querySelector('[data-field-preview]').innerHTML=field('preview-'+row.dataset.configId,rule.title,'',rule.type,rule);row.open=true})};
   $('saveFieldsConfig').onclick=async()=>{if(await request('config',{fieldRules:read()},load()))toast('填写模板已保存')};
   workflowConfig();
@@ -265,6 +282,7 @@ window.MPT_CLASSROOM=function(C){
    else if(control.dataset.rehearsalRole!==undefined)key='rehearsal-role';
    else if(control.dataset.rehearsalCheck!==undefined)key='rehearsal-check-'+control.dataset.rehearsalCheck;
    else if(control.dataset.check!==undefined)key='math-check-'+control.dataset.check;
+   else if(control.dataset.modelCondition!==undefined)key='model-condition-'+control.dataset.modelCondition;
    else if(control.dataset.work)key='workspace-'+control.dataset.work;
    else if(control.dataset.w)key='product-'+control.dataset.w;
    else if(control.dataset.p)key='product-'+control.dataset.p;
@@ -275,7 +293,7 @@ window.MPT_CLASSROOM=function(C){
    const spec=specFor(control);if(!spec.id)return;
    const rule=fieldRule(spec.id),wrapper=control.closest('.field,label.check,label.task')||control.parentElement;
    if(wrapper.dataset.fieldId)return;
-   const id=control.id||spec.id+'-'+[...document.querySelectorAll('input,textarea,select')].indexOf(control);control.id=id;wrapper.dataset.fieldId=id;wrapper.dataset.schemaId=spec.id;
+   let id=control.id||spec.id+'-'+[...document.querySelectorAll('input,textarea,select')].indexOf(control);if(!control.id)while($(id))id+='-next';control.id=id;wrapper.dataset.fieldId=id;wrapper.dataset.schemaId=spec.id;
    const isTable=wrapper.tagName==='TD',originalText=control.type==='checkbox'?control.checked:control.value;
    if(!spec.fixedType&&rule.type!==control.type&&!(rule.type==='textarea'&&control.tagName==='TEXTAREA')){
     const template=document.createElement('template');template.innerHTML=controlMarkup(id,originalText,rule,control);
@@ -286,7 +304,8 @@ window.MPT_CLASSROOM=function(C){
    }
    const active=$(id);
    active.setAttribute('aria-label',rule.title||spec.title);active.maxLength=Number(rule.maxLength)||1000;
-   if(isTable){active.title=rule.help||'';return}
+   if(isTable)active.title=rule.help||'';
+   if(!isTable){
    let label=wrapper.querySelector(':scope > label');
    if(wrapper.tagName==='LABEL'){
     for(const child of [...wrapper.childNodes])if(child.nodeType===3)child.remove();
@@ -295,21 +314,21 @@ window.MPT_CLASSROOM=function(C){
     if(!label){label=document.createElement('label');wrapper.prepend(label)}
     label.htmlFor=id;const member=control.dataset.rehearsalRole!==undefined?load().members[Number(control.dataset.rehearsalRole)]+' · ':'';label.textContent=member+(rule.title||spec.title)+(rule.required?'（必须完成）':'（可以跳过）');
    }
+   }
    if(rule.help&&rule.hintMode!=='none'){const help=document.createElement('small');help.className='field-help';help.textContent=rule.hintMode==='short'?rule.help.split(/[。！？]/)[0]:rule.help;wrapper.append(help)}
    if(rule.hint&&rule.hintMode!=='none'){const link=document.createElement('a');link.className='link';link.href='ai.html';link.dataset.fieldHelp=id;link.dataset.schemaId=spec.id;link.textContent='问问迈谱助手';wrapper.append(link)}
   });
   const parents=new Set(),primaryCounts=new Map();
   root.querySelectorAll('[data-field-id]').forEach(wrapper=>{
-   if(wrapper.closest('td'))return;
    const spec=fieldSpec(wrapper.dataset.schemaId||wrapper.dataset.fieldId),rule=fieldRule(spec.id||wrapper.dataset.fieldId);
-   wrapper.style.order=Number(rule.order)||0;parents.add(wrapper.parentElement);
+   wrapper.style.order=Number(rule.order)||0;if(wrapper.tagName!=='TD')parents.add(wrapper.parentElement);
    if(!wrapper.querySelector('[data-field-status]')){
     const status=document.createElement('small');status.dataset.fieldStatus='';status.setAttribute('role','status');
     const update=()=>{const controls=[...wrapper.querySelectorAll('input,textarea,select')].filter(el=>!el.closest('[data-choice-for]')),completed=controls.some(el=>el.type==='checkbox'?el.checked:el.type==='file'?el.files.length:el.value.trim());const canonical=wrapper.querySelector('#'+CSS.escape(wrapper.dataset.fieldId)),tooLong=canonical?.value?.length>Number(rule.maxLength||4000),checked=completed&&(/^(math-check-|rehearsal-check-)/.test(spec.id)||['recordVerified','issueRechecked'].includes(spec.id));status.textContent=tooLong?'需要补充':checked?'已检查':completed?'已填写':rule.required?'需要补充':'未填写'};
     wrapper.append(status);wrapper.addEventListener('input',update);wrapper.addEventListener('change',update);update();
    }
    const container=wrapper.parentElement,primary=primaryCounts.get(container)||0;primaryCounts.set(container,primary+1);
-   if((rule.expanded===false||(primary>=5&&!wrapper.closest('.modal')))&&wrapper.parentElement?.dataset.fieldFold!==wrapper.dataset.fieldId){
+   if(wrapper.tagName!=='TD'&&(rule.expanded===false||(primary>=5&&!wrapper.closest('.modal')))&&wrapper.parentElement?.dataset.fieldFold!==wrapper.dataset.fieldId){
     const details=document.createElement('details'),summary=document.createElement('summary');details.dataset.fieldFold=wrapper.dataset.fieldId;
     summary.textContent=rule.title||wrapper.querySelector('label')?.textContent||'更多填写项';wrapper.replaceWith(details);details.append(summary,wrapper);
    }
@@ -328,9 +347,10 @@ window.MPT_CLASSROOM=function(C){
   const draw=()=>{$('historyRows').innerHTML=operations.filter(row=>(!value('historyStage')||String(row.stage)===value('historyStage'))&&(!value('historyMember')||row.actor===value('historyMember'))).map(row=>`<article class="task"><b>${esc(localTime(row.ts))} · 阶段${row.stage||''} · ${esc(row.actor||'小组')}</b><p>${esc(row.data||'保存记录')}</p></article>`).join('')||'<p>暂无记录</p>'};$('historyStage').onchange=draw;$('historyMember').onchange=draw;draw();
  }
  const studentTerms={"观点协商与证据型异议":"讨论不同想法","观点协商":"讨论不同想法","低威胁表达模板":"友好表达句式","复杂冲突转教师":"讨论无法解决时请老师帮助","协商者":"讨论组织者","第一轮想法":"每个人先想的内容","问题树":"问题拆分表","可验证的数学子问题":"能用计算、图或数据检查的小问题","共同问题空间":"小组共同记录","共同问题":"共同要解决的问题","已知信息":"题目给出的信息","现实约束":"必须满足的条件","当前模型":"目前的数学方案","证据/待核验":"已经检查的根据/还需要检查的内容","变量、符号和单位定义清楚":"字母、符号和单位都写清楚","数量关系有题目条件或证据支持":"算式能从题目条件中找到根据","过程可以复核":"别人能按我们的步骤重新检查","取值范围":"这个量可以取哪些值","实际范围":"这个量可以取哪些值","边界情况":"最小、最大或接近限制的情况","证据链检查":"检查这些根据能否支持结论","已核验":"已检查","待核验":"还需要检查","关联模型版本":"这条记录对应的方案版本","问题—模型—证据—结论链":"从问题到结论的完整过程","公开表达前检查":"上台前检查","公开表达检查":"上台前检查","成果对象":"成果给谁看、谁会使用","服务对象":"成果给谁看、谁会使用","局限与现实条件":"结论适用的条件和还没有考虑的情况","数学模型或关系":"数学方案","证据与验证":"用什么根据、怎样检查","过程事实回看":"回顾这次实际做过的事","最高提示层级":"这次用到的帮助程度","模型版本":"方案版本","AI提示":"迈谱给过的帮助","自由AI工作区":"问问迈谱助手","自由工作区":"问问迈谱助手","输入问题":"写下你现在想问的内容","本轮卡点类型（可修改）":"我们卡在哪一步","已检查共享工作区":"已查看共享工作区（小组已经填写的内容）","等待教师处理":"已发给老师，等待回应","成员信息已固化":"成员名单已确认","责任说明":"每个人要做什么","推荐适合的数学模型":"帮我想想可以用什么数学方法","第一轮数学责任":"每位成员先负责的数学任务","阶段规则":"每一步要完成什么","数量关系":"数量之间的关系","模型表征与检验":"用算式、图或表完成表示并检查","计算、测量或数据依据":"计算结果、测量结果或数据","这个方案在什么条件下成立":"什么情况下可以使用这个方案","形成模型修订与理由":"记录方案改了哪里、为什么","3D计算器":"立体图形工具","三维曲面、空间曲线和点":"立体图形、空间中的线和点","引用已有材料":"使用小组已经保存的记录","最终方案":"最后确定的方案","回答范围":"需要回答哪些问题","适用范围":"结论在哪些情况下适用","验证方法":"我们怎样检查的","结论依据":"结论根据什么得出的","现实因素":"实际中还要考虑的情况","历史分工":"以前的分工记录","跨阶段记录":"学习过程记录","操作记录":"每次保存和修改的记录","操作成员":"由谁完成","二级页面":"","三级页面":"","变量":"题目中会变化、需要研究的量","迁移":"把学到的方法用到新问题","局限":"还没有考虑到的情况","提示链":"这次问题收到的帮助记录","成员信息已锁定":"成员名单已确认","结论说明局限":"结论还没有考虑到哪些情况","过程反思":"回顾这次是怎样完成的","展示预演":"展示预演（上台前的排练）","约束":"必须遵守的条件","支架预设":"学习帮助设置","建模表征":"用算式、图或表表示","证据包":"计算和图表记录","复杂冲突":"讨论无法解决时请老师帮助"};
+ Object.assign(studentTerms,{'变量、关系、约束快照':'当时保存的研究量、数量关系和必须满足的条件','数学建模':'用数学方法描述问题','模型表征':'用算式、图或表表示','证据链':'从问题到结论的根据','提示层级':'帮助程度','教师升级队列':'待老师处理的求助','共性卡点':'多个小组遇到的相同困难','班级学习脉搏':'全班进度概况','阶段分布':'各组目前做到哪一步','模型调用':'AI请求次数','会话有效期':'登录保持时间','安全Cookie':'登录安全设置','自由文本':'文字提问','自由生图':'AI图片生成','去标识化':'用小组编号代替姓名','方案版本':'方案的不同版本','支架':'学习帮助','核验':'检查'});
  function studentLabels(){
   const translate=text=>Object.entries(studentTerms).sort((a,b)=>b[0].length-a[0].length).reduce((text,[from,to])=>text.split(from).join(to),text).replace(/模型V(\d+)/g,'数学方案第$1版').replace(/^V(\d+)$/,'第$1版方案');
-  document.querySelectorAll('.student-app h1,.student-app h2,.student-app h3,.student-app label,.student-app button,.student-app a,.student-app .eyebrow,.student-app dt,.student-app .mini-stat>span').forEach(el=>{
+  document.querySelectorAll('.student-app h1,.student-app h2,.student-app h3,.student-app label,.student-app button,.student-app a,.student-app .eyebrow,.student-app dt,.student-app .mini-stat>span,.student-app .locked-rule>span,.student-app .tl-body>b').forEach(el=>{
    for(const child of el.childNodes)if(child.nodeType===3)child.textContent=translate(child.textContent);
   });
   const conceptNotes={推理:'根据题目给出的信息，一步步说明理由。',建模:'把实际问题整理成数量之间的关系，再用数学方法检查。'};
@@ -373,12 +393,16 @@ window.MPT_CLASSROOM=function(C){
    }
    const form=$('helpDone');if(form)form.previousElementSibling.textContent='到目前为止，我们试过什么？';
   }
+  if(id==='student-stage5-product'&&!$('productPhotoGallery')){
+   document.querySelector('.main')?.insertAdjacentHTML('beforeend',productPhotos(s,!s.stageSubmitted?.[5]));
+   $('productPhotoGallery').onclick=async event=>{const button=event.target.closest('[data-remove-product-photo]');if(!button)return;const x=deepClone(load());readProductDraft(x);x.product.photos.splice(Number(button.dataset.removeProductPhoto),1);if(await save(x)){const gallery=$('productPhotoGallery');const template=document.createElement('template');template.innerHTML=productPhotos(load(),true);gallery.innerHTML=template.content.firstElementChild.innerHTML}};
+  }
   if(id==='student-stage5-product'&&!s.stageSubmitted?.[5]&&!$('productPhoto')){
    document.querySelector('.product-layout')?.insertAdjacentHTML('afterend',`<section class="card mt16"><div class="field"><label>拍照记录成果</label><input type="file" accept="image/*" capture="environment" multiple id="productPhoto"></div>${button('saveProductPhoto','保存成果照片')}</section>`);
-   $('saveProductPhoto').onclick=async()=>{const files=$('productPhoto').files;if(!files.length)return;try{const uploaded=await uploadEvidenceFiles([...files]);const x=deepClone(load());x.product.photos=[...(x.product.photos||[]),...uploaded];event(x,'product_photo','保存成果照片');if(await save(x))toast('成果照片已保存')}catch(error){toast(error.message)}};
+   $('saveProductPhoto').onclick=async()=>{const files=$('productPhoto').files;if(!files.length)return;try{const uploaded=await uploadEvidenceFiles([...files]);const x=deepClone(load());readProductDraft(x);x.product.photos=[...(x.product.photos||[]),...uploaded];event(x,'product_photo','保存成果照片');if(await save(x)){toast('成果照片已保存');const template=document.createElement('template');template.innerHTML=productPhotos(load(),true);$('productPhotoGallery').innerHTML=template.content.firstElementChild.innerHTML}}catch(error){toast(error.message)}};
   }
   if(id==='student-stage5-product'&&!$('productVersions')){
-   document.querySelector('.main')?.insertAdjacentHTML('beforeend',`<div id="productVersions">${timeline(s)}<section class="card mt16"><h2>引用已有材料</h2><div class="field"><label for="productModelRef">最终方案</label><select id="productModelRef"><option value="">选择方案版本</option>${s.versions.map(v=>`<option ${s.product.modelVersion===v.v?'selected':''}>${esc(v.v)}</option>`).join('')}</select></div>${s.evidence.map(e=>`<label class="check mt12"><input type="checkbox" data-product-evidence="${esc(e.id)}" ${(s.product.evidenceRefs||[]).includes(e.id)?'checked':''}>${esc(e.text||e.file?.name||'证据')}</label>`).join('')}${!s.evidence.length?'<p>还没有关联证据，可以先保存草稿。</p>':''}${button('saveProductRefs','保存材料引用')}</section></div>`);
+   document.querySelector('.main')?.insertAdjacentHTML('beforeend',`<div id="productVersions">${timeline(s)}<section class="card mt16"><h2>引用已有材料</h2><div class="field"><label for="productModelRef">最终方案</label><select id="productModelRef"><option value="">选择方案版本</option>${s.versions.map(v=>`<option value="${esc(v.v)}" ${s.product.modelVersion===v.v?'selected':''}>${esc(String(v.v).replace(/^V(\d+)$/,'第$1版方案'))}</option>`).join('')}</select></div>${s.evidence.map(e=>`<label class="check mt12"><input type="checkbox" data-product-evidence="${esc(e.id)}" ${(s.product.evidenceRefs||[]).includes(e.id)?'checked':''}>${esc(e.text||e.file?.name||'证据')}</label>`).join('')}${!s.evidence.length?'<p>还没有关联证据，可以先保存草稿。</p>':''}${button('saveProductRefs','保存材料引用')}</section></div>`);
    $('saveProductRefs').onclick=async()=>{const x=deepClone(load());x.product.modelVersion=value('productModelRef');x.product.evidenceRefs=[...document.querySelectorAll('[data-product-evidence]:checked')].map(el=>el.dataset.productEvidence);if(await save(x))toast('已保存到服务器')};
   }
   if(id==='student-stage3-graph'&&!$('representationCheck')){

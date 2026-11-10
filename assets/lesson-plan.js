@@ -17,7 +17,7 @@ async function mount({s,api,esc,toast,refreshState,teacherId,prepareImage=async 
  const $=id=>document.getElementById(id),snapshot=await api('/api/lesson-plan');
  const fields=snapshot.fields,fieldId=key=>key==='title'?'pcProject':'pc-'+key;
  let revision=snapshot.published.revision||0,job=snapshot.job,selected=snapshot.published.selectedLesson||1,publishedSourceJobId=snapshot.published.sourceJobId||null;
- const initial=info({title:s.project||'',grade:'',mathTopic:s.teacherConfig.mathTopic||'',standard:s.teacherConfig.standard||'',projectType:s.projectType||''});
+ const initial=info({title:s.project||'',grade:'',mathTopic:s.teacherConfig.mathTopic||'',standard:s.teacherConfig.standard||'',finalProduct:s.teacherConfig.finalProduct||'',projectType:s.projectType||''});
  let plan=normalize(snapshot.published.plan||{...initial,lessons:[{projectInfo:initial}],warnings:[]});
  let dirty=false,busy=false,inspectedJob=null,appliedJob=snapshot.published.sourceJobId||null,pendingJob=null,sourceJobId=null,shareSource=!!snapshot.published.supportMaterial;
  let resources=Array.isArray(snapshot.resources)?snapshot.resources:[],resourceIds=(snapshot.published.supportResources||[]).map(item=>item.id);
@@ -25,7 +25,7 @@ async function mount({s,api,esc,toast,refreshState,teacherId,prepareImage=async 
  try{const saved=JSON.parse(sessionStorage.getItem(cacheKey)||'null');if(saved&&saved.revision===revision){plan=normalize(saved.plan);selected=saved.selected;appliedJob=saved.appliedJob;pendingJob=saved.pendingJob;sourceJobId=saved.sourceJobId||null;shareSource=saved.shareSource??shareSource;resourceIds=Array.isArray(saved.resourceIds)?saved.resourceIds:resourceIds;dirty=!!saved.dirty}}catch(_){}
  selected=Math.max(1,Math.min(selected,plan.lessons.length));
  $('projectInfoFields').innerHTML=Object.entries(fields).map(([key,label])=>{
-  const multiline=['teachingUnit','projectSummary','learningObjectives'].includes(key);
+  const multiline=['teachingUnit','projectSummary','learningObjectives','drivingQuestion','knownInformation','finalProduct'].includes(key);
   return '<div class="field'+(multiline?' span-2':'')+'"><label for="'+fieldId(key)+'">'+esc(label)+'</label>'+(multiline?'<textarea rows="4" id="'+fieldId(key)+'"></textarea>':'<input id="'+fieldId(key)+'"'+(key==='title'?' maxlength="80"':'')+'>')+'</div>';
  }).join('');
  const source=$('planSource');source.innerHTML='<h2>教案智能解析</h2><div class="field"><label for="planTotal">总课时数</label><input id="planTotal" type="number" min="1" max="30"></div><div class="field mt12"><label for="planFile">教案文件（PDF / DOCX，最大10MB）</label><div class="file-upload"><input id="planFileStatus" class="file-name" type="text" readonly placeholder="尚未选择教案"><div class="file-upload-actions"><label class="btn evidence-file-button">选择文件<input id="planFile" type="file" accept=".pdf,.docx" hidden></label><button id="planAnalyze" class="btn primary">解析教案</button></div></div></div><p id="planStatus" role="status" aria-live="polite"></p><div id="planPreview"></div><button class="btn mt12" id="planApply" hidden>填入解析结果</button>';

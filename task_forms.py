@@ -83,7 +83,18 @@ for key, title, kind, path in [('recordType','记录类型','select','evidence.*
     stage = 5 if key in ('productPhoto','issueRechecked') else 3 if key == 'modelPhoto' else 4
     add_field(key,title,stage,1 if key == 'issueRechecked' else 0,path,'按实际情况填写或选择。',kind,False,True)
 
+for key, title, path, explanation in [
+    ('helpDone','我们已经尝试了什么','','写下已经做过的计算、画图或检查。'),
+    ('helpIssue','还有什么想追问','','愿意的话可以补充一个问题。'),
+    ('aiPrompt','写下你现在想问的内容','','可以先说明你正在做哪一步、已经试过什么。'),
+    ('mathNote','图形或计算说明了什么','mathTools.note','说明这个图形或计算怎样帮助你检查数学方案。'),
+]:
+    add_field(key,title,3 if key=='mathNote' else 0,3 if key=='mathNote' else -1,path,explanation,required=key in ('helpDone','aiPrompt'))
+for index, title in enumerate(['符合题目给出的信息','单位保持一致','研究量在允许范围内']):
+    add_field('model-condition-'+str(index),title,3,0,'workspace.conditionChecks.'+str(index),'核对后再勾选。','checkbox',False,True)
 for field in FIELD_CATALOG:
+    if field['id']=='reflect-rotated':
+        field.update(type='select',options='本阶段调整了分工|本阶段没有调整分工')
     if field['id'] in {'under-unknown','thoughtUncertain','modelReason','reflect-helps','reflect-rotated','reflect-checked','recordInvalid','recordVersion'}:
         field['expanded'] = False
 CATALOG_BY_ID = {field['id']: field for field in FIELD_CATALOG}
@@ -102,7 +113,12 @@ def field_values(state, path):
     if not path:
         return []
     if path[0] == 'questionTreeChildren':
-        return list(state.get('questionTree', [])[1:])
+        return [value for value in state.get('questionTree', [])[1:] if filled(value)]
+    if path == ['firstThoughts', '*']:
+        thoughts = state.get('firstThoughts', {})
+        return [thoughts.get(str(index), thoughts.get(index)) for index in range(len(state.get('members', [])))]
+    if path == ['thoughtMeta', '*', 'uncertain']:
+        return [state.get('thoughtMeta', {}).get(str(index), {}).get('uncertain') for index in range(len(state.get('members', [])))]
     values = [state]
     for key in path:
         following = []
@@ -143,7 +159,7 @@ def clean_field_rules(raw):
             raise ValueError('请为文字字段选择文字、数字、单选或多选。')
         if spec['fixedType'] and kind != spec['type']:
             raise ValueError('上传、检查与关联字段需保留原输入类型。')
-        clean[key] = {name: str(rule.get(name, ''))[:1000] for name in ('title','help','hint','options')}
+        clean[key] = {name: str(rule.get(name, spec.get(name, '')))[:1000] for name in ('title','help','hint','options')}
         clean[key].update(type=kind, required=rule.get('required', spec['required']) is True,
                           expanded=rule.get('expanded', spec['expanded']) is True,
                           order=max(0,min(200,int(rule.get('order',spec['order'])))),
@@ -226,10 +242,14 @@ def apply_workflow(state, statuses, config):
     rules, workflow = config.get('fieldRules',{}), config.get('workflow',{})
     result = copy.deepcopy(statuses)
     field_tasks = {
+        (1,0): ['prep-goal'], (1,1): ['prep-materials'], (1,3): ['prep-rules'],
+        (2,0): ['thoughtContent','thoughtUncertain'],
         (2,1): ['under-problem'], (2,2): ['under-known','under-constraints'],
-        (3,0): ['quantity-name','modelConditions'], (3,1): ['modelRelation'],
+        (2,3): ['questionMain','question-child'],
+        (3,0): ['quantity-name','quantity-symbol','quantity-meaning','quantity-unit','quantity-source','modelConditions'], (3,1): ['modelRelation'],
         (4,2): ['compare-claim','compare-basis','compare-risk'],
         (5,0): ['product-problem','product-model','product-evidenceValidation','product-claim'],
+        (5,1): ['rehearsal-role', 'rehearsal-check-0','rehearsal-check-1','rehearsal-check-2','rehearsal-check-3'],
         (5,2): ['product-audience','product-claim','product-limitations'],
         (5,3): ['reflect-changed','reflect-reason','reflect-next'],
     }

@@ -156,7 +156,7 @@ class Conflict(ValueError):
         super().__init__('内容已有更新，请比较后保存新版本。')
 
 
-def immutable_records(app, old, new, actor):
+def immutable_records(app, old, new, actor, activity_stage=None):
     """Never accept client-supplied history as authoritative."""
     timestamp = app.utc_now()
     # A guessed attachment ID must never become cross-group evidence.
@@ -191,7 +191,7 @@ def immutable_records(app, old, new, actor):
         after_values = task_forms.field_values(new, spec['path'])
         if before_values != after_values:
             new['fieldHistory'].append({'id': secrets.token_hex(8), 'time': timestamp, 'actor': actor,
-                                        'modelVersion': (old.get('versions') or [{}])[-1].get('v', ''), 'requestId': new.get('activeHelpThreadId', ''), 'stage': spec['stage'], 'fieldId': spec['id'], 'title': spec['title'],
+                                        'modelVersion': (old.get('versions') or [{}])[-1].get('v', ''), 'requestId': new.get('activeHelpThreadId', ''), 'stage': activity_stage or spec['stage'], 'fieldId': spec['id'], 'title': spec['title'],
                                         'before': copy.deepcopy(before_values), 'after': copy.deepcopy(after_values)})
     before = old.get('firstThoughts', {})
     after = new.get('firstThoughts', before)
@@ -273,7 +273,7 @@ def export_records(app, rows):
                                 'group_no': f'G{number:02d}', 'stage': item.get('stage') or item.get('comparison', {}).get('stage') or phase,
                                 'event_type': kind, 'request_id': item.get('requestId', ''), 'data': scrub(json.dumps(detail, ensure_ascii=False))})
         for version in app.model_versions(state):
-            detail = {key: version.get(key, '') for key in ('v', 'model', 'variables', 'relation', 'constraints', 'reason', 'fileIds', 'quantityRows', 'conditionChecks', 'checks', 'representation')}
+            detail = {key: version.get(key, '') for key in ('v', 'model', 'variables', 'relation', 'constraints', 'reason', 'fileIds', 'changeSummary', 'quantityRows', 'conditionChecks', 'checks', 'representation')}
             records.append({'id': f"G{number:02d}-{version['v']}", 'ts': version.get('time', ''), 'group_no': f'G{number:02d}',
                             'event_type': 'model_snapshot', 'request_id': version.get('requestId', ''), 'stage': 3, 'data': scrub(json.dumps(detail, ensure_ascii=False))})
         for item in state.get('evidence', []):
@@ -283,7 +283,7 @@ def export_records(app, rows):
                             'event_type': 'evidence_snapshot', 'data': scrub(json.dumps(detail, ensure_ascii=False))})
         product = state.get('product', {})
         if product:
-            detail = {key: product.get(key, '') for key in ('modelVersion', 'evidenceRefs', 'claim', 'limitations', 'reflection')}
+            detail = {key: product.get(key, '') for key in ('modelVersion', 'evidenceRefs', 'claim', 'limitations', 'reflection', 'photos')}
             records.append({'id': f'G{number:02d}-product', 'ts': state.get('_savedAt', ''), 'group_no': f'G{number:02d}', 'stage': 5,
                             'event_type': 'product_snapshot', 'data': scrub(json.dumps(detail, ensure_ascii=False))})
     for index, item in enumerate(app.state_get('class').get('evaluationHistory', [])):
@@ -349,6 +349,16 @@ def route(app, handler, method, path):
             data = app.state_get(f'group:{group}')
             action = path.rsplit('/', 1)[-1]
             result = {}
+            if action == 'preview' and teacher and method == 'POST':
+                config = {**state.get('teacherConfig', {}),
+                          'fieldRules': task_forms.clean_field_rules(body.get('fieldRules', {})),
+                          'workflow': task_forms.clean_workflow(body.get('workflow', {}))}
+                preview = app.merged_state(group, False)
+                preview['teacherConfig'] = config
+                preview['stageTaskStatus'] = app.stage_task_status(data, config['fieldRules'], config['workflow'])
+                preview['stageSubmitted'] = app.validated_stage_submissions(data, config['fieldRules'], config['workflow'])
+                handler.json_response({'ok': True, 'state': student_view(preview)})
+                return True
             if action == 'field-templates' and teacher:
                 scope = f"teacher:{session['teacherId']}:field-templates"
                 with app.database() as db:
@@ -510,7 +520,7 @@ def route(app, handler, method, path):
                 reason = str(body.get('reason', '')).strip()[:800]
                 data['roles'] = roles
                 data['roleAssignments'] = [*data.get('roleAssignments', []), {'stage': effective_stage(state, group), 'round': len(data.get('roleAssignments', [])) + 1,
-                    'roles': roles, 'members': data.get('members', []), 'reason': reason, 'confirmed': True, 'time': app.utc_now(), 'actor': session.get('teacherId') or f'G{group}'}]
+                    'roles': roles, 'members': data.get('members', []), 'reason': reason, 'confirmed': True, 'time': app.utc_now(), 'actor': session.get('teacherId') or (body.get('operator') if body.get('operator') in data.get('members', []) else f'G{group}')}]
                 data['roleRound'] = len(data['roleAssignments'])
                 app.state_put(f'group:{group}', data)
                 app.record_event(session['role'], group, 'roles_confirm', effective_stage(state, group), json.dumps(roles, ensure_ascii=False))

@@ -542,7 +542,9 @@ def ensure_model_version(state: dict, timestamp: str, recover_only: bool = False
     versions = state.get("versions")
     versions = list(versions) if isinstance(versions, list) else []
     number = max([len(versions)] + [int(item["v"][1:]) for item in valid if re.fullmatch(r"V\d+", str(item.get("v", "")))]) + 1
-    versions.append({"v": f"V{number}", "time": timestamp,
+    change_labels = {"model":"数学方案", "variables":"研究量", "relation":"数量关系", "constraints":"适用条件", "modelFiles":"草稿照片", "quantityRows":"数量表", "conditionChecks":"条件检查"}
+    change_summary = "首次保存数学方案" if not valid else "修改了" + "、".join(change_labels[key] for key in snapshot if snapshot[key] != valid[-1].get(key, snapshot[key]))
+    versions.append({"v": f"V{number}", "time": timestamp, "changeSummary": change_summary,
                      "note": "从已保存模型恢复版本记录" if recover_only else "保存模型与变量、关系、约束快照",
                      "requestId": state.get("activeHelpThreadId", ""), "actor": actor, "reason": workspace.get("revisionReason", ""), "fileIds": workspace.get("modelFiles", []),
                      "checks": copy.deepcopy(state.get("checklist", {})),
@@ -598,7 +600,7 @@ def stage_task_status(group_state: dict, field_rules: dict | None = None, workfl
          sum(isinstance(item, dict) and all(_has_value(item.get(key)) for key in ("claim", "basis")) for item in viewpoints) >= 2,
          len(versions) >= 2],
         [all(_has_value(value) for value in (workspace.get("problem"), workspace.get("model"), product.get("evidenceValidation"), product.get("claim"))),
-         _has_value(product.get("rehearsal")) and len(rehearsal_checks) >= 4 and all(value is True for value in rehearsal_checks[:4]),
+         len(rehearsal_checks) >= 4 and all(value is True for value in rehearsal_checks[:4]),
          all(_has_value(product.get(key)) for key in ("audience", "claim", "limitations")),
          len(reflection) >= 3 and all(reflection[:3])],
     ]
@@ -793,6 +795,7 @@ def merged_state(group_no: int, monitoring: bool = True) -> dict:
     group_state = state_get(f"group:{group_no}")
     value.update(group_state)
     value["roles"] = roles_for_members(group_state.get("roles"), len(group_state.get("members", [])))
+    value["queue"] = sorted(value.get("queue", []), key=lambda item: (not bool(item.get("urgent")), str(item.get("createdAt") or item.get("time") or "")))
     # The project title is shared by the entire class, never a group draft.
     if "project" in class_state:
         value["project"] = class_state["project"]
@@ -2981,13 +2984,15 @@ class Handler(SimpleHTTPRequestHandler):
         try:
             operator = str(incoming.get("_operator", ""))
             actor = operator if session["role"] == "student" and operator in group_state.get("members", []) else str(session.get("teacherId") or f"G{group}")
-            candidate = classroom.immutable_records(sys.modules[__name__], group_state, candidate, actor)
+            page_stage = incoming.get("_pageStage")
+            page_stage = page_stage if isinstance(page_stage, int) and 1 <= page_stage <= classroom.effective_stage(class_snapshot, group) else classroom.effective_stage(class_snapshot, group)
+            candidate = classroom.immutable_records(sys.modules[__name__], group_state, candidate, actor, activity_stage=page_stage)
         except ValueError as exc:
             self.json_response({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
             return
         before_model = group_state.get("workspace", {})
         after_model = candidate.get("workspace", {})
-        if model_versions(group_state) and any(after_model.get(k) != before_model.get(k) for k in ("model", "variables", "relation", "constraints", "modelFiles")) and not str(after_model.get("revisionReason", "")).strip():
+        if class_snapshot.get("teacherConfig", {}).get("fieldRules", {}).get("modelReason", {}).get("required") is True and model_versions(group_state) and any(after_model.get(k) != before_model.get(k) for k in ("model", "variables", "relation", "constraints", "modelFiles")) and not str(after_model.get("revisionReason", "")).strip():
             self.json_response({"error": "请填写这次修改方案的原因。"}, HTTPStatus.BAD_REQUEST)
             return
         ensure_model_version(candidate, utc_now(), actor=actor)
@@ -3928,10 +3933,13 @@ class Handler(SimpleHTTPRequestHandler):
             return
         stage_no = requested_stage
         group_state = state_get(f"group:{group}")
+        operator = str(body.get("operator", ""))
+        actor = operator if operator in group_state.get("members", []) else f"G{group}"
         if body.get("reopen") is True:
             submissions = dict(group_state.get("stageSubmitted") or {})
             submissions[str(stage_no)] = False
             group_state["stageSubmitted"] = submissions
+            group_state.setdefault("events", []).append({"id": secrets.token_hex(8), "ts": utc_now(), "type": "stage_reopen", "stage": stage_no, "actor": actor, "data": "重新修改本阶段产出", "requestId": group_state.get("activeHelpThreadId", "")})
             state_put(f"group:{group}", group_state)
             self.sync_group_summary(group, group_state)
             record_event("student", group, "stage_reopen", stage_no, f"阶段{stage_no}重新编辑")
@@ -3944,7 +3952,8 @@ class Handler(SimpleHTTPRequestHandler):
         submissions = dict(submissions) if isinstance(submissions, dict) else {}
         submissions[str(stage_no)] = True
         group_state["stageSubmitted"] = submissions
-        group_state.setdefault("submissionHistory", []).append({"id": secrets.token_hex(8), "stage": stage_no, "time": utc_now(),
+        group_state.setdefault("events", []).append({"id": secrets.token_hex(8), "ts": utc_now(), "type": "stage_submit", "stage": stage_no, "actor": actor, "data": "提交本阶段产出", "requestId": group_state.get("activeHelpThreadId", "")})
+        group_state.setdefault("submissionHistory", []).append({"id": secrets.token_hex(8), "stage": stage_no, "time": utc_now(), "actor": actor, "requestId": group_state.get("activeHelpThreadId", ""),
             "version": (group_state.get("versions") or [{}])[-1].get("v", ""), "workspace": dict(group_state.get("workspace", {})), "product": dict(group_state.get("product", {}))})
         state_put(f"group:{group}", group_state)
         self.sync_group_summary(group, group_state)

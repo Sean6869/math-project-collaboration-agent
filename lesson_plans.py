@@ -32,8 +32,9 @@ INFO_FIELDS = {
     'designTeacher': '项目设计教师', 'mainSubject': '主学科', 'relatedSubjects': '关联学科',
     'grade': '授课年级', 'textbookEdition': '教材版本', 'teachingUnit': '教学单元或知识点',
     'lessonSchedule': '课时安排', 'projectSummary': '项目概要', 'learningObjectives': '学习目标',
+    'drivingQuestion': '需要解决的核心问题', 'knownInformation': '题目给出的数据、单位和限制', 'finalProduct': '最终提交的成果',
 }
-PROJECT_FIELDS = (*INFO_FIELDS, 'mathTopic', 'standard', 'finalProduct', 'projectType')
+PROJECT_FIELDS = (*INFO_FIELDS, 'mathTopic', 'standard', 'projectType')
 LESSON_FIELDS = ('title', 'mathFocus', 'objectives', 'activities', 'resources', 'output')
 
 
@@ -284,6 +285,7 @@ def analyze(app, text, images, lesson_count=1):
         '不得把“（姓名）”“（学校）”“（版本）”“填写项目名称”等占位提示写入字段。'
         '附录仅在已有明确项目专属内容时可用于交叉核对，不得用通用附录文字补齐空字段。'
         '项目名称、授课教师、学校、设计教师、学科、年级、教材版本必须忠于原文，各课时保留共有信息。'
+        'drivingQuestion提取本项目要解决的问题，knownInformation保留题目给出的数据、单位与限制，finalProduct提取明确要求提交的成果；原文没有的内容留空，不能编造。'
         'teachingUnit、projectSummary、learningObjectives按本课时内容填写。projectSummary必须由你概括为一句通顺的中文简介，'
         '说明学生将围绕什么真实问题开展什么数学探究，不超过50个汉字，不照抄教学流程，不罗列目标；'
         '只有文档存在项目专属内容时才可概括，空白模板必须留空。'

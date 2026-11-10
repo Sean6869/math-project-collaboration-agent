@@ -14,9 +14,12 @@ class DbrTest(ClassroomTest):
         status, result = self.req(self.student, '/api/stages/submit', {'stage': 1})
         self.assertEqual(status, 200, result)
         self.assertTrue(result['state']['stageSubmitted']['1'])
+        self.assertEqual(result['state']['events'][-1]['type'],'stage_submit')
         status, result = self.req(self.student, '/api/stages/submit', {'stage': 1, 'reopen': True})
         self.assertEqual(status, 200, result)
         self.assertFalse(result['state']['stageSubmitted']['1'])
+        self.assertEqual(result['state']['events'][-1]['stage'],1)
+        self.assertEqual(result['state']['events'][-1]['type'],'stage_reopen')
         status, result = self.req(self.student, '/api/stages/submit', {'stage': 1})
         self.assertEqual(status, 200, result)
         self.assertTrue(result['state']['stageSubmitted']['1'])
@@ -113,6 +116,59 @@ class DbrTest(ClassroomTest):
         self.assertTrue(field_records)
         self.assertNotIn('同学甲',str(field_records))
 
+    def test_optional_fields_do_not_keep_hidden_completion_gates(self):
+        forms=app.classroom.task_forms
+        keys=['prep-goal','prep-materials','prep-rules','thoughtContent','thoughtUncertain',
+              'under-problem','under-known','under-constraints','questionMain','question-child',
+              'rehearsal-role',*[f'rehearsal-check-{index}' for index in range(4)]]
+        rules=forms.clean_field_rules({key:{'required':False} for key in keys})
+        result=self.command('config',{'fieldRules':rules})
+        self.assertEqual(result[0],200,result)
+        state=self.state()
+        self.assertTrue(all(state['stageTaskStatus'][0]))
+        self.assertTrue(all(state['stageTaskStatus'][1]))
+        self.assertTrue(state['stageTaskStatus'][4][1])
+        submitted=self.req(self.student,'/api/stages/submit',{'stage':2})
+        self.assertEqual(submitted[0],200,submitted)
+        rules['thoughtContent']['required']=True
+        raw=app.state_get('group:1')
+        raw['firstThoughts']={'0':'只记录了一个成员'}
+        self.assertFalse(app.stage_task_status(raw,rules)[1][0])
+        rules['modelReason']={'required':False}
+        self.assertEqual(self.command('config',{'fieldRules':rules})[0],200)
+        raw=app.state_get('group:1')
+        raw['workspace']={'model':'长度乘宽度'}
+        app.ensure_model_version(raw,app.utc_now())
+        app.state_put('group:1',raw)
+        revised=self.state()
+        revised['workspace']['model']='长度加宽度'
+        saved=self.req(self.student,'/api/state',{'state':revised},'PUT')
+        self.assertEqual(saved[0],200,saved)
+        self.assertEqual(len(saved[1]['state']['versions']),2)
+        self.assertIn('数学方案',saved[1]['state']['versions'][-1]['changeSummary'])
+
+    def test_preview_respects_unsaved_rules_without_writing(self):
+        before=app.state_get('class')
+        rules={'questionMain':{'required':False},'question-child':{'required':False}}
+        response=self.req(self.teacher,'/api/classroom/preview',{'group':1,'fieldRules':rules,'workflow':{}})
+        self.assertEqual(response[0],200,response)
+        self.assertTrue(response[1]['state']['stageTaskStatus'][1][3])
+        self.assertEqual(app.state_get('class'),before)
+        self.assertFalse(self.state()['stageTaskStatus'][1][3])
+        self.assertEqual(self.req(self.student,'/api/classroom/preview',{'fieldRules':rules})[0],403)
+
+    def test_queue_preserves_fifo_for_same_second_and_priority_across_pages(self):
+        with mock.patch.object(app, 'utc_now', return_value='2026-11-10T10:00:00+00:00'):
+            first=self.req(self.student,'/api/hints',{'action':'teacher','issue':'第一项','newThread':True,'requestId':'fifo-1'})
+            second=self.req(self.login(2),'/api/hints',{'action':'teacher','issue':'第二项','newThread':True,'requestId':'fifo-2'})
+        self.assertEqual(first[0],200,first)
+        self.assertEqual(second[0],200,second)
+        queue=self.state(self.teacher)['queue']
+        self.assertEqual([row['group'] for row in queue],[1,2])
+        result=self.command('queue',{'id':queue[1]['id'],'urgent':True,'reason':'需要当堂检查','handling':'viewed'})
+        self.assertEqual(result[0],200,result)
+        self.assertEqual(self.state(self.teacher)['queue'][0]['group'],2)
+
 
 def load_tests(loader, tests, pattern):
     names = [
@@ -121,5 +177,8 @@ def load_tests(loader, tests, pattern):
         'test_queue_status_and_linked_export',
         'test_field_contract_workflow_and_reusable_templates',
         'test_field_versions_checks_and_next_page',
+        'test_optional_fields_do_not_keep_hidden_completion_gates',
+        'test_preview_respects_unsaved_rules_without_writing',
+        'test_queue_preserves_fifo_for_same_second_and_priority_across_pages',
     ]
     return loader.suiteClass(DbrTest(name) for name in names)
