@@ -729,3 +729,60 @@ input[data-camera-ready][hidden]{display:none!important}
 @media(max-width:1200px){.class-board-grid{grid-template-columns:repeat(3,minmax(0,1fr))}}
 @media(max-width:800px){.class-board-overview{grid-template-columns:1fr}.class-board-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.teacher-monitor-summary{grid-template-columns:1fr}.teacher-group-bar strong{grid-row:1}.teacher-group-bar i{grid-column:1 / -1;grid-row:2}}
 @media(max-width:500px){.class-board-summary,.class-board-distribution,.class-board-groups{padding:16px}.class-board-grid{grid-template-columns:1fr}.class-board-average{width:100px}.class-board-average>span{width:82px}.class-board-section-head{align-items:start;flex-wrap:wrap}.teacher-group-bars{grid-template-columns:1fr}}
+
+/* Classroom tablets: use CSS viewport space in both orientations. */
+.top-context{min-width:0}
+.top-context .project-pill{min-width:0;max-width:360px;flex:0 1 360px}
+.top-context .project-pill .bi,.top-context .ai-status,.top-account>.btn{flex-shrink:0}
+.top-account>.btn,.operator-picker{white-space:nowrap}
+.operator-picker{flex-shrink:0}
+.help-level{min-width:0}
+.help-level>span{min-width:0;flex:1}
+.help-level>strong{flex:none;white-space:nowrap}
+@media(max-width:1280px){
+ :root{--sidebar:196px}
+ .topbar{display:grid;grid-template-columns:minmax(0,1fr) auto;grid-template-rows:44px 44px;gap:8px 16px;height:112px;padding:8px 16px}
+ .topbar>.app-brand{grid-column:1;grid-row:1;max-width:154px}
+ .top-account{grid-column:2;grid-row:1;gap:8px}
+ .top-context{grid-column:1/-1;grid-row:2;gap:10px;margin:0}
+ .top-context .project-pill{display:inline-flex!important;flex:1;max-width:none;width:auto;min-width:0}
+ .top-context .project-pill-name{flex:1;text-align:left}
+ .top-group-badge{margin-left:0}
+ .top-account .operator-picker select{min-height:36px}
+ .topbar .btn,.top-context .pill{min-height:44px}
+ .sidebar{top:112px;height:calc(100vh - 112px);height:calc(100dvh - 112px)}
+ .shell{min-height:calc(100vh - 112px);min-height:calc(100dvh - 112px)}
+ .main{min-width:0;padding:20px 16px 32px}
+ .main .card,.main .field,.main .grid>*{min-width:0}
+ .main .btn{min-height:44px}
+ .main input:not([type="checkbox"]):not([type="radio"]):not([type="hidden"]),.main select{min-height:44px}
+ .help-levels{grid-template-columns:repeat(2,minmax(0,1fr))}
+ .help-level{padding:14px 16px;min-height:100px}
+ .help-level b{font-size:20px;line-height:1.4}
+ .help-level strong{font-size:24px}
+ .help-layout{grid-template-columns:minmax(0,1fr)}
+ .table-wrap{max-width:100%;overflow:auto;-webkit-overflow-scrolling:touch}
+ .table-wrap .table{min-width:640px}
+ .table-wrap .table input,.table-wrap .table textarea{min-width:100px}
+}
+@media(max-width:1100px){
+ .main .cols-2,.product-layout,.rehearsal-layout,.compare-grid{grid-template-columns:minmax(0,1fr)}
+ .rehearsal-check-card{grid-column:auto}
+}
+@media(max-width:960px) and (min-width:801px){
+ :root{--sidebar:184px}
+ .sidebar{padding:16px 8px}
+ .nav a{padding-inline:12px}
+}
+@media(max-width:800px){
+ .sidebar{position:relative;top:auto;height:auto}
+ .top-account .operator-picker{display:none}
+ .main{padding:16px 16px 24px}
+}
+@media(max-width:600px){
+ .top-context .project-pill{display:none!important}
+ .top-context .ai-status{display:inline-flex}
+ .top-group-badge{margin-left:auto}
+ .help-levels{grid-template-columns:minmax(0,1fr)}
+ .help-level{min-height:88px}
+}
