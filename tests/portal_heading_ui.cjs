@@ -30,6 +30,8 @@ const {chromium}=require('playwright');
    results.push({name:scenario.name,headings:await page.locator('h1').allTextContents(),visible:await page.locator('h1').count()===1&&await page.locator('h1').isVisible()});
    assert.equal(await page.locator('link[rel="canonical"]').getAttribute('href'),'https://www.mapleclass.online/');
    assert(await page.locator('meta[name="description"]').getAttribute('content'));
+   assert.equal(await page.locator('.footer-beian a').count(),2);
+   assert.equal(await page.locator('.footer-beian a').nth(1).innerText(),'粤公网安备44162602000110号');
    if(scenario.name==='anonymous-login'){
     await page.getByRole('tab',{name:'教师端',exact:true}).click();
     assert.equal(await page.locator('h1').count(),1);
